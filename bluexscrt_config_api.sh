@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # bluexscrt_config.api
 # Non-interactive JSON-based helper for bluexscrt configuration
