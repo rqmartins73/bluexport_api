@@ -411,7 +411,7 @@ run_updlpars_api() {
       continue
     fi
 
-    # Chamada à API de listagem de instâncias
+     # Chamada à API de listagem de instâncias
     vsi_resp=$(
       curl -sS -X GET \
         "$base_url/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances" \
