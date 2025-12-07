@@ -10,6 +10,7 @@ set -euo pipefail
 VERSION="1.0.0"
 
 conf_file="$HOME/bluexport_conf.json"
+log_file=$(jq -r '.log_file' "$conf_file")
 bluexscrt=$(jq -r '.bluexscrt' "$conf_file")
 
 # Default config JSON (can be overridden with env var BLUEXSCRT_JSON)
@@ -40,6 +41,36 @@ Examples:
   $(basename "$0") -updlpars
 EOF
 }
+
+#### START:FUNCTION - Echo to log file and screen  ####
+echoscreen() {
+        if [ -t 1 ]
+        then
+                echo $1
+        fi
+        if [[ $2 == "1" ]]
+        then
+                echo $1 >> $log_file
+        fi
+}
+#### END:FUNCTION - Echo to log file and screen  ####
+
+#### START:FUNCTION - Finish vsi_status=$(log file when aborting  ####
+abort() {
+        echo $1 >> $log_file
+        if [ -t 1 ]
+        then
+                echo ""
+                echo "   ### $1"
+                echo ""
+        fi
+        timestamp=$(date +%F" "%T" "%Z)
+        eval echo $end_log_file >> $log_file
+        exit 0
+}
+#### END:FUNCTION - Finish log file when aborting  ####
+
+
 
 ensure_config_exists() {
 
@@ -123,6 +154,38 @@ base_dal14="https://us-south.power-iaas.cloud.ibm.com"
 
 default_base_url=$base_mad02 # change to your prefered
 #### END: API Environment ###
+
+# Derive base_url from a PowerVS workspace CRN
+get_base_url_from_crn() {
+  local crn="$1"
+  local region_raw region_label base_var base_url
+
+  # CRN format: crn:v1:bluemix:public:power-iaas:<region>:a/...
+  # Field 6 = region (eu-de-1, mad02, etc.)
+  region_raw=$(printf '%s\n' "$crn" | awk -F: '{print $6}')
+
+  if [[ -z "$region_raw" || "$region_raw" == "null" ]]; then
+    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: Could not extract region from CRN '$crn'" "1"
+    return 1
+  fi
+
+  # Strip trailing digits (zone) and replace '-' with '_' to match base_<region>
+  #   eu-de-1 -> eu-de -> eu_de  -> base_eu_de
+  #   mad02   -> mad   -> mad    -> base_mad
+  region_label=$(printf '%s\n' "$region_raw" | sed 's/[0-9]\+$//' | tr '-' '_')
+  base_var="base_${region_label}"
+
+  # Com set -u: usar a forma ${!var-} para não rebentar se não existir
+  if [[ -z "${!base_var-}" ]]; then
+    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: No base URL defined for region token '${region_label}' (var ${base_var})" "1"
+    return 1
+  fi
+
+  base_url="${!base_var}"
+  printf '%s\n' "$base_url"
+  return 0
+}
+
 
 #### START:FUNCTION - API Commands ####
 ##  Workspace management aliases
@@ -454,87 +517,90 @@ case "$flag" in
     cat "$CONFIG_JSON"
     ;;
 
-  -updlpars)
-    # Atualiza pvmInstanceID via API e remove LPARs que já não existem
+    -updlpars)
+        test=0
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs ===" "1"
 
-    echo "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs ==="
+        tmp_keep="$(mktemp)"
+        tmp_struct="$(mktemp)"
+        tmp_vsi_list="$(mktemp)"
 
-    # Lista de workspaces definidos no JSON (WSMAD2, WSFRA1, etc.)
-    mapfile -t ws_list < <(jq -r '.workspaces | keys[]' "$CONFIG_JSON")
+        # 1) Construir lista dos sistemas que EXISTEM na Cloud, por workspace
+        for ws in $(jq -r '.workspaces | keys[]' "$CONFIG_JSON"); do
+            ws_crn=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$CONFIG_JSON")
+            ws_id=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$CONFIG_JSON")
 
-    # Pares workspace:name que existem na Cloud (para limpeza posterior)
-    keep_pairs=()
+            if [[ -z "$ws_crn" || "$ws_crn" == "null" || -z "$ws_id" || "$ws_id" == "null" ]]; then
+                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: Workspace '$ws' missing CRN or ID in JSON. Skipping..." "1"
+                continue
+            fi
 
-    # 1) Para cada workspace, ir à API buscar as VSIs e atualizar os pvmInstanceID
-    for ws in "${ws_list[@]}"; do
-        echo "$(date +%Y-%m-%d_%H:%M:%S) - Processing workspace '$ws'..."
+            base_url="$(get_base_url_from_crn "$ws_crn")"
+            if [[ $? -ne 0 || -z "$base_url" ]]; then
+                echoscreen "  -> Skipping workspace '$ws' (no valid base_url)" "1"
+                continue
+            fi
 
-        if ! set_ws_context "$ws"; then
-            echo "  -> Skipping workspace '$ws' (no valid base_url/CRN/id)" >&2
-            continue
+            CRN="$ws_crn"
+            CLOUD_INSTANCE_ID="$ws_id"
+
+            echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Processing workspace '$ws' (CRN=$CRN, CLOUD_INSTANCE_ID=$CLOUD_INSTANCE_ID)..." "1"
+
+            # ins_ls deve estar definido no teu .env para usar $base_url / $CLOUD_INSTANCE_ID / $CRN
+            ins_ls 2>>"$log_file" \
+              | jq -r '.pvmInstances[]? | .serverName' > "$tmp_vsi_list"
+
+            if [[ ! -s "$tmp_vsi_list" ]]; then
+                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) -   No instances returned by API for workspace '$ws'." "1"
+                continue
+            fi
+
+            # Guardar pares {name, workspace} que existem na Cloud
+            while read -r name; do
+                [[ -z "$name" ]] && continue
+                printf '{"name":"%s","workspace":"%s"}\n' "$name" "$ws" >> "$tmp_keep"
+            done < "$tmp_vsi_list"
+        done
+
+        if [[ ! -s "$tmp_keep" ]]; then
+            echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - ERROR: No VSIs found via API in any workspace. JSON will not be modified." "1"
+            rm -f "$tmp_keep" "$tmp_struct" "$tmp_vsi_list"
+            abort "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished with errors (no VSIs)."
         fi
 
-        # Lista de instâncias desse workspace via API
-        # Formato: "serverName pvmInstanceID"
-        while read -r vm_name vm_id; do
-            [[ -z "$vm_name" || -z "$vm_id" ]] && continue
+        keep_pairs=$(jq -s '.' "$tmp_keep")
 
-            # Atualiza pvmInstanceID em systems onde .workspace == ws e .name == vm_name (case-insensitive)
-            jq_inplace '
-              .systems |=
-                map(
-                  if .workspace == $ws
-                     and (.name // "" | ascii_downcase) == ($vmname | ascii_downcase)
-                  then .pvmInstanceID = $vmid
-                  else .
-                  end
-                )
-            ' \
-              --arg ws "$ws" \
-              --arg vmname "$vm_name" \
-              --arg vmid "$vm_id"
-set_ws_context
-            # Marca este par workspace:name como existente na Cloud
-            keep_pairs+=("$ws:$vm_name")
-        done < <(
-            ins_ls 2>/dev/null \
-              | jq -r '.pvmInstances[]? | "\(.serverName) \(.pvmInstanceID)"'
-        )
-    done
+        # 2) Construir estrutura intermédia com kept / removed para evitar o erro "Cannot index array with string \"systems\""
+        jq --argjson keep "$keep_pairs" '
+          . as $root
+          | $root.systems as $sys
+          | {
+              root: $root,
+              kept:    [ $sys[] | select(any($keep[]; .name == .name and .workspace == .workspace)) ],
+              removed: [ $sys[] | select(any($keep[]; .name == .name and .workspace == .workspace) | not) ]
+            }
+        ' "$CONFIG_JSON" > "$tmp_struct"
 
-    # 2) Remover LPARs do JSON que já não existem na Cloud
-    echo "$(date +%Y-%m-%d_%H:%M:%S) - Validating systems that still exist in IBM Cloud..."
+        # 3) Logar quais sistemas foram removidos (deixaram de existir na Cloud)
+        if jq -e '.removed | length > 0' "$tmp_struct" > /dev/null; then
+            echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Systems removed from JSON (no longer in IBM Cloud):" "1"
+            jq -r '.removed[] | "   - \(.name) (\(.workspace))"' "$tmp_struct" \
+                | while read -r line; do
+                      echoscreen "$line" "1"
+                  done
+        else
+            echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No systems removed; all JSON entries still exist in IBM Cloud." "1"
+        fi
 
-    if ((${#keep_pairs[@]} > 0)); then
-        keep_json=$(printf '%s\n' "${keep_pairs[@]}" | jq -R . | jq -s .)
-    else
-        keep_json='[]'
-    fi
+        # 4) Atualizar JSON: root.systems = kept
+        jq '.root.systems = .kept | .root' "$tmp_struct" > "${CONFIG_JSON}.tmp" &&
+            mv "${CONFIG_JSON}.tmp" "$CONFIG_JSON"
 
-    tmp_cfg="$(mktemp)"
-    jq --argjson keep "$keep_json" '
-      .systems |= [
-        .systems[] |
-        select(
-          ((.workspace + ":" + .name) as $k | $keep | index($k))
-        )
-      ]
-    ' "$CONFIG_JSON" > "$tmp_cfg" && mv "$tmp_cfg" "$CONFIG_JSON"
+        rm -f "$tmp_keep" "$tmp_struct" "$tmp_vsi_list"
 
-    # 3) Logging do que foi removido (para visibilidade)
-    echo "$(date +%Y-%m-%d_%H:%M:%S) - Systems removed from JSON (no longer in Cloud), if any:"
-    # Calcula novamente os pares atuais (workspace:name) no JSON
-    current_pairs=$(jq -r '.systems[] | "\(.workspace):\(.name)"' "$CONFIG_JSON")
-    # Tudo o que estava antes e não está agora já foi removido — neste momento
-    # já não conseguimos listar diretamente os removidos daqui, por isso
-    # mantemos só o log genérico. Se quiseres que liste os nomes exatos,
-    # teríamos de guardar uma cópia antiga do ficheiro antes da limpeza.
-
-    echo "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished."
-    echo
-    echo "JSON final (credentials masked):"
-    print_masked_config
-    ;;
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished." "1"
+        abort "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished."
+        ;;
 
   *)
     usage
