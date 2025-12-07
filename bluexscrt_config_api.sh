@@ -71,58 +71,62 @@ abort() {
 #### END:FUNCTION - Finish log file when aborting  ####
 
 
-
 ensure_config_exists() {
-
-  # Show current default JSON path (resolved earlier)
   echo "### Default JSON in use: $CONFIG_JSON"
   echo "### Do you want to use this JSON file? (Y/n)"
-  read -r answer
+  read -r ans
 
-  # Normalize answer to lowercase
-  answer="${answer,,}"
-
-  if [[ "$answer" == "y" || "$answer" == "" ]]; then
-      # User accepts the default JSON path
-      if [[ -f "$CONFIG_JSON" ]]; then
-          echo "### Using default JSON config: $CONFIG_JSON"
-          return
-      else
-          echo "ERROR: Default JSON '$CONFIG_JSON' not found."
-          echo "### Please enter a valid JSON file path:"
-      fi
-  else
-      echo "### Please enter the full path of the JSON file to update:"
+  if [[ -z "$ans" || "$ans" =~ ^[Yy]$ ]]; then
+    if [[ ! -f "$CONFIG_JSON" ]]; then
+      echo "ERROR: Default JSON '$CONFIG_JSON' does not exist. Aborting..."
+      exit 1
+    fi
+    echo "### Using JSON config: $CONFIG_JSON"
+    return
   fi
 
-  # Ask user for a path (only happens if default rejected or missing)
+  echo "### Please enter the full path of the JSON file to update:"
   read -r newpath
 
-  # Validate input
   if [[ -z "$newpath" ]]; then
-      echo "ERROR: No path provided. Aborting..."
-      exit 1
+    echo "ERROR: No path provided. Aborting..."
+    exit 1
   fi
 
   if [[ ! -f "$newpath" ]]; then
-      echo "ERROR: File '$newpath' does not exist. Aborting..."
-      exit 1
+    echo "ERROR: File '$newpath' does not exist. Aborting..."
+    exit 1
   fi
 
-  # Set new config JSON path
   CONFIG_JSON="$newpath"
   echo "### Using JSON config: $CONFIG_JSON"
 }
 
-ensure_config_exists
+#ensure_config_exists
 
-#### START: API Environment ###
-#  authentication
-apikey=$(jq -r '.apikey' "$CONFIG_JSON")
-header_json="Content-Type: application/json"
-header_accept="Accept: application/json"
-iam_token=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${apikey}" | jq -r '.access_token')
-header_auth="Authorization: Bearer $iam_token"
+# ===== IBM Cloud IAM Token from CONFIG_JSON.apikey =====
+get_iam_token() {
+  local apikey
+  apikey=$(jq -r '.apikey' "$CONFIG_JSON")
+  if [[ -z "$apikey" || "$apikey" == "null" ]]; then
+    echo "ERROR: .apikey not found in $CONFIG_JSON"
+    exit 1
+  fi
+
+  iam_token=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Accept: application/json" \
+    -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${apikey}" | jq -r '.access_token')
+
+  if [[ -z "$iam_token" || "$iam_token" == "null" ]]; then
+    echo "ERROR: Failed to obtain IAM token"
+    exit 1
+  fi
+
+  header_auth="Authorization: Bearer $iam_token"
+  header_json="Content-Type: application/json"
+}
+
 
 # Current date (YYYY-MM-DD). Required for Transit Gateway API versioning.
 version=$(date +%F)
@@ -155,35 +159,34 @@ base_dal14="https://us-south.power-iaas.cloud.ibm.com"
 default_base_url=$base_mad02 # change to your prefered
 #### END: API Environment ###
 
-# Derive base_url from a PowerVS workspace CRN
+# ===== Derive base_url from workspace CRN =====
 get_base_url_from_crn() {
   local crn="$1"
-  local region_raw region_label base_var base_url
+  # Ex: crn:v1:bluemix:public:power-iaas:mad02:...
+  local region_token
+  region_token=$(echo "$crn" | awk -F: '{print $6}')
 
-  # CRN format: crn:v1:bluemix:public:power-iaas:<region>:a/...
-  # Field 6 = region (eu-de-1, mad02, etc.)
-  region_raw=$(printf '%s\n' "$crn" | awk -F: '{print $6}')
-
-  if [[ -z "$region_raw" || "$region_raw" == "null" ]]; then
-    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: Could not extract region from CRN '$crn'" "1"
-    return 1
+  if [[ -z "$region_token" || "$region_token" == "null" ]]; then
+    echo ""
+    return
   fi
 
-  # Strip trailing digits (zone) and replace '-' with '_' to match base_<region>
-  #   eu-de-1 -> eu-de -> eu_de  -> base_eu_de
-  #   mad02   -> mad   -> mad    -> base_mad
-  region_label=$(printf '%s\n' "$region_raw" | sed 's/[0-9]\+$//' | tr '-' '_')
-  base_var="base_${region_label}"
+  local host_reg="$region_token"
 
-  # Com set -u: usar a forma ${!var-} para não rebentar se não existir
-  if [[ -z "${!base_var-}" ]]; then
-    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: No base URL defined for region token '${region_label}' (var ${base_var})" "1"
-    return 1
+  # Caso tipo eu-de-1, eu-de-2, us-south-1, etc (último segmento numérico)
+  IFS='-' read -r -a parts <<< "$region_token"
+  if [[ "${#parts[@]}" -gt 1 && "${parts[-1]}" =~ ^[0-9]+$ ]]; then
+    unset 'parts[-1]'
+    host_reg="${parts[*]}"
+    host_reg="${host_reg// /-}"
   fi
 
-  base_url="${!base_var}"
-  printf '%s\n' "$base_url"
-  return 0
+  # Caso tipo mad02, lon04 → tirar dígitos finais
+  if [[ "$host_reg" =~ [0-9]$ && "$host_reg" != *"-"* ]]; then
+    host_reg=$(echo "$host_reg" | sed 's/[0-9]*$//')
+  fi
+
+  echo "https://${host_reg}.power-iaas.cloud.ibm.com/pcloud"
 }
 
 
@@ -379,6 +382,113 @@ snap_ls() {
 }
 #### END:FUNCTION - API Commands ####
 
+# ===== -updlpars using IBM Cloud APIs (no ibmcloud CLI) =====
+run_updlpars_api() {
+  echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs ===" "1"
+
+  get_iam_token
+
+  # Ficheiro temporário para IDs de PVM que existem na Cloud
+  existing_ids_file=$(mktemp)
+  : > "$existing_ids_file"
+
+  # Vamos trabalhar sobre uma cópia em memória do JSON
+  tmp_json="$CONFIG_JSON.tmp"
+  cp "$CONFIG_JSON" "$tmp_json"
+
+  # Lista de workspaces (chaves do objeto .workspaces)
+  mapfile -t ws_keys < <(jq -r '.workspaces | keys[]' "$tmp_json")
+
+  for ws in "${ws_keys[@]}"; do
+    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Processing workspace '$ws'..." "1"
+
+    crn=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$tmp_json")
+    wsid=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$tmp_json")
+
+    if [[ -z "$crn" || "$crn" == "null" || -z "$wsid" || "$wsid" == "null" ]]; then
+      echoscreen "WARN: Workspace '$ws' missing crn or id in JSON. Skipping..." "1"
+      continue
+    fi
+
+    base_url=$(get_base_url_from_crn "$crn")
+    if [[ -z "$base_url" ]]; then
+      echoscreen "WARN: Could not derive base_url from CRN '$crn'. Skipping workspace '$ws'..." "1"
+      continue
+    fi
+
+    # Chamar API para listar VSIs neste workspace
+    vsi_resp=$(curl -sS -X GET "$base_url/v1/cloud-instances/$wsid/pvm-instances" \
+      -H "$header_auth" \
+      -H "CRN: $crn" \
+      -H "$header_json" 2>>"$log_file")
+
+    # Se falhar parsing, ignoramos este workspace
+    if ! echo "$vsi_resp" | jq . >/dev/null 2>&1; then
+      echoscreen "WARN: Failed to parse VSI list for workspace '$ws'. Skipping..." "1"
+      continue
+    fi
+
+    # Guardar IDs existentes deste workspace
+    echo "$vsi_resp" | jq -r '.pvmInstances[]?.pvmInstanceID' | grep -v '^null$' >> "$existing_ids_file"
+
+    # Atualizar entradas em .systems cujo .workspace == $ws
+    # Match por nome de LPAR (name) com .serverName da API
+    tmp_json_new=$(mktemp)
+
+    jq --arg ws "$ws" --argjson api "$vsi_resp" '
+      .systems |= map(
+        if .workspace == $ws then
+          # Encontrar correspondente na lista da API pelo nome (case-insensitive)
+          . as $s
+          | ($api.pvmInstances[]? | select((.serverName|ascii_downcase) == ($s.name|ascii_downcase))) as $match
+          | if $match == null then
+              # Não encontrado → sistema será tratado mais tarde na limpeza final
+              $s
+            else
+              $s
+              | .ip = ($match.managementIp // .ip)
+              | .pvmInstanceID = ($match.pvmInstanceID // .pvmInstanceID)
+            end
+        else
+          .
+        end
+      )
+    ' "$tmp_json" > "$tmp_json_new"
+
+    mv "$tmp_json_new" "$tmp_json"
+  done
+
+  # Remover sistemas que já não existem na IBM Cloud
+  # Construir array JSON com todos os IDs recolhidos
+  if [[ -s "$existing_ids_file" ]]; then
+    ids_json=$(sort -u "$existing_ids_file" | jq -R . | jq -s .)
+  else
+    ids_json='[]'
+  fi
+
+  tmp_json_new=$(mktemp)
+  jq --argjson ids "$ids_json" '
+    .systems |= map(select(.pvmInstanceID as $id | ($ids | index($id))))
+  ' "$tmp_json" > "$tmp_json_new"
+
+  mv "$tmp_json_new" "$CONFIG_JSON"
+  rm -f "$tmp_json" "$existing_ids_file"
+
+  # Mostrar resumo com chaves mascaradas
+  masked=$(jq '
+    .apikey |= (if . != null then (. | tostring | (.[0:4] + "****" + .[-4:])) else . end)
+    | .access.accessKey |= (if . != null then (. | tostring | (.[0:4] + "****" + .[-4:])) else . end)
+    | .access.secretKey |= (if . != null then (. | tostring | (.[0:4] + "****" + .[-4:])) else . end)
+  ' "$CONFIG_JSON")
+
+  echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Systems updated and cleaned based on IBM Cloud APIs." "1"
+  echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Final (masked) config snapshot:" "1"
+  echo "$masked"
+
+  echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished." "1"
+}
+
+
 # Devolve 0 se o pvmInstanceID ainda existe no workspace, 1 caso contrário
 vsi_exists_in_cloud() {
     local ws="$1"           # exemplo: WSMAD2
@@ -517,89 +627,9 @@ case "$flag" in
     cat "$CONFIG_JSON"
     ;;
 
-    -updlpars)
-        test=0
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs ===" "1"
-
-        tmp_keep="$(mktemp)"
-        tmp_struct="$(mktemp)"
-        tmp_vsi_list="$(mktemp)"
-
-        # 1) Construir lista dos sistemas que EXISTEM na Cloud, por workspace
-        for ws in $(jq -r '.workspaces | keys[]' "$CONFIG_JSON"); do
-            ws_crn=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$CONFIG_JSON")
-            ws_id=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$CONFIG_JSON")
-
-            if [[ -z "$ws_crn" || "$ws_crn" == "null" || -z "$ws_id" || "$ws_id" == "null" ]]; then
-                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: Workspace '$ws' missing CRN or ID in JSON. Skipping..." "1"
-                continue
-            fi
-
-            base_url="$(get_base_url_from_crn "$ws_crn")"
-            if [[ $? -ne 0 || -z "$base_url" ]]; then
-                echoscreen "  -> Skipping workspace '$ws' (no valid base_url)" "1"
-                continue
-            fi
-
-            CRN="$ws_crn"
-            CLOUD_INSTANCE_ID="$ws_id"
-
-            echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Processing workspace '$ws' (CRN=$CRN, CLOUD_INSTANCE_ID=$CLOUD_INSTANCE_ID)..." "1"
-
-            # ins_ls deve estar definido no teu .env para usar $base_url / $CLOUD_INSTANCE_ID / $CRN
-            ins_ls 2>>"$log_file" \
-              | jq -r '.pvmInstances[]? | .serverName' > "$tmp_vsi_list"
-
-            if [[ ! -s "$tmp_vsi_list" ]]; then
-                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) -   No instances returned by API for workspace '$ws'." "1"
-                continue
-            fi
-
-            # Guardar pares {name, workspace} que existem na Cloud
-            while read -r name; do
-                [[ -z "$name" ]] && continue
-                printf '{"name":"%s","workspace":"%s"}\n' "$name" "$ws" >> "$tmp_keep"
-            done < "$tmp_vsi_list"
-        done
-
-        if [[ ! -s "$tmp_keep" ]]; then
-            echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - ERROR: No VSIs found via API in any workspace. JSON will not be modified." "1"
-            rm -f "$tmp_keep" "$tmp_struct" "$tmp_vsi_list"
-            abort "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished with errors (no VSIs)."
-        fi
-
-        keep_pairs=$(jq -s '.' "$tmp_keep")
-
-        # 2) Construir estrutura intermédia com kept / removed para evitar o erro "Cannot index array with string \"systems\""
-        jq --argjson keep "$keep_pairs" '
-          . as $root
-          | $root.systems as $sys
-          | {
-              root: $root,
-              kept:    [ $sys[] | select(any($keep[]; .name == .name and .workspace == .workspace)) ],
-              removed: [ $sys[] | select(any($keep[]; .name == .name and .workspace == .workspace) | not) ]
-            }
-        ' "$CONFIG_JSON" > "$tmp_struct"
-
-        # 3) Logar quais sistemas foram removidos (deixaram de existir na Cloud)
-        if jq -e '.removed | length > 0' "$tmp_struct" > /dev/null; then
-            echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Systems removed from JSON (no longer in IBM Cloud):" "1"
-            jq -r '.removed[] | "   - \(.name) (\(.workspace))"' "$tmp_struct" \
-                | while read -r line; do
-                      echoscreen "$line" "1"
-                  done
-        else
-            echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No systems removed; all JSON entries still exist in IBM Cloud." "1"
-        fi
-
-        # 4) Atualizar JSON: root.systems = kept
-        jq '.root.systems = .kept | .root' "$tmp_struct" > "${CONFIG_JSON}.tmp" &&
-            mv "${CONFIG_JSON}.tmp" "$CONFIG_JSON"
-
-        rm -f "$tmp_keep" "$tmp_struct" "$tmp_vsi_list"
-
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished." "1"
-        abort "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished."
+  -updlpars)
+        ensure_config_exists
+        run_updlpars_api
         ;;
 
   *)
