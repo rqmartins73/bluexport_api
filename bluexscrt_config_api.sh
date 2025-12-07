@@ -3,7 +3,7 @@
 # bluexscrt_config.api
 # Non-interactive JSON-based helper for bluexscrt configuration
 # Ricardo Martins - Blue Chip Portugal © 2024-2025
-####################################################################
+###################################################################
 
 set -euo pipefail
 
