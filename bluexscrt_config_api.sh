@@ -162,7 +162,7 @@ default_base_url=$base_mad02 # change to your prefered
 # ===== Derive base_url from workspace CRN =====
 get_base_url_for_workspace() {
   local ws_key="$1"   # ex: WSFRA1, WSMAD2
-  local crn region_raw region_token base_var url
+  local crn region_raw region_api base_var url
 
   # Vai buscar o CRN do workspace ao JSON
   crn=$(jq -r --arg ws "$ws_key" '.workspaces[$ws].crn' "$CONFIG_JSON")
@@ -174,16 +174,14 @@ get_base_url_for_workspace() {
   # Campo 6 do CRN é a região (ex: eu-de-1, eu-de-2, mad02, mad04)
   region_raw=$(echo "$crn" | awk -F: '{print $6}')
 
-  # Normalizar para token de variável: 
-  #  eu-de-1 / eu-de-2 -> eu_de
-  #  mad02 / mad04     -> mad
-  region_token=$(echo "$region_raw" | sed -E 's/[0-9]+$//' | tr '-' '_' | sed 's/_$//' )
+  # Converter para nome de variável: eu-de-1 -> eu_de_1 ; mad02 -> mad02 ; us-east -> us_east
+  region_api=$(echo "$region_raw" | tr '-' '_')
 
-  base_var="base_${region_token}"
+  base_var="base_${region_api}"
   url="${!base_var:-}"
 
   if [[ -z "$url" ]]; then
-    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: No base URL defined for region token '$region_token' (var $base_var)" "1"
+    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: No base URL defined for region '$region_raw' (expected var $base_var)" "1"
     return 1
   fi
 
@@ -548,7 +546,7 @@ set_ws_context() {
     local ws="$1"
 
     # Vai buscar crn e id do workspace ao JSON
-    local crn id region_token region_api base_var
+    local crn id region_raw region_api base_var
 
     crn=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$CONFIG_JSON")
     id=$(jq -r --arg ws "$ws" '.workspaces[$ws].id'  "$CONFIG_JSON")
@@ -558,15 +556,15 @@ set_ws_context() {
         return 1
     fi
 
-    # CRN: crn:v1:bluemix:public:power-iaas:mad02:...
-    region_token=$(echo "$crn" | awk -F: '{print $5}')
-    region_api=${region_token//-/_}              # eu-de-1 -> eu_de_1, mad02 -> mad02
+    # CRN: crn:v1:bluemix:public:power-iaas:eu-de-1:...
+    region_raw=$(echo "$crn" | awk -F: '{print $6}')
+    region_api=$(echo "$region_raw" | tr '-' '_')   # eu-de-1 -> eu_de_1
 
     base_var="base_${region_api}"
     base_url="${!base_var:-}"
 
     if [[ -z "$base_url" ]]; then
-        echo "WARN: No base URL defined for region token '$region_token' (var $base_var)" >&2
+        echo "WARN: No base URL defined for region '$region_raw' (expected var $base_var)" >&2
         return 1
     fi
 
