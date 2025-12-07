@@ -18,7 +18,8 @@ CONFIG_JSON="${BLUEXSCRT_JSON:-"$bluexscrt"}"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [option] [args]
+
+### Usage: $(basename "$0") [option] [args]
 
 Options:
   -v
@@ -37,8 +38,9 @@ Options:
 Examples:
   $(basename "$0") -v
   $(basename "$0") -dellpar ibmi75m2
-  $(basename "$0") -addlpar ibmi75m2 172.26.2.5 7ed4ea03-... WSMAD2 LPAR2
+  $(basename "$0") -addlpar ibmi75m2 172.26.2.5 7ed4ea03-... WSMAD2
   $(basename "$0") -updlpars
+
 EOF
 }
 
@@ -125,6 +127,7 @@ get_iam_token() {
 
   header_auth="Authorization: Bearer $iam_token"
   header_json="Content-Type: application/json"
+  header_accept="Accept: application/json"
 }
 
 
@@ -381,124 +384,162 @@ snap_ls() {
 }
 #### END:FUNCTION - API Commands ####
 
-# ===== -updlpars using IBM Cloud APIs (no ibmcloud CLI) =====
+print_masked_config() {
+
+  jq '
+    .apikey |= ( if . != null then ( .[0:4] + "****" + .[-4:] ) else . end ) |
+    .access.accessKey |= ( if . != null then ( .[0:4] + "****" + .[-4:] ) else . end ) |
+    .access.secretKey |= ( if . != null then ( .[0:4] + "****" + .[-4:] ) else . end )
+  ' "$CONFIG_JSON"
+}
+
+############################
 run_updlpars_api() {
+  get_iam_token
   echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs ===" "1"
 
-  tmp_json=$(mktemp)
-  cp "$CONFIG_JSON" "$tmp_json"
+  # Load current systems[] from JSON (to detect existing vs new)
+  existing_systems_json=$(jq '.systems // []' "$CONFIG_JSON")
 
-  existing_ids_file=$(mktemp)
-  : > "$existing_ids_file"
+  all_systems=""
 
-  # Percorre todos os workspaces definidos em .workspaces
-  mapfile -t ws_keys < <(jq -r '.workspaces | keys[]' "$tmp_json")
+  # Lista de workspaces definidos no JSON
+  mapfile -t ws_keys < <(jq -r '.workspaces | keys[]' "$CONFIG_JSON")
 
   for ws in "${ws_keys[@]}"; do
+    # Preparar contexto para este workspace (base_url, CLOUD_INSTANCE_ID, CRN)
+    if ! set_ws_context "$ws"; then
+      echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Skipping workspace '$ws' (no valid context)" "1"
+      continue
+    fi
+
     echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Processing workspace '$ws'..." "1"
 
-    # Vai buscar base_url e CRN/ID a partir do JSON
-    base_url=$(get_base_url_for_workspace "$ws") || {
-      echoscreen "  -> Skipping workspace '$ws' (no valid base_url)" "1"
-      continue
-    }
+    # Chama o API de lista de instâncias
+    resp=$(ins_ls 2>>"$log_file")
 
-    CLOUD_INSTANCE_ID=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$tmp_json")
-    CRN=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$tmp_json")
-
-    if [[ -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" || -z "$CRN" || "$CRN" == "null" ]]; then
-      echoscreen "  -> Skipping workspace '$ws' (missing CRN or ID in JSON)" "1"
+    # Se resposta vazia ou sem pvmInstances, ignora
+    if [[ -z "$resp" || "$resp" == "null" ]] || \
+       ! printf '%s\n' "$resp" | jq -e '.pvmInstances? // empty' >/dev/null 2>&1; then
+      echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> No pvmInstances found in '$ws' (skipping)" "1"
       continue
     fi
 
-     # Chamada à API de listagem de instâncias
-    vsi_resp=$(
-      curl -sS -X GET \
-        "$base_url/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances" \
-        -H "$header_auth" \
-        -H "CRN: $CRN" \
-        -H "$header_json"
-    )
+    # IMPORTANTE: usar process substitution, NÃO pipe, para o while correr no shell principal
+    while IFS= read -r inst; do
+      name=$(jq -r '.serverName' <<<"$inst")
+      pvmid=$(jq -r '.pvmInstanceID' <<<"$inst")
 
-    if [[ $? -ne 0 ]]; then
-      echoscreen "  -> ERROR calling PowerVS API for workspace '$ws'" "1"
-      continue
-    fi
+      # Verificar se este nome já existe em .systems (case-insensitive)
+      existing=$(printf '%s\n' "$existing_systems_json" | jq -c --arg name "$name" '
+        .[] | select((.name // "" | ascii_downcase) == ($name | ascii_downcase))
+      ' | head -n 1)
 
-    # Guardar IDs desta workspace
-    echo "$vsi_resp" \
-      | jq -r '.pvmInstances[]?.pvmInstanceID' 2>/dev/null \
-      >> "$existing_ids_file"
+      if [[ -n "$existing" ]]; then
+        # LPAR já existia no JSON: manter ip e lpar antigos, só actualizar pvmInstanceID
+        old_ip=$(jq -r '.ip // ""'    <<<"$existing")
+        old_lpar=$(jq -r '.lpar // ""' <<<"$existing")
 
-    # Atualizar / alinhar os systems desta workspace no JSON (nome + IP se quiseres)
-    # Exemplo: só garantir que o pvmInstanceID existe e que o workspace se mantém
-    tmp_json_new=$(mktemp)
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Existing LPAR '$name' in workspace '$ws' -> keeping IP '$old_ip', updating pvmInstanceID." "1"
 
-    jq --arg ws "$ws" --argjson vsis "$vsi_resp" '
-      .systems |= (
-        map(
-          if .workspace == $ws then
-            # mantemos o registo, pvmInstanceID é o valor actual no JSON;
-            # aqui podias opcionalmente validar se ainda existe em vsis...
-            .
-          else
-            .
-          end
-        )
-      )
-    ' "$tmp_json" > "$tmp_json_new" || {
-      echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: Failed to re-map systems for workspace '$ws'. Leaving systems unchanged for this pass." "1"
-      cp "$tmp_json" "$tmp_json_new"
-    }
+        system_obj=$(jq -n \
+          --arg name "$name" \
+          --arg ip "$old_ip" \
+          --arg pvmid "$pvmid" \
+          --arg ws "$ws" \
+          '{name:$name, ip:$ip, pvmInstanceID:$pvmid, workspace:$ws}')
 
-    mv "$tmp_json_new" "$tmp_json"
+      else
+        # LPAR novo: decidir IP (com escolha se houver mais do que um)
+        mapfile -t ip_array < <(jq -r '
+          [
+            (.networks[]? | .ipAddress?),
+            (.networks[]? | .ipAddresses[]?)
+          ]
+          | map(select(. != null))
+          | unique[]
+        ' <<<"$inst")
+
+        chosen_ip=""
+        ip_count=${#ip_array[@]}
+
+        if (( ip_count == 0 )); then
+          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New LPAR '$name' in workspace '$ws' has no IP addresses reported by API (storing empty IP)." "1"
+
+        elif (( ip_count == 1 )); then
+          chosen_ip="${ip_array[0]}"
+          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New LPAR '$name' in workspace '$ws' -> single IP detected: $chosen_ip" "1"
+
+        else
+          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New LPAR '$name' in workspace '$ws' has multiple IPs:" "1"
+          idx=1
+          for ip in "${ip_array[@]}"; do
+            echo "  $idx) $ip"
+            ((idx++))
+          done
+
+	# Loop until we get a valid choice
+          while :; do
+            # Always read from the terminal, not from redirected stdin
+            printf "### Choose the IP to store in JSON [1-%d] (default 1): " "$ip_count" > /dev/tty
+
+            if ! read -r choice < /dev/tty; then
+              # If we get EOF (Ctrl+D or no TTY), default to 1
+              choice=1
+              echo > /dev/tty
+              echo "### No input received, defaulting to option 1." > /dev/tty
+            fi
+
+            # Default = 1 if user just presses Enter
+            if [[ -z "$choice" ]]; then
+              choice=1
+            fi
+
+            if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ip_count )); then
+              break
+            fi
+
+            echo "Invalid choice. Please enter a number between 1 and ${ip_count}." > /dev/tty
+          done
+          chosen_ip="${ip_array[$((choice-1))]}"
+          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Selected IP '$chosen_ip' for LPAR '$name'." "1"
+        fi
+
+        # LPAR novo -> lpar label vazio por agora
+        system_obj=$(jq -n \
+          --arg name "$name" \
+          --arg ip "$chosen_ip" \
+          --arg pvmid "$pvmid" \
+          --arg ws "$ws" \
+          '{name:$name, ip:$ip, pvmInstanceID:$pvmid, workspace:$ws}')
+      fi
+
+      # Acrescenta este objecto JSON (numa linha) ao acumulador
+      all_systems+="$system_obj"$'\n'
+
+    done < <(printf '%s\n' "$resp" | jq -c '.pvmInstances[]?')
   done
 
-  # Remover sistemas que já não existem na IBM Cloud
-  if [[ -s "$existing_ids_file" ]]; then
-    ids_json=$(sort -u "$existing_ids_file" | jq -R . | jq -s .)
+  # Se não conseguimos nada do API, não mexemos no JSON
+  if [[ -z "$all_systems" ]]; then
+    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: No systems retrieved from any workspace; keeping existing systems[] as-is." "1"
   else
-    ids_json='[]'
+    # Converte as linhas em array JSON e sobrescreve systems[]
+    systems_json=$(printf '%s\n' "$all_systems" | jq -s '.')
+    tmp_file="${CONFIG_JSON}.tmp"
+    jq --argjson systems "$systems_json" '.systems = $systems' "$CONFIG_JSON" > "$tmp_file" && \
+      mv "$tmp_file" "$CONFIG_JSON"
+
+    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Systems updated from IBM Cloud (new LPARs added, obsolete removed)." "1"
   fi
 
-  tmp_json_new=$(mktemp)
-
-  # Só tenta limpar systems se existir .systems e for array
-  if jq -e 'has("systems") and (.systems | type == "array")' "$tmp_json" > /dev/null 2>&1; then
-    if ! jq --argjson ids "$ids_json" '
-        .systems |= map(
-          select(.pvmInstanceID as $id | ($ids | index($id)))
-        )
-      ' "$tmp_json" > "$tmp_json_new"
-    then
-      echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: Failed to prune systems based on existing IDs. Leaving systems unchanged." "1"
-      cp "$tmp_json" "$tmp_json_new"
-    fi
-  else
-    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - INFO: No valid .systems array in JSON, skipping systems cleanup." "1"
-    cp "$tmp_json" "$tmp_json_new"
-  fi
-
-  mv "$tmp_json_new" "$CONFIG_JSON"
-  rm -f "$tmp_json" "$existing_ids_file"
-
-  # Mostrar resumo com chaves mascaradas
-  masked=$(jq '
-    .apikey |= (if . != null then (. | tostring | (.[0:4] + "****" + .[-4:])) else . end)
-    | .access.accessKey |= (if . != null then (. | tostring | (.[0:4] + "****" + .[-4:])) else . end)
-    | .access.secretKey |= (if . != null then (. | tostring | (.[0:4] + "****" + .[-4:])) else . end)
-  ' "$CONFIG_JSON")
-
-  echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Systems updated and cleaned based on IBM Cloud APIs." "1"
   echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Final (masked) config snapshot:" "1"
-  echo "$masked"
-
+  print_masked_config
   echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished." "1"
 }
 
 
-
-# Devolve 0 se o pvmInstanceID ainda existe no workspace, 1 caso contrário
+###### Devolve 0 se o pvmInstanceID ainda existe no workspace, 1 caso contrário
 vsi_exists_in_cloud() {
     local ws="$1"           # exemplo: WSMAD2
     local pvm_id="$2"
@@ -542,6 +583,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 # Set base_url, CLOUD_INSTANCE_ID e CRN para um workspace curto (ex: WSMAD2)
+# Set base_url, CLOUD_INSTANCE_ID e CRN para um workspace curto (ex: WSMAD2)
 set_ws_context() {
     local ws="$1"
 
@@ -552,7 +594,7 @@ set_ws_context() {
     id=$(jq -r --arg ws "$ws" '.workspaces[$ws].id'  "$CONFIG_JSON")
 
     if [[ -z "$crn" || "$crn" == "null" || -z "$id" || "$id" == "null" ]]; then
-        echo "WARN: Workspace '$ws' not found or missing crn/id in $CONFIG_JSON" >&2
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: Workspace '$ws' not found or missing crn/id in $CONFIG_JSON" "1"
         return 1
     fi
 
@@ -564,7 +606,7 @@ set_ws_context() {
     base_url="${!base_var:-}"
 
     if [[ -z "$base_url" ]]; then
-        echo "WARN: No base URL defined for region '$region_raw' (expected var $base_var)" >&2
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: No base URL defined for region '$region_raw' (expected var $base_var)" "1"
         return 1
     fi
 
@@ -598,42 +640,48 @@ case "$flag" in
     ' --arg name "$name"
 
     # Output updated JSON
-    cat "$CONFIG_JSON"
+	print_masked_config
     ;;
 
   -addlpar)
-    if [[ $# -ne 6 ]]; then
+    # Now: NAME IP PVM_ID WORKSPACE_SHORT  (no LPAR label)
+    if [[ $# -ne 5 ]]; then
       echo "ERROR: Wrong syntax." >&2
-      echo "Usage: $(basename "$0") -addlpar NAME IP PVM_ID WORKSPACE_SHORT LPAR_LABEL" >&2
+      echo "Usage: $(basename "$0") -addlpar NAME IP PVM_ID WORKSPACE_SHORT" >&2
       exit 1
     fi
-#    ensure_config_exists
+
+    # ensure_config_exists  # se quiseres obrigar a escolher o JSON aqui também
+
     lpar_name="$2"
     lpar_ip="$3"
     lpar_pvmid="$4"
     lpar_ws="$5"
-    lpar_label="$6"
 
-    # Upsert system entry
-    # 1) Remove any existing system with same name (case-insensitive)
-    # 2) Append the new one
+    # Upsert system entry (case-insensitive on .name), sem campo "lpar"
     jq_inplace '
       .systems |= (
-        map(select((.name // "" | ascii_downcase) != ($name | ascii_downcase)))
-        + [ { "name": $name,
+        ( . // [] )
+        | map(select((.name // "" | ascii_downcase) != ($name | ascii_downcase)))
+        + [ {
+              "name": $name,
               "ip": $ip,
               "pvmInstanceID": $pvmid,
-              "workspace": $ws,
-              "lpar": $lparlabel } ]
+              "workspace": $ws
+            } ]
       )
     ' \
-      --arg name "$lpar_name" \
-      --arg ip "$lpar_ip" \
+      --arg name  "$lpar_name" \
+      --arg ip    "$lpar_ip" \
       --arg pvmid "$lpar_pvmid" \
-      --arg ws "$lpar_ws" \
-      --arg lparlabel "$lpar_label"
+      --arg ws    "$lpar_ws"
 
-    cat "$CONFIG_JSON"
+    echo ""
+    echo "LPAR '$lpar_name' added/updated in $CONFIG_JSON:"
+    jq -r '
+      .systems[]
+      | select((.name // "" | ascii_downcase) == ($n | ascii_downcase))
+    ' --arg n "$lpar_name" "$CONFIG_JSON"
     ;;
 
   -updlpars)

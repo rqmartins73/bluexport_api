@@ -476,6 +476,10 @@ img_ls() {
 snap_ls() {
 	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
+
+snap_del() {
+	curl -sX DELETE $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots/$SNAP_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
+}
 #### END:FUNCTION - API Commands ####
 
 #### START:FUNCTION - Check if image-catalog and Cloud Object has images from last time and deleted it ####
@@ -848,35 +852,35 @@ do_snap_update() {
 
 ####  START:FUNCTION - Do the Snapshot Delete  ####
 do_snap_delete() {
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Executing Snapshot $snap_name Delete" "1"
-############!!!!!!!!!!	snap_id=$(/usr/local/bin/ibmcloud pi ins snap ls | grep -w $snap_name | awk {'print $1'})
-##########!!!!!!!!!!	/usr/local/bin/ibmcloud pi ins snap del $snap_id 2>> $log_file
-	if [ $? -eq 0 ]
-	then
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Waiting for Snapshot $snap_name deletion to reach 100%..." "1"
-		snap_percent=0
-		while [ $snap_percent -lt 100 ]
-		do
-			snap_percent_before=$snap_percent
-			sleep 5
-###########!!!!!!!!!!!!			snap_percent=$(/usr/local/bin/ibmcloud pi ins snap ls | grep -w $snap_name | awk 'NF>1{print $NF}')
-			if [[ $snap_percent == "" ]]
-			then
-				snap_percent=100
-			fi
-			if [[ "$snap_percent" != "$snap_percent_before" ]]
-			then
-				if [ $snap_percent -eq 100 ]
-				then
-					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Snapshot $snap_name Deleted. - Done!" "1"
-				else
-					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Snapshot $snap_name deletion at $snap_percent%" "1"
-				fi
-			fi
-		done
-	else
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Oops something went wrong!... Check the log above this line..."
-	fi
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot Delete '$snap_name' from VSI $vsi !" "1"
+        # Retrieve snapshots via API
+        snaps_json=$(snap_ls 2>>"$log_file")
+        # Find snapshot ID by name (exact match)
+        snap_id=$(echo "$snaps_json" | jq -r --arg name "$snap_name" '.snapshots[]? | select(.name == $name) | .snapshotID ')
+        if [[ -z "$snap_id" || "$snap_id" == "null" ]]; then
+            abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' does not exist. Choose another name or use -snapcr to create one."
+        fi
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' found with ID: $snap_id" "1"
+        # Delete snapshot via API
+        echo "$(date +%Y-%m-%d_%H:%M:%S) - Executing delete for snapshot ID $snap_id ..." | tee -a "$log_file"
+	SNAP_ID=$snap_id
+        resp=$(snap_del 2>>"$log_file")
+        # Check API response
+        if echo "$resp" | grep -q '"error"'; then
+            abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED deleting snapshot '$snap_name'. API error: $resp"
+        fi
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' delete request sent successfully." "1"
+        # Optional: Poll snapshot list until it disappears
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for snapshot deletion to complete..." "1"
+        for i in {1..100}; do
+            sleep 5
+            still_exists=$(snap_ls 2>>"$log_file" | jq -e --arg id "$snap_id" '.snapshots[]? | select(.snapshotID == $id)' >/dev/null 2>&1 ; echo $?)
+            if [[ $still_exists -ne 0 ]]; then
+                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' deleted successfully!" "1"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished - Snapshot $snap_name Deleted!"
+            fi
+        done
+        abort "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: Snapshot delete requested but snapshot still appears in list. Check IBM Cloud."
 }
 ####  END:FUNCTION - Do the Snapshot Delete  ####
 
@@ -1307,7 +1311,8 @@ case $1 in
 		echoscreen "Flag -j selected, but too many arguments!! Syntax: bluexport.api -j VSI_NAME IMAGE_NAME"
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but too many arguments!! Syntax: bluexport.api -j VSI_NAME IMAGE_NAME"
 	fi
-	vsi="${2,,}"
+#	vsi="${2,,}"
+	vsi=$2
 	capture_name=${3^^}
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, watching only the Job Status for Capture Image $capture_name! Logging at $HOME/bluexport_j_$capture_name.log" "1"
 	timestamp=$(date +%F" "%T" "%Z)
@@ -1376,7 +1381,8 @@ case $1 in
 	else
 		test=0
 	fi
-	vsi="${2,,}"
+#	vsi="${2,,}"
+	vsi=$2
 	vsi_id_bluexscrt
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting Capture&Export for VSI Name: $vsi ..." "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Capture Name: $capture_name" "1"
@@ -1446,7 +1452,8 @@ case $1 in
 	exclude_names=$2
 	exclude_names_regex=$(printf "%s" "$exclude_names" | sed 's/ /|/g')
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes Name to exclude: ${exclude_names[*]}" "1"
-	vsi="${3,,}"
+#	vsi="${3,,}"
+	vsi=$3
 	vsi_id_bluexscrt
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting Capture&Export for VSI Name: $vsi ..." "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Capture Name: $capture_name" "1"
@@ -1477,7 +1484,8 @@ case $1 in
 	# Volume name patterns (space-separated list in $3)
 	IFS=' ' read -r -a volchtier_names <<< "$3"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Common name of volumes to change to tier $tier: ${volchtier_names[*]}" "1"
-	vsi="${2,,}"
+#	vsi="${2,,}"
+	vsi=$2
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
 	# Build JSON array with volume name patterns for jq
@@ -1503,7 +1511,8 @@ case $1 in
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport.api $1 VSI_NAME TIER_TO_CHANGE_TO"
 	fi
-	vsi="${2,,}"
+#	vsi="${2,,}"
+	vsi=$2
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Changing ALL volumes of VSI $vsi_cloud_name to tier $tier..." "1"
@@ -1547,7 +1556,8 @@ case $1 in
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
 	fi
-	vsi="${2,,}"
+#	vsi="${2,,}"
+	vsi=$2
 	vsi_id_bluexscrt
 	test=0
 	snap_name=$3
@@ -1601,7 +1611,8 @@ case $1 in
 	fi
 	test=0
 	flagj=1
-	vsi="${2,,}"
+#	vsi="${2,,}"
+	vsi=$2
 	vsi_id_bluexscrt
 	snap_name=$3
 	desc=$5
@@ -1660,70 +1671,130 @@ case $1 in
     ;;
 
   -snapdel)
-	if [ $# -lt 3 ] 
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME"
-	fi
-	if [ $# -gt 3 ] 
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME"
-	fi
-	test=0
-	flagj=1
-	vsi="${2,,}"
-	vsi_id_bluexscrt
-	snap_name=$3
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Snapshot Delete $snap_name from VSI $vsi !" "1"
-###############!!!!!!!!!!	/usr/local/bin/ibmcloud pi ws tg $vsi_ws_id
-##############!!!!!!!!!!	snap_name_exists=$(/usr/local/bin/ibmcloud pi ins snap ls $vsi_id | grep -w $snap_name)
-	if [[ "$snap_name_exists" == "" ]]
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Snapshot with name $snap_name does not exist, please choose a diferent name or use flag -snapcr to create one."
-	fi
+        # Validate arguments
+        if [ $# -lt 3 ]; then
+            abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME"
+        fi
+        if [ $# -gt 3 ]; then
+            abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME"
+        fi
+
+        test=0
+        flagj=1
+
+        # Normalize VSI name to lowercase
+        vsi=$2
+
+        # Resolve VSI ID, workspace, CLOUD_INSTANCE_ID, CRN, etc.
+        vsi_id_bluexscrt
+	check_locally_VSI_exists
+	dc_vsi_list
+        snap_name="$3"
 	do_snap_delete
-	abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully finished -  Snapshot $snap_name Deleted!"
     ;;
 
-   -snaplsall)
-	# Too many arguments?
-	if [ $# -gt 1 ]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport.api $1"
-	fi
-	test=0
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing all snapshots in all workspaces!" "1"
-	# Read workspace names from JSON
-	# Convert wsnames from colon-separated string → array
-	IFS=':' read -r -a wsnames_array <<< "$wsnames"
-	# Convert allws (space separated) → array
-	read -r -a allws_array <<< "$allws"
-	# Create mapping: workspace shortname → full name
-	declare -A wsmap
-	for i in "${!allws_array[@]}"
-	do
-		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-	done
-	# Loop all workspaces
-	for ws in "${allws_array[@]}"
-	do
-		# Get workspace CRN from JSON
-		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
-		# Workspace human friendly name
-		full_ws_name="${wsmap[$ws]}"
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name :" "1"
-		# Resolve workspace region → base_url / CLOUD_INSTANCE_ID
-		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
-		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
-		base_url_var="base_${region_api}"
-		base_url="${!base_url_var}"
-		# Snapshot listing (replace /usr/local/bin/ibmcloud pi ins snap ls)
-		snap_ls | jq -r '.snapshots[] |"----------------------- Snapshot Found -----------------------\nName: \(.name)\nCreation Date: \(.creationDate)\nLast Update Date: \(.lastUpdateDate)\nAction: \(.action)\nSnapshot ID: \(.snapshotID)\nPercentage Complete: \(.percentComplete)\nStatus: \(.status)\nStatus Detail: \(.statusDetail)\nInstance ID: \(.pvmInstanceID)\nVolumes: \(.volumeSnapshots)\n------------------------------------------------------------"' 2>>"$log_file" | tee -a "$log_file" | tee -a "$log_file"
-		echoscreen "" "1"
-	done
-	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing all snapshots in all workspaces"
+
+  -snaplsall)
+        # Too many arguments?
+        if [ $# -gt 1 ]
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport.api $1"
+        fi
+
+        test=0
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing all snapshots in all workspaces!" "1"
+
+        # Convert wsnames from colon-separated string → array
+        IFS=':' read -r -a wsnames_array <<< "$wsnames"
+        # Convert allws (space separated) → array
+        read -r -a allws_array <<< "$allws"
+
+        # Create mapping: workspace shortname → full name
+        declare -A wsmap
+        for i in "${!allws_array[@]}"
+        do
+                wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+        done
+
+        # Loop all workspaces
+        for ws in "${allws_array[@]}"
+        do
+                # Get workspace CRN and ID from JSON
+                CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+                CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+                # Workspace human friendly name
+                full_ws_name="${wsmap[$ws]}"
+
+                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name :" "1"
+
+                # Resolve region and base_url
+                region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn
+                        | capture("power-iaas:(?<region>[^:]+)")
+                        | .region
+                        | gsub("-"; "_")' "$bluexscrt")
+                base_url_var="base_${region_api}"
+                base_url="${!base_url_var}"
+
+                # Call API to list snapshots via function snap_ls (API version)
+                snaps_json=$(snap_ls 2>>"$log_file")
+
+                # Check if there are snapshots
+                if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
+                then
+                        msg="----------------------- No Snapshots Found -----------------------"
+                        echo "$msg" | tee -a "$log_file"
+                else
+                        # Transform snapshots into TSV to process in bash
+                        echo "$snaps_json" | jq -r '
+                              .snapshots // [] |
+                              .[] |
+                              [
+                                .name,
+                                .creationDate,
+                                .lastUpdateDate,
+                                .action,
+                                .snapshotID,
+                                .percentComplete,
+                                .status,
+                                .statusDetail,
+                                .pvmInstanceID,
+                                (.volumeSnapshots | tostring)
+                              ] | @tsv
+                        ' 2>>"$log_file" | \
+                        while IFS=$'\t' read -r s_name s_cdate s_udate s_action s_id s_pct s_status s_sdetail s_pvmid s_vols
+                        do
+                                # Resolve Instance Name from config JSON for this workspace + pvmInstanceID
+                                instname=$(jq -r --arg ws "$ws" --arg id "$s_pvmid" '
+                                        (.systems // [])
+                                        | map(select(.workspace == $ws and .pvmInstanceID == $id))
+                                        | if length > 0 then .[0].name else "NOT-IN-CONFIG" end
+                                ' "$bluexscrt")
+
+                                {
+                                        echo "----------------------- Snapshot Found -----------------------"
+                                        echo "Name: $s_name"
+                                        echo "Creation Date: $s_cdate"
+                                        echo "Last Update Date: $s_udate"
+                                        echo "Action: $s_action"
+                                        echo "Snapshot ID: $s_id"
+                                        echo "Percentage Complete: $s_pct"
+                                        echo "Status: $s_status"
+                                        echo "Status Detail: $s_sdetail"
+                                        echo "Instance ID: $s_pvmid"
+                                        echo "Instance Name: $instname"
+                                        echo "Volumes: $s_vols"
+                                        echo "------------------------------------------------------------"
+                                } | tee -a "$log_file"
+                        done
+                fi
+
+                echoscreen "" "1"
+        done
+
+        abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing all snapshots in all workspaces"
     ;;
 
-   -imglsall)
+  -imglsall)
 	if [ $# -gt 1 ]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport.api $1"
@@ -1755,14 +1826,35 @@ case $1 in
 			continue
 		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing Captured Images at Workspace $full_ws_name :" "1"
-		# API equivalent of: /usr/local/bin/ibmcloud pi img ls
-		img_ls | jq -r '.images[] |"----------------------- Image Found -----------------------\nName: \(.name)\nCreation Date: \(.creationDate)\nLast Update Date: \(.lastUpdateDate)\nDescription: \(.description)\nImage ID: \(.imageID)\nOperating System: \(.specifications.operatingSystem)\nState: \(.state)\nStorage Pool: \(.storagePool)\nStorage Type: \(.storageType)\n------------------------------------------------------------"' 2>>"$log_file" | tee -a "$log_file"
+		images_json=$(img_ls 2>>"$log_file")
+		# Check if there are images
+		if ! echo "$images_json" | jq -e '.images | length > 0' >/dev/null 2>&1
+		then
+			msg="----------------------- No Images Found -----------------------"
+			echo "$msg" | tee -a "$log_file"
+		else
+			# If images exist → pretty formatted output
+			echo "$images_json" | jq -r '
+			      .images[] |
+			      "----------------------- Image Found -----------------------\n" +
+			      "Name: \(.name)\n" +
+			      "Creation Date: \(.creationDate)\n" +
+			      "Last Update Date: \(.lastUpdateDate)\n" +
+			      "Description: \(.description)\n" +
+			      "Image ID: \(.imageID)\n" +
+			      "Operating System: \(.specifications.operatingSystem)\n" +
+			      "State: \(.state)\n" +
+			      "Storage Pool: \(.storagePool)\n" +
+			      "Storage Type: \(.storageType)\n" +
+			      "------------------------------------------------------------"
+			    ' 2>>"$log_file" | tee -a "$log_file"
+		fi
 		echoscreen "" "1"
 	done
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all Captured Images in all Workpsaces"
     ;;
 
-   -vclonelsall)
+  -vclonelsall)
     if [ $# -gt 1 ] 
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME"
@@ -1807,7 +1899,8 @@ case $1 in
 	test=0
 	vclone_name=$2
 	base_name=$3
-	vsi="${4,,}"
+#	vsi="${4,,}"
+	vsi=$4
 	vsi_id_bluexscrt
 	replication=$5
 	rollback=$6
@@ -1844,7 +1937,7 @@ echo
 	abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully finished -  Volume Clone $vclone_name !"
     ;;
 
-   -vclonedel)
+  -vclonedel)
 	if [ $# -lt 2 ]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME"
@@ -1887,7 +1980,8 @@ echo
 	else
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Argument 3 must be -vg"
 	fi
-	vsi="${2,,}"
+#	vsi="${2,,}"
+	vsi=$2
 	vg_name=$4
 	create_vg
 	abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully Create $vg_flag_echo $vg_name !"
@@ -1902,7 +1996,8 @@ echo
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport.api $1 LPAR_NAME SHORT_NAME_TARGET_WS"
 	fi
-	vsi="${2,,}"
+#	vsi="${2,,}"
+	vsi=$2
 	target_short_ws=$3
 	target_ws_crn=$(cat $bluexscrt | grep -w $target_short_ws | head -n1 | awk {'print $2'})
 	if [[ "$target_ws_crn" == "" ]]
