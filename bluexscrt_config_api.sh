@@ -456,8 +456,8 @@ run_updlpars_api() {
     ' "$tmp_json" > "$tmp_json_new"
 
     mv "$tmp_json_new" "$tmp_json"
+echo "$vsi_resp" > "/tmp/vsi_${ws}.json"
   done
-
   # Remover sistemas que já não existem na IBM Cloud
   # Construir array JSON com todos os IDs recolhidos
   if [[ -s "$existing_ids_file" ]]; then
@@ -467,9 +467,22 @@ run_updlpars_api() {
   fi
 
   tmp_json_new=$(mktemp)
-  jq --argjson ids "$ids_json" '
-    .systems |= map(select(.pvmInstanceID as $id | ($ids | index($id))))
-  ' "$tmp_json" > "$tmp_json_new"
+
+  # Só tenta limpar systems se existir .systems e for array
+  if jq -e 'has("systems") and (.systems | type == "array")' "$tmp_json" > /dev/null 2>&1; then
+    if ! jq --argjson ids "$ids_json" '
+        .systems |= map(
+          select(.pvmInstanceID as $id | ($ids | index($id)))
+        )
+      ' "$tmp_json" > "$tmp_json_new"
+    then
+      echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARN: Failed to prune systems based on existing IDs. Leaving systems unchanged." "1"
+      cp "$tmp_json" "$tmp_json_new"
+    fi
+  else
+    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - INFO: No valid .systems array in JSON, skipping systems cleanup." "1"
+    cp "$tmp_json" "$tmp_json_new"
+  fi
 
   mv "$tmp_json_new" "$CONFIG_JSON"
   rm -f "$tmp_json" "$existing_ids_file"
@@ -487,6 +500,7 @@ run_updlpars_api() {
 
   echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished." "1"
 }
+
 
 
 # Devolve 0 se o pvmInstanceID ainda existe no workspace, 1 caso contrário
