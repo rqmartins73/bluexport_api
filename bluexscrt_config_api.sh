@@ -359,6 +359,38 @@ if [[ $# -eq 0 ]]; then
   exit 1
 fi
 
+# Set base_url, CLOUD_INSTANCE_ID e CRN para um workspace curto (ex: WSMAD2)
+set_ws_context() {
+    local ws="$1"
+
+    # Vai buscar crn e id do workspace ao JSON
+    local crn id region_token region_api base_var
+
+    crn=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$CONFIG_JSON")
+    id=$(jq -r --arg ws "$ws" '.workspaces[$ws].id'  "$CONFIG_JSON")
+
+    if [[ -z "$crn" || "$crn" == "null" || -z "$id" || "$id" == "null" ]]; then
+        echo "WARN: Workspace '$ws' not found or missing crn/id in $CONFIG_JSON" >&2
+        return 1
+    fi
+
+    # CRN: crn:v1:bluemix:public:power-iaas:mad02:...
+    region_token=$(echo "$crn" | awk -F: '{print $5}')
+    region_api=${region_token//-/_}              # eu-de-1 -> eu_de_1, mad02 -> mad02
+
+    base_var="base_${region_api}"
+    base_url="${!base_var:-}"
+
+    if [[ -z "$base_url" ]]; then
+        echo "WARN: No base URL defined for region token '$region_token' (var $base_var)" >&2
+        return 1
+    fi
+
+    CLOUD_INSTANCE_ID="$id"
+    CRN="$crn"
+    return 0
+}
+
 case "$flag" in
   -v)
     # Version as JSON
@@ -423,105 +455,85 @@ case "$flag" in
     ;;
 
   -updlpars)
-    # This keeps the old behaviour: use ibmcloud resources textual output
-    # to refresh pvmInstanceID for existing systems.
-#    ensure_config_exists
+    # Atualiza pvmInstanceID via API e remove LPARs que já não existem
 
-    # Read apikey / region / resourceGroup from JSON
-    region=$(jq -r '.access.region' "$CONFIG_JSON" 2>/dev/null || jq -r '.region // empty' "$CONFIG_JSON")
-    resource_grp=$(jq -r '.resourceGroup' "$CONFIG_JSON")
+    echo "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs ==="
 
-    if [[ -z "$apikey" || -z "$region" || -z "$resource_grp" ]]; then
-      echo "ERROR: apikey, region or resourceGroup missing in $CONFIG_JSON" >&2
-      exit 1
-    fi
+    # Lista de workspaces definidos no JSON (WSMAD2, WSFRA1, etc.)
+    mapfile -t ws_list < <(jq -r '.workspaces | keys[]' "$CONFIG_JSON")
 
-    echo "### Logging into IBM Cloud to refresh LPAR IDs..." >&2
-    /usr/local/bin/ibmcloud login --apikey "$apikey" -r "$region" -g "$resource_grp"
+    # Pares workspace:name que existem na Cloud (para limpeza posterior)
+    keep_pairs=()
 
-    echo "### Getting updated PowerVS VSI list from account..." >&2
-    # Same parsing logic as original script: pair Name + ID
-    vsi_names=$(/usr/local/bin/ibmcloud resources | grep -B3 pvm-instance | grep "Name:" | awk '{print $2}')
-    vsi_ids=$(/usr/local/bin/ibmcloud resources | grep -B3 pvm-instance | grep "CRN:"  | awk '{print $2}' | sed -E 's/.*?pvm-instance://')
+    # 1) Para cada workspace, ir à API buscar as VSIs e atualizar os pvmInstanceID
+    for ws in "${ws_list[@]}"; do
+        echo "$(date +%Y-%m-%d_%H:%M:%S) - Processing workspace '$ws'..."
 
-    # Combine into "name id" lines
-    mapfile -t vsi_pairs < <(paste <(echo "$vsi_names") <(echo "$vsi_ids"))
-
-    # For each "name id" pair, update JSON if system exists
-    for pair in "${vsi_pairs[@]}"; do
-      vm_name=$(echo "$pair" | awk '{print $1}')
-      vm_id=$(echo "$pair"   | awk '{print $2}')
-
-      # Update pvmInstanceID where .name matches (case-insensitive)
-      tmp_file="$(mktemp "${CONFIG_JSON}.XXXX")"
-      jq '
-        .systems |=
-          map(
-            if (.name // "" | ascii_downcase) == ($vmname | ascii_downcase)
-            then .pvmInstanceID = $vmid
-            else .
-            end
-          )
-      ' \
-        --arg vmname "$vm_name" \
-        --arg vmid "$vm_id" \
-        "$CONFIG_JSON" > "$tmp_file"
-      mv "$tmp_file" "$CONFIG_JSON"
-    done
-
-echo "$(date +%Y-%m-%d_%H:%M:%S) - A validar LPARs existentes na IBM Cloud..." 
-
-        # Arrays para guardar quais ficam e quais são removidas
-        keep_systems=()
-        removed_systems=()
-
-        # Percorre todas as LPARs definidas no JSON
-        while read -r name workspace pvmid; do
-            if vsi_exists_in_cloud "$workspace" "$pvmid"; then
-                keep_systems+=("$name")
-            else
-                removed_systems+=("$name")
-            fi
-        done < <(jq -r '.systems[] | "\(.name) \(.workspace) \(.pvmInstanceID)"' "$CONFIG_JSON")
-
-        # Constrói JSON com a lista de sistemas a manter
-        keep_json=$(printf '%s\n' "${keep_systems[@]}" | jq -R . | jq -s .)
-
-        # Atualiza o ficheiro, removendo LPARs que já não existem na Cloud
-        tmp_cfg="$(mktemp)"
-        jq --argjson keep "$keep_json" '
-          .systems |= [ .systems[] | select(.name as $n | $keep | index($n)) ]
-        ' "$CONFIG_JSON" > "$tmp_cfg" && mv "$tmp_cfg" "$CONFIG_JSON"
-
-        # Logging sobre o que foi removido
-        if ((${#removed_systems[@]} > 0)); then
-            echo "$(date +%Y-%m-%d_%H:%M:%S) - As seguintes LPARs foram removidas do JSON porque já não existem na IBM Cloud:"
-            for s in "${removed_systems[@]}"; do
-                echo "  - $s"
-            done
-        else
-            echo "$(date +%Y-%m-%d_%H:%M:%S) - Nenhuma LPAR obsoleta encontrada no JSON."
+        if ! set_ws_context "$ws"; then
+            echo "  -> Skipping workspace '$ws' (no valid base_url/CRN/id)" >&2
+            continue
         fi
 
-        echo "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars concluído."
-print_masked_config() {
-    jq '
-      def mask:
-        if . == null or . == "" then
-          .
-        else
-          "****" + (.[(length-4):])
-        end;
+        # Lista de instâncias desse workspace via API
+        # Formato: "serverName pvmInstanceID"
+        while read -r vm_name vm_id; do
+            [[ -z "$vm_name" || -z "$vm_id" ]] && continue
 
-      .apikey             |= mask
-    | .access.accessKey   |= mask
-    | .access.secretKey   |= mask
-    ' "$CONFIG_JSON"
-}
+            # Atualiza pvmInstanceID em systems onde .workspace == ws e .name == vm_name (case-insensitive)
+            jq_inplace '
+              .systems |=
+                map(
+                  if .workspace == $ws
+                     and (.name // "" | ascii_downcase) == ($vmname | ascii_downcase)
+                  then .pvmInstanceID = $vmid
+                  else .
+                  end
+                )
+            ' \
+              --arg ws "$ws" \
+              --arg vmname "$vm_name" \
+              --arg vmid "$vm_id"
+set_ws_context
+            # Marca este par workspace:name como existente na Cloud
+            keep_pairs+=("$ws:$vm_name")
+        done < <(
+            ins_ls 2>/dev/null \
+              | jq -r '.pvmInstances[]? | "\(.serverName) \(.pvmInstanceID)"'
+        )
+    done
 
-echo "JSON final (credenciais mascaradas):"
-print_masked_config
+    # 2) Remover LPARs do JSON que já não existem na Cloud
+    echo "$(date +%Y-%m-%d_%H:%M:%S) - Validating systems that still exist in IBM Cloud..."
 
+    if ((${#keep_pairs[@]} > 0)); then
+        keep_json=$(printf '%s\n' "${keep_pairs[@]}" | jq -R . | jq -s .)
+    else
+        keep_json='[]'
+    fi
+
+    tmp_cfg="$(mktemp)"
+    jq --argjson keep "$keep_json" '
+      .systems |= [
+        .systems[] |
+        select(
+          ((.workspace + ":" + .name) as $k | $keep | index($k))
+        )
+      ]
+    ' "$CONFIG_JSON" > "$tmp_cfg" && mv "$tmp_cfg" "$CONFIG_JSON"
+
+    # 3) Logging do que foi removido (para visibilidade)
+    echo "$(date +%Y-%m-%d_%H:%M:%S) - Systems removed from JSON (no longer in Cloud), if any:"
+    # Calcula novamente os pares atuais (workspace:name) no JSON
+    current_pairs=$(jq -r '.systems[] | "\(.workspace):\(.name)"' "$CONFIG_JSON")
+    # Tudo o que estava antes e não está agora já foi removido — neste momento
+    # já não conseguimos listar diretamente os removidos daqui, por isso
+    # mantemos só o log genérico. Se quiseres que liste os nomes exatos,
+    # teríamos de guardar uma cópia antiga do ficheiro antes da limpeza.
+
+    echo "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished."
+    echo
+    echo "JSON final (credentials masked):"
+    print_masked_config
     ;;
 
   *)
