@@ -1693,29 +1693,24 @@ case $1 in
 	do_snap_delete
     ;;
 
-
   -snaplsall)
         # Too many arguments?
         if [ $# -gt 1 ]
         then
                 abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport.api $1"
         fi
-
         test=0
         echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing all snapshots in all workspaces!" "1"
-
         # Convert wsnames from colon-separated string → array
         IFS=':' read -r -a wsnames_array <<< "$wsnames"
         # Convert allws (space separated) → array
         read -r -a allws_array <<< "$allws"
-
         # Create mapping: workspace shortname → full name
         declare -A wsmap
         for i in "${!allws_array[@]}"
         do
                 wsmap[${allws_array[i]}]="${wsnames_array[i]}"
         done
-
         # Loop all workspaces
         for ws in "${allws_array[@]}"
         do
@@ -1724,9 +1719,7 @@ case $1 in
                 CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
                 # Workspace human friendly name
                 full_ws_name="${wsmap[$ws]}"
-
                 echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name :" "1"
-
                 # Resolve region and base_url
                 region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn
                         | capture("power-iaas:(?<region>[^:]+)")
@@ -1734,10 +1727,8 @@ case $1 in
                         | gsub("-"; "_")' "$bluexscrt")
                 base_url_var="base_${region_api}"
                 base_url="${!base_url_var}"
-
                 # Call API to list snapshots via function snap_ls (API version)
                 snaps_json=$(snap_ls 2>>"$log_file")
-
                 # Check if there are snapshots
                 if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
                 then
@@ -1787,10 +1778,8 @@ case $1 in
                                 } | tee -a "$log_file"
                         done
                 fi
-
                 echoscreen "" "1"
         done
-
         abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing all snapshots in all workspaces"
     ;;
 
