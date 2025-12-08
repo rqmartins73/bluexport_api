@@ -1,0 +1,270 @@
+#################  GRS Code  ####################
+
+# Helper: check and enable replication on volumes, then wait until all are replicationEnabled=true
+chk_vol_rep() {
+	echoscreen "" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking and enabling replication on source volumes if needed..." "1"
+	echoscreen "" "1"
+	flag=0
+	for i in $vol_ids
+	do
+		VOL_ID=$i
+		rep_enabled=$(vol_get | jq -r '.replicationEnabled' 2>>"$log_file")
+		if [[ "$rep_enabled" == "false" ]]
+		then
+			flag=1
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume ID: $i replicationEnabled=false. Enabling replication..." "1"
+			ACTIONS='"replicationEnabled": true'
+			vol_act 2>>"$log_file" | tee -a "$log_file" >/dev/null
+		fi
+		printf "."
+	done
+	echo
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Replication check done." "1"
+
+	if [[ "$flag" == "1" ]]
+	then
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Some volumes had replicationEnabled=false and were changed to true. Rechecking until all are updated..." "1"
+		sleep 10
+		while true
+		do
+			if vol_ls | jq -r '.volumes[]? | "\(.name) \(.replicationEnabled)"' | grep -w "$vol_com_name" | grep false >/dev/null
+			then
+				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - There are still volumes with replicationEnabled=false. Waiting 10 seconds..." "1"
+				sleep 10
+			else
+				break
+			fi
+		done
+	fi
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - All volumes are replicationEnabled=true." "1"
+}
+
+# Helper: wait until all volumes with the given prefix are in consistent_copying
+chk_vol_mirror() {
+	while true
+	do
+		if vol_ls | jq -r '.volumes[]? | "\(.name) \(.mirroringState)"' | grep -w "$vol_com_name" | grep inconsistent_copying >/dev/null
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes still in inconsistent_copying. Waiting 60 seconds..." "1"
+			sleep 60
+		else
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - All volumes are in consistent_copying state." "1"
+			break
+		fi
+	done
+}
+
+# Helper: monitor onboarding status until completion
+chk_on_status() {
+	while true
+	do
+		on_status=$(on_get | jq -r '.status' 2>>"$log_file")
+		if [[ "$on_status" == "RUNNING" ]]
+		then
+			on_progress=$(on_get | jq -r '.progress' 2>>"$log_file")
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Onboarding status RUNNING at ${on_progress}% - waiting 60 seconds..." "1"
+			sleep 60
+		else
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Onboarding finished with status: $on_status" "1"
+			break
+		fi
+	done
+}
+
+# Main GRS function: create VG in source and onboard aux volumes in target
+create_grs() {
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting GRS configuration between source VSI $source_vsi and target VSI $target_vsi (VG: $vg_name) ===" "1"
+	echoscreen "" "1"
+
+	####################################
+	# 1. SOURCE WORKSPACE / SOURCE VSI #
+	####################################
+
+	# Restaurar contexto da workspace/source VSI
+	base_url="$source_base_url"
+	CRN="$source_ws_crn"
+	CLOUD_INSTANCE_ID="$source_CLOUD_INSTANCE_ID"
+	PVM_ID="$source_PVM_ID"
+
+	# 2.3 – Obter volumes associados ao SOURCE_VSI
+	vol_ids=$(ins_vol_ls | jq -r '.volumes[]? | .volumeID' 2>>"$log_file")
+	if [[ -z "$vol_ids" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - No volumes attached to source VSI $source_vsi. Aborting GRS creation."
+	fi
+	vol_count=$(echo "$vol_ids" | wc -w)
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Source VSI $source_vsi has $vol_count attached volumes." "1"
+
+	# 2.4 – Garantir que todos os volumes estão com replicationEnabled=true
+	chk_vol_rep
+
+	# 2.4 (cont.) – Assegurar consistent_copying antes de criar o VG
+	chk_vol_mirror
+
+	# 2.5 – Criar Volume Group no SOURCE
+	volids_api=$(echo "$vol_ids" | sed 's/ /","/g')
+	ACTIONS="\"name\": \"$vg_name\", \"volumeIDs\": [\"$volids_api\"]"
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Creating Volume Group $vg_name in source workspace..." "1"
+	vg_cr 2>>"$log_file" | tee -a "$log_file" >/dev/null
+
+	# Confirmar ID do VG
+	VOLUME_GROUP_ID=$(vg_ls | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .id' 2>>"$log_file")
+	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find Volume Group ID for $vg_name after creation."
+	fi
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Group $vg_name created with ID $VOLUME_GROUP_ID." "1"
+
+	# 2.6 – Obter nomes dos auxiliary volumes (auxVolumeName)
+	auxvol_names=$(vg_rcr | jq -r '.remoteCopyRelationships[]? | .auxVolumeName' 2>>"$log_file")
+	if [[ -z "$auxvol_names" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - No auxiliary volumes found in remote-copy relationships for $vg_name. Aborting."
+	fi
+	auxvolnames=$(echo "$auxvol_names" | tr ' ' ',')
+
+	aux_count=$(echo "$auxvol_names" | wc -w)
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Found $aux_count auxiliary volumes for VG $vg_name." "1"
+
+	# 2.7 – Boot volume aux name (apenas logging)
+	bootvol_auxname=$(ins_vol_ls | jq -r '.volumes[]? | "\(.bootable) \(.auxVolumeName) \(.name)"' 2>>"$log_file" \
+		| grep "$vol_com_name" | grep true | awk '{print $2}')
+	if [[ -n "$bootvol_auxname" ]]
+	then
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Boot auxiliary volume: $bootvol_auxname" "1"
+	fi
+
+	# 2.8 – Detalhes do VG e RCRs
+	vg_sd 2>>"$log_file" | jq -r '"State: \(.state) - Number of Volumes: \(.numOfvols)"' | tee -a "$log_file"
+	vg_get 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	vg_rcr 2>>"$log_file" | jq -r '.remoteCopyRelationships[]? | "Progress: \(.progress) -- RCR: \(.name) -- Master: \(.masterVolumeName)"' | tee -a "$log_file"
+
+	cgname=$(vg_ls | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .consistencyGroupName' 2>>"$log_file")
+	if [[ -z "$cgname" || "$cgname" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not retrieve consistencyGroupName for VG $vg_name."
+	fi
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Consistency group name: $cgname" "1"
+
+	###################################
+	# 2. TARGET WORKSPACE / TARGET VSI #
+	###################################
+
+	base_url="$target_base_url"
+	CRN="$target_ws_crn"
+	CLOUD_INSTANCE_ID="$target_CLOUD_INSTANCE_ID"
+	PVM_ID="$target_PVM_ID"
+
+	# 2.10 – Onboarding dos auxiliary volumes no TARGET
+	ondesc="onboard_aux_vols_$vol_com_name"
+	auxvolnames_api=$(echo "$auxvolnames" | sed 's/,/"},{"auxVolumeName": "/g')
+
+	ACTIONS=$(cat <<EOF
+  "Volumes": [
+    {
+      "auxiliaryVolumes": [
+        {
+          "auxVolumeName": "$auxvolnames_api"
+        }
+      ],
+      "sourceCRN": "$source_ws_crn"
+    }
+  ],
+  "description": "$ondesc"
+EOF
+)
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting auxiliary volume onboarding on target workspace for VSI $target_vsi..." "1"
+	on_cr 2>>"$log_file" | tee -a "$log_file" >/dev/null
+
+	VOLUME_ONBOARDING_ID=$(on_ls | jq -r --arg desc "$ondesc" '[.onboardings[]? | select(.description == $desc)][-1].id' 2>>"$log_file")
+	if [[ -z "$VOLUME_ONBOARDING_ID" || "$VOLUME_ONBOARDING_ID" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find onboarding ID for description $ondesc."
+	fi
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Onboarding request ID: $VOLUME_ONBOARDING_ID" "1"
+
+	# 2.11 – Monitor onboarding
+	chk_on_status
+
+	# 2.12 – Validar Volume Group no TARGET (mesmo consistencyGroupName)
+	VOLUME_GROUP_ID=$(vg_ls | jq -r --arg cgname "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cgname) | .id' 2>>"$log_file")
+	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Onboarding finished, but target Volume Group with consistencyGroupName $cgname not found."
+	fi
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - GRS completed. Target Volume Group ID: $VOLUME_GROUP_ID" "1"
+	abort "`date +%Y-%m-%d_%H:%M:%S` - === GRS successfully configured between $source_vsi -> $target_vsi (VG: $vg_name). ==="
+}
+
+
+   -onboard)
+	if [ $# -gt 3 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 LPAR_NAME SHORT_NAME_TARGET_WS"
+	fi
+	if [ $# -lt 3 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport.api $1 LPAR_NAME SHORT_NAME_TARGET_WS"
+	fi
+#	vsi="${2,,}"
+	vsi=$2
+	target_short_ws=$3
+	target_ws_crn=$(cat $bluexscrt | grep -w $target_short_ws | head -n1 | awk {'print $2'})
+	if [[ "$target_ws_crn" == "" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Workspace with Shortname $target_short_ws does not exist in $bluexscrt file... Aborting!..."
+	fi
+	onboard_aux_vol
+	abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully Onboarded LPAR $vsi !"
+    ;;
+
+   -creategrs)
+	# Syntax: bluexport.api -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES
+	if [ $# -lt 6 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES"
+	fi
+	if [ $# -gt 6 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES"
+	fi
+
+	test=0
+	flagj=1    # não precisamos de iASP / flush aqui
+
+	source_vsi=$2
+	target_vsi=$3
+	vg_name=$4
+	vol_com_name=$5        # prefixo/nome comum dos volumes no SOURCE
+	tgvol_com_name=$6      # mantido para futura lógica no TARGET (neste momento é apenas guardado)
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Validating source VSI $source_vsi and target VSI $target_vsi in config and in IBM Cloud..." "1"
+
+	# SOURCE VSI – verificar se existe e guardar contexto
+	vsi=$source_vsi
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	source_ws_crn="$shortnamecrn"
+	source_CLOUD_INSTANCE_ID="$CLOUD_INSTANCE_ID"
+	source_base_url="$base_url"
+	source_PVM_ID="$PVM_ID"
+	source_vsi_id="$vsi_id"
+
+	# TARGET VSI – verificar se existe e guardar contexto
+	vsi=$target_vsi
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	target_ws_crn="$shortnamecrn"
+	target_CLOUD_INSTANCE_ID="$CLOUD_INSTANCE_ID"
+	target_base_url="$base_url"
+	target_PVM_ID="$PVM_ID"
+	target_vsi_id="$vsi_id"
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Both VSIs found and validated. Proceeding with GRS creation..." "1"
+
+	create_grs
+    ;;

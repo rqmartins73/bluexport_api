@@ -4,33 +4,33 @@
 #
 # Version 3.x now supports the creation, update, delete and list Snapshots.
 #
-# Usage for changing secret file:	./bluexport.api -chscrt bluexscrt_file_name - Use the full path ex: /home/user/bluexscrt_new
+# Usage for changing secret file:	./bluexport_api.sh -chscrt bluexscrt_file_name - Use the full path ex: /home/user/bluexscrt_new
 #
-# Usage to view secret file in use:	./bluexport.api -viewscrt
+# Usage to view secret file in use:	./bluexport_api.sh -viewscrt
 #
-# Usage for all volumes:		./bluexport.api -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
-# Usage for excluding volumes:		./bluexport.api -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
-# Usage for monitoring job:		./bluexport.api -j VSI_NAME IMAGE_NAME
+# Usage for all volumes:		./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
+# Usage for excluding volumes:		./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
+# Usage for monitoring job:		./bluexport_api.sh -j VSI_NAME IMAGE_NAME
 #
-# Usage to create a snapshot:		./bluexport.api -snapcr VSI_NAME SNAPSHOT_NAME 0|["DESCRIPTION"] 0|[VOLUMES(Comma separated list)]
-# Usage to update a snapshot:		./bluexport.api -snapupd VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|["DESCRIPTION"]
-# Usage to delete snapshot:		./bluexport.api -snapdel VSI_NAME SNAPSHOT_NAME
+# Usage to create a snapshot:		./bluexport_api.sh -snapcr VSI_NAME SNAPSHOT_NAME 0|["DESCRIPTION"] 0|[VOLUMES(Comma separated list)]
+# Usage to update a snapshot:		./bluexport_api.sh -snapupd VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|["DESCRIPTION"]
+# Usage to delete snapshot:		./bluexport_api.sh -snapdel VSI_NAME SNAPSHOT_NAME
 # Usage to list all snapshot
-#        in all Workspaces:		./bluexport.api -snaplsall
+#        in all Workspaces:		./bluexport_api.sh -snaplsall
 #
 # Usage to list all Captured
-# images in all Workspaces:             ./bluexport.api -imglsall
+# images in all Workspaces:             ./bluexport_api.sh -imglsall
 #
-# Usage to create a volume clone:   	./bluexport.api -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma seperated Volumes name list to clone)"
-# Usage to delete a volume clone:	./bluexport.api -vclonedel VOLUME_CLONE_NAME
+# Usage to create a volume clone:   	./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma seperated Volumes name list to clone)"
+# Usage to delete a volume clone:	./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME
 # Usage to list all volume clones
-#        in all Workspaces:		./bluexport.api -vclonelsall
+#        in all Workspaces:		./bluexport_api.sh -vclonelsall
 #
-# Usage to change volume tier:          ./bluexport.api -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
+# Usage to change volume tier:          ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
 #
-# Example:  ./bluexport.api -a vsiprd vsiprd_img image-catalog daily            ---- Includes all Volumes and exports to COS and image catalog
-# Example:  ./bluexport.api -x ASP2_ vsiprd vsiprd_img both monthly             ---- Excludes Volumes with ASP2_ in the name and exports to image catalog and COS
-# Example:  ./bluexport.api -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly  ---- Excludes Volumes with ASP2_ and iASPname in the name and exports to image catalog and COS
+# Example:  ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily            ---- Includes all Volumes and exports to COS and image catalog
+# Example:  ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly             ---- Excludes Volumes with ASP2_ in the name and exports to image catalog and COS
+# Example:  ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly  ---- Excludes Volumes with ASP2_ and iASPname in the name and exports to image catalog and COS
 #
 # Note: Reocurrence "hourly" and "daily" only permits captures to image-catalog
 #
@@ -168,7 +168,7 @@ done
 #echo "WSFRA1ID       = $WSFRA1ID"
 #echo "WSFRA1NAME     = $WSFRA1NAME"
 #echo "WSFRA2         = $WSFRA2"
-#echo "WSFRA2ID       = $WSFRA2ID" 
+#echo "WSFRA2ID       = $WSFRA2ID"
 #echo "WSFRA2NAME     = $WSFRA2NAME"
 #exit 0
 
@@ -222,48 +222,57 @@ default_base_url=$base_mad02 # change to your prefered
 #### START:FUNCTION - Help  ####
 help() {
 	echoscreen ""
-	echoscreen "Capture IBM Cloud POWERVS IBM i VSI and Export to COS or/and Image Catalog and Snapshots"
-	echoscreen "Version 3.x now supports the creation, update, delete and list Snapshots."
+	echoscreen "Capture IBM Cloud POWERVS IBM i VSI and Export to COS and/or Image Catalog, manage Snapshots, Volume Clones and GRS Volume Groups."
+	echoscreen "Version: $Version"
 	echoscreen ""
-	echoscreen "Changing secret file:		./bluexport.api -chscrt bluexscrt_file_name - Use the full path ex: /home/user/bluexscrt_new"
+	echoscreen "=== General ==="
+	echoscreen "Changing secret file:          ./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)"
+	echoscreen "View secret file in use:      ./bluexport_api.sh -viewscrt"
 	echoscreen ""
-	echoscreen "View secret file in use:	./bluexport.api -viewscrt"
+	echoscreen "Show help:                    ./bluexport_api.sh -h | --help | -help"
+	echoscreen "Show version:                 ./bluexport_api.sh -v | --version"
 	echoscreen ""
-	echoscreen "Usage for all volumes:		./bluexport.api -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+	echoscreen "=== Capture & Export ==="
+	echoscreen "Usage for all volumes:        ./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+	echoscreen "Usage for excluding volumes:  ./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+	echoscreen "Usage for monitoring job:     ./bluexport_api.sh -j VSI_NAME IMAGE_NAME"
 	echoscreen ""
-	echoscreen "Usage for excluding volumes:	./bluexport.api -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+	echoscreen "=== Snapshots ==="
+	echoscreen "Create snapshot:              ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]"
+	echoscreen "Update snapshot:              ./bluexport_api.sh -snapupd  VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]"
+	echoscreen "Delete snapshot:              ./bluexport_api.sh -snapdel  VSI_NAME SNAPSHOT_NAME"
+	echoscreen "List all snapshots (all WS):  ./bluexport_api.sh -snaplsall"
 	echoscreen ""
-	echoscreen "Usage for monitoring job:	./bluexport.api -j VSI_NAME IMAGE_NAME"
+	echoscreen "=== Captured Images ==="
+	echoscreen "List all captured images"
+	echoscreen " in all Workspaces:           ./bluexport_api.sh -imglsall"
 	echoscreen ""
-	echoscreen "Usage to create a snapshot:	./bluexport.api -snapcr VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]"
+	echoscreen "=== Volume Clones ==="
+	echoscreen "Create volume clone:          ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
+	echoscreen "Delete volume clone:          ./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME"
+	echoscreen "List volume clones (all WS):  ./bluexport_api.sh -vclonelsall"
 	echoscreen ""
-	echoscreen "Usage to update a snapshot:	./bluexport.api -snapupd VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]"
+	echoscreen "=== Volume Tier ==="
+	echoscreen "Change volume tier:           ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
 	echoscreen ""
-	echoscreen "Usage to delete snapshot:	./bluexport.api -snapdel VSI_NAME SNAPSHOT_NAME"
+	echoscreen "=== GRS (Global Replication Services) ==="
+	echoscreen "Create GRS Volume Group and onboard auxiliary volumes:"
+	echoscreen "  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES"
 	echoscreen ""
-	echoscreen "Usage to list all snapshot"
-	echoscreen " in all Workspaces:		./bluexport.api -snaplsall"
+	echoscreen "  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON."
+	echoscreen "  VG_NAME:                        Name for the Volume Group to create on the source workspace."
+	echoscreen "  SOURCE_VOLUME_NAMES:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS)."
+	echoscreen "  TARGET_VOLUME_NAMES:            Common name/prefix for target VSI volumes (used mainly for documentation/logging)."
 	echoscreen ""
-	echoscreen "Usage to list all Captured"
-	echoscreen " images in all Workspaces:      ./bluexport.api -imglsall"
+	echoscreen "=== Examples ==="
+	echoscreen "Capture all volumes:          ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
+	echoscreen "Capture excluding ASP2_:      ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly"
+	echoscreen "Capture excluding ASP2_ & iASPname:"
+	echoscreen '                               ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly'
 	echoscreen ""
-	echoscreen "Usage to create a volume clone:	./bluexport.api -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma seperated Volumes name list to clone)"
+	echoscreen "Test mode (no capture):       ./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single"
 	echoscreen ""
-	echoscreen "Usage to delete a volume clone:	./bluexport.api -vclonedel VOLUME_CLONE_NAME"
-	echoscreen ""
-	echoscreen "Usage to list all volume clones"
-	echoscreen " in all Workspaces:		./bluexport.api -vclonelsall"
-	echoscreen ""
-	echoscreen "Usage to change volume tier:    ./bluexport.api -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
-	echoscreen ""
-	echoscreen "Example:  ./bluexport.api -a vsiprd vsiprd_img image-catalog daily ---- Includes all Volumes and exports to COS and image catalog"
-	echoscreen "Example:  ./bluexport.api -x ASP2_ vsiprd vsiprd_img both monthly    ---- Excludes Volumes with ASP2_ in the name and exports to image catalog and COS"
-	echoscreen 'Example:  ./bluexport.api -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly    ---- Excludes Volumes with ASP2_ and iASPname in the name and exports to image catalog and COS'
-	echoscreen ""
-	echoscreen "Flag t before a or x makes it a test and do not makes the capture"
-	echoscreen "Example:  ./bluexport.api -tx ASP2_ vsiprd vsiprd_img both single ---- Does not makes the export"
-	echoscreen ""
-	echoscreen "Note: Reocurrence \"hourly\" and \"daily\" only permits captures to image-catalog"
+	echoscreen "Note: Recurrence \"hourly\" and \"daily\" only permits captures to image-catalog."
 	echoscreen ""
 	echoscreen "Ricardo Martins - Blue Chip Portugal - 2023-2025"
 	echoscreen ""
@@ -1204,7 +1213,7 @@ create_vg() {
 
 ####  START:FUNCTION  Onboarding auxiliary Volumes  ####
 onboard_aux_vol() {
-# ./bluexport.api -onboard LPAR_NAME
+# ./bluexport_api.sh -onboard LPAR_NAME
 	test=0
 	flagj=1
 	vsi_id_bluexscrt
@@ -1843,38 +1852,106 @@ case $1 in
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all Captured Images in all Workpsaces"
     ;;
 
-  -vclonelsall)
-    if [ $# -gt 1 ] 
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME"
-	fi
-	test=0
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Listing all Volume Clones in all Workspaces !" "1"
+    -vclonelsall)
+        # Too many arguments?
+        if [ $# -gt 1 ]
+        then
+            abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
+        fi
 
-	# Convert 'wsnames' string to an array
-	IFS=':' read -r -a wsnames_array <<< "$wsnames"
+        test=0
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Volume Clones in all Workspaces !" "1"
 
-	# Convert 'allws' string to an array
-	read -r -a allws_array <<< "$allws"
+        # Convert 'wsnames' (colon-separated) to array
+        IFS=':' read -r -a wsnames_array <<< "$wsnames"
+        # Convert 'allws' (space-separated) to array
+        read -r -a allws_array <<< "$allws"
 
-	# Initialize an associative array to map workspace abbreviations to full names
-	declare -A wsmap
-	# Populate the wsmap with dynamic values from allws and wsnames_array
-	for i in "${!allws_array[@]}"; do
-		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-	done
+        # Map workspace short name -> full name
+        declare -A wsmap
+        for i in "${!allws_array[@]}"
+        do
+            wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+        done
 
-	for ws in "${allws_array[@]}"
-	do
-		CRN=$(grep "^$ws " "$bluexscrt" | awk '{print $2}')
-		full_ws_name="${wsmap[$ws]}" # Get the full workspace name from the map
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Listing Volume Clones at Workspace $full_ws_name :" "1"
-###########!!!!!!!!!		/usr/local/bin/ibmcloud pi ws tg $CRN 2>> $log_file | tee -a $log_file
-################!!!!!		/usr/local/bin/ibmcloud pi vol cl ls 2>> $log_file | tee -a $log_file
-		echoscreen "" "1"
-	done
-	abort "`date +%Y-%m-%d_%H:%M:%S` - === Finished Listing all Volume Clones in all Workpsaces"
+        # Loop all workspaces
+        for ws in "${allws_array[@]}"
+        do
+            # Get workspace CRN and ID from JSON
+            CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+            CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+
+            full_ws_name="${wsmap[$ws]}"
+
+            echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing Volume Clones at Workspace $full_ws_name :" "1"
+
+            # Resolve region and base_url from CRN
+            region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn
+                    | capture("power-iaas:(?<region>[^:]+)")
+                    | .region
+                    | gsub("-"; "_")' "$bluexscrt")
+            base_url_var="base_${region_api}"
+            base_url="${!base_url_var}"
+
+            # Call API to list volume clones
+            clones_json=$(vol_cl_ls 2>>"$log_file")
+
+            # Check if there are volume clones
+            if ! echo "$clones_json" | jq -e '(.volumeClones // .clones // []) | length > 0' >/dev/null 2>&1
+            then
+                msg="----------------------- No Volume Clones Found -----------------------"
+                echo "$msg" | tee -a "$log_file"
+            else
+                # Pretty formatted output – try to be tolerant to field names
+                echo "$clones_json" | jq -r '
+                  (.volumeClones // .clones // [])[] |
+                  "----------------------- Volume Clone Found -----------------------\n"
+                  + "Clone ID: \(.volumeCloneID // .cloneID // \"N/A\")\n"
+                  + "Name: \(.name // .cloneName // \"N/A\")\n"
+                  + "Source Volume ID: \(.sourceVolumeID // .originVolumeID // \"N/A\")\n"
+                  + "Status: \(.status // \"N/A\")\n"
+                  + "Percent Complete: \(.percentComplete // .percentageComplete // \"N/A\")\n"
+                  + "Creation Date: \(.creationDate // \"N/A\")\n"
+                  + "------------------------------------------------------------"
+                ' 2>>"$log_file" | tee -a "$log_file"
+            fi
+
+            echoscreen "" "1"
+        done
+
+        abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all Volume Clones in all Workpsaces"
     ;;
+
+#  -vclonelsall)
+#    if [ $# -gt 1 ]
+#	then
+#		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME"
+#	fi
+#	test=0
+#	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Listing all Volume Clones in all Workspaces !" "1"
+#
+#	# Convert 'wsnames' string to an array
+#	IFS=':' read -r -a wsnames_array <<< "$wsnames"
+#
+#	# Convert 'allws' string to an array
+#	read -r -a allws_array <<< "$allws"
+#
+#	# Initialize an associative array to map workspace abbreviations to full names
+#	declare -A wsmap
+#	# Populate the wsmap with dynamic values from allws and wsnames_array
+#	for i in "${!allws_array[@]}"; do
+#		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+#	done
+#
+#	for ws in "${allws_array[@]}"
+#	do
+#		CRN=$(grep "^$ws " "$bluexscrt" | awk '{print $2}')
+#		full_ws_name="${wsmap[$ws]}" # Get the full workspace name from the map
+#		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Listing Volume Clones at Workspace $full_ws_name :" "1"
+#		/usr/local/bin/ibmcloud pi vol cl ls 2>> $log_file | tee -a $log_file
+#		echoscreen "" "1"
+#	done
+#	abort "`date +%Y-%m-%d_%H:%M:%S` - === Finished Listing all Volume Clones in all Workpsaces"
 
    -vclone)
 	if [ $# -lt 8 ]
