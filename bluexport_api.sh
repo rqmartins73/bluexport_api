@@ -871,35 +871,36 @@ do_snap_update() {
 
 ####  START:FUNCTION - Do the Snapshot Delete  ####
 do_snap_delete() {
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot Delete '$snap_name' from VSI $vsi !" "1"
-        # Retrieve snapshots via API
-        snaps_json=$(snap_ls 2>>"$log_file")
-        # Find snapshot ID by name (exact match)
-        snap_id=$(echo "$snaps_json" | jq -r --arg name "$snap_name" '.snapshots[]? | select(.name == $name) | .snapshotID ')
-        if [[ -z "$snap_id" || "$snap_id" == "null" ]]; then
-            abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' does not exist. Choose another name or use -snapcr to create one."
-        fi
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' found with ID: $snap_id" "1"
-        # Delete snapshot via API
-        echo "$(date +%Y-%m-%d_%H:%M:%S) - Executing delete for snapshot ID $snap_id ..." | tee -a "$log_file"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot Delete '$snap_name' from VSI $vsi !" "1"
+	snaps_json=$(snap_ls 2>>"$log_file")
+	# Find snapshot ID by name (exact match)
+	snap_id=$(echo "$snaps_json" | jq -r --arg name "$snap_name" '.snapshots[]? | select(.name == $name) | .snapshotID ')
+	if [[ -z "$snap_id" || "$snap_id" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' does not exist. Choose another name or use -snapcr to create one."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' found with ID: $snap_id" "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Executing delete for snapshot ID $snap_id ..." "1"
 	SNAP_ID=$snap_id
-        resp=$(snap_del 2>>"$log_file")
-        # Check API response
-        if echo "$resp" | grep -q '"error"'; then
-            abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED deleting snapshot '$snap_name'. API error: $resp"
-        fi
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' delete request sent successfully." "1"
-        # Optional: Poll snapshot list until it disappears
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for snapshot deletion to complete..." "1"
-        for i in {1..100}; do
-            sleep 5
-            still_exists=$(snap_ls 2>>"$log_file" | jq -e --arg id "$snap_id" '.snapshots[]? | select(.snapshotID == $id)' >/dev/null 2>&1 ; echo $?)
-            if [[ $still_exists -ne 0 ]]; then
-                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' deleted successfully!" "1"
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished - Snapshot $snap_name Deleted!"
-            fi
-        done
-        abort "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: Snapshot delete requested but snapshot still appears in list. Check IBM Cloud."
+	resp=$(snap_del 2>>"$log_file")
+	# Check API response
+	if echo "$resp" | grep -q '"error"'
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED deleting snapshot '$snap_name'. API error: $resp"
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' delete request sent successfully." "1"
+	# Optional: Poll snapshot list until it disappears
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for snapshot deletion to complete..." "1"
+	while :
+	do
+		sleep 5
+		still_exists=$(snap_ls 2>>"$log_file" | jq -e --arg id "$snap_id" '.snapshots[]? | select(.snapshotID == $id)' >/dev/null 2>&1 ; echo $?)
+		if [[ $still_exists -ne 0 ]]; then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' deleted successfully!" "1"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished - Snapshot $snap_name Deleted!"
+		fi
+	done
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: Snapshot delete requested but snapshot still appears in list. Check IBM Cloud."
 }
 ####  END:FUNCTION - Do the Snapshot Delete  ####
 
@@ -951,99 +952,92 @@ do_volume_clone_execute() {
 
 ####  START:FUNCTION - Do the Volume Clone Start ####
 do_volume_clone_start() {
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Starting Volume Clone with name $vclone_name ..." "1"
-        # Garantir que temos o ID do clone na variável global
-        if [[ -z "$vclone_id" ]]; then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_start."
-        fi
-        VOL_CLONE_ID="$vclone_id"
-        # Chamada API para start
-        local resp_start
-        resp_start=$(vol_cl_st 2>>"$log_file")
-        if [ $? -ne 0 ]; then
-            echo "$resp_start" >>"$log_file"
-            abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting Volume Clone $vclone_name (API call failed)."
-        fi
-        # Confirmar estado via GET
-        local status_json
-        status_json=$(vol_cl_get 2>>"$log_file")
-        if [ $? -ne 0 ] || [ -z "$status_json" ]; then
-                echo "$status_json" >>"$log_file"
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading status after start for Volume Clone $vclone_name."
-        fi
-        local vclone_start_action vclone_start_status
-        vclone_start_action=$(echo "$status_json" | jq -r '.action // .status.action // empty')
-        vclone_start_status=$(echo "$status_json" | jq -r '.status // .state // .status.state // empty')
-
-        if [[ "$vclone_start_action" == "start" && "$vclone_start_status" == "available" ]]; then
-                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name Started and ready to execute..." "1"
-        else
-                echo "$status_json" >>"$log_file"
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone $vclone_name not in expected state after start (action=$vclone_start_action status=$vclone_start_status)."
-        fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Starting Volume Clone with name $vclone_name ..." "1"
+	# Garantir que temos o ID do clone na variável global
+	if [[ -z "$vclone_id" ]]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_start."
+	fi
+	VOL_CLONE_ID="$vclone_id"
+	local resp_start
+	resp_start=$(vol_cl_st 2>>"$log_file")
+	if [ $? -ne 0 ]
+	then
+		echo "$resp_start" >>"$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting Volume Clone $vclone_name (API call failed)."
+	fi
+	local status_json
+	status_json=$(vol_cl_get 2>>"$log_file")
+	if [ $? -ne 0 ] || [ -z "$status_json" ]
+	then
+		echo "$status_json" >>"$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading status after start for Volume Clone $vclone_name."
+	fi
+	local vclone_start_action vclone_start_status
+	vclone_start_action=$(echo "$status_json" | jq -r '.action // .status.action // empty')
+	vclone_start_status=$(echo "$status_json" | jq -r '.status // .state // .status.state // empty')
+	if [[ "$vclone_start_action" == "start" && "$vclone_start_status" == "available" ]]
+	then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name Started and ready to execute..." "1"
+	else
+		echo "$status_json" >>"$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone $vclone_name not in expected state after start (action=$vclone_start_action status=$vclone_start_status)."
+	fi
 }
 ####  END:FUNCTION -  Do the Volume Clone Start ####
 
 ####  START:FUNCTION - Do the Volume Clone  ####
 do_volume_clone() {
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Creating Volume Clone Request with name $vclone_name ..." "1"
-
-        # volumes_to_clone é uma lista comma-separated de IDs (id1,id2,...)
-        IFS=',' read -r -a vc_array <<< "$volumes_to_clone"
-        # Construir JSON array de IDs: ["id1","id2",...]
-        json_ids=""
-        for vid in "${vc_array[@]}"
-        do
-                # trim básico de espaços, por segurança
-                vid_trimmed=$(echo "$vid" | xargs)
-                [ -z "$vid_trimmed" ] && continue
-                json_ids="$json_ids\"$vid_trimmed\","
-        done
-        # remover última vírgula
-        json_ids="${json_ids%,}"
-        # Corpo esperado pelo API volumes-clone:
-        # { "name": "...", "volumeIDs": ["id1","id2",...] }
-        ACTIONS="\"name\":\"$vclone_name\",\"volumeIDs\":[${json_ids}]"
-        # Chamada ao wrapper da API
-        output=$(vol_cl_cr 2>>"$log_file")
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Creating Volume Clone Request with name $vclone_name ..." "1"
+	# volumes_to_clone é uma lista comma-separated de IDs (id1,id2,...)
+	IFS=',' read -r -a vc_array <<< "$volumes_to_clone"
+	# Construir JSON array de IDs: ["id1","id2",...]
+	json_ids=""
+	for vid in "${vc_array[@]}"
+	do
+		# trim básico de espaços, por segurança
+		vid_trimmed=$(echo "$vid" | xargs)
+		[ -z "$vid_trimmed" ] && continue
+		json_ids="$json_ids\"$vid_trimmed\","
+	done
+	# remover última vírgula
+	json_ids="${json_ids%,}"
+	ACTIONS="\"name\":\"$vclone_name\",\"volumeIDs\":[${json_ids}]"
+	output=$(vol_cl_cr 2>>"$log_file")
 	ret=$?
 	if echo "$output" | jq -e '.error? | length > 0' >/dev/null
 	then
 		echo "$output" | jq | tee -a "$log_file"
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Check message above" "1"
 	fi
-        if [ $ret -eq 0 ]
-        then
-                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone Request $vclone_name creation to finish..." "1"
-
-                # Obter o ID do volume-clone criado via API
-                vclone_id=$(vol_cl_ls 2>>"$log_file" | jq -r --arg name "$vclone_name" '.volumesClone[]? | select(.name == $name) | .volumesCloneID' | head -n1)
-                if [[ -z "$vclone_id" ]]
-                then
-                        abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve Volume Clone Request ID for $vclone_name. Check the log above this line..."
-                fi
-                vclone_percent=0
-                while [ "$vclone_percent" -lt 100 ]
-                do
-                        vclone_percent_before=$vclone_percent
-                        sleep 5
-                        # Ler percentagem pelo GET do clone
-                        vclone_percent=$(vol_cl_ls 2>>"$log_file" | jq -r --arg id "$vclone_id" '.volumesClone[]? | select(.volumesCloneID == $id) | .percentComplete // 0')
-                        # Garantir valor numérico
-                        [ -z "$vclone_percent" ] && vclone_percent=0
-                        if [ "$vclone_percent" != "$vclone_percent_before" ]
-                        then
-                                if [ "$vclone_percent" -eq 100 ]
-                                then
-                                        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request $vclone_name Done!" "1"
-                                else
-                                        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request $vclone_name creation at $vclone_percent%" "1"
-                                fi
-                        fi
-                done
-        else
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error creating Volume Clone Request $vclone_name (API call failed). See $log_file for details."
-        fi
+	if [ $ret -eq 0 ]
+	then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone Request $vclone_name creation to finish..." "1"
+		vclone_id=$(vol_cl_ls 2>>"$log_file" | jq -r --arg name "$vclone_name" '.volumesClone[]? | select(.name == $name) | .volumesCloneID' | head -n1)
+		if [[ -z "$vclone_id" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve Volume Clone Request ID for $vclone_name. Check the log above this line..."
+		fi
+		vclone_percent=0
+		while [ "$vclone_percent" -lt 100 ]
+		do
+			vclone_percent_before=$vclone_percent
+			sleep 5
+			vclone_percent=$(vol_cl_ls 2>>"$log_file" | jq -r --arg id "$vclone_id" '.volumesClone[]? | select(.volumesCloneID == $id) | .percentComplete // 0')
+			# Garantir valor numérico
+			[ -z "$vclone_percent" ] && vclone_percent=0
+			if [ "$vclone_percent" != "$vclone_percent_before" ]
+			then
+				if [ "$vclone_percent" -eq 100 ]
+				then
+					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request $vclone_name Done!" "1"
+				else
+					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request $vclone_name creation at $vclone_percent%" "1"
+				fi
+			fi
+		done
+	else
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error creating Volume Clone Request $vclone_name (API call failed). See $log_file for details."
+	fi
 }
 ####  END:FUNCTION -  Do the Volume Clone ####
 
@@ -2065,11 +2059,11 @@ case $1 in
 	flagj=1
 	if [ $# -lt 2 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME VSI_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME"
 	fi
 	if [ $# -gt 2 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME VSI_NANE"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME"
 	fi
 	test=0
 	vclone_name=$2
