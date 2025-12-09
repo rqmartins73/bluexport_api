@@ -871,7 +871,7 @@ do_snap_update() {
 
 ####  START:FUNCTION - Do the Snapshot Delete  ####
 do_snap_delete() {
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot Delete '$snap_name' from VSI $vsi !" "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot Delete for snapshot named '$snap_name'!" "1"
 	snaps_json=$(snap_ls 2>>"$log_file")
 	# Find snapshot ID by name (exact match)
 	snap_id=$(echo "$snaps_json" | jq -r --arg name "$snap_name" '.snapshots[]? | select(.name == $name) | .snapshotID ')
@@ -1544,7 +1544,6 @@ case $1 in
 	tier="tier$4"
 	test=0
 	flagj=1
-	# Argument validation
 	if [ $# -lt 4 ]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
@@ -1553,17 +1552,13 @@ case $1 in
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
 	fi
-	# Volume name patterns (space-separated list in $3)
 	IFS=' ' read -r -a volchtier_names <<< "$3"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Common name of volumes to change to tier $tier: ${volchtier_names[*]}" "1"
 	vsi=$2
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
-	# Build JSON array with volume name patterns for jq
 	vol_patterns_json=$(printf '%s\n' "${volchtier_names[@]}" | jq -R . | jq -s .)
-	# Get attached volumes for this VSI via API and filter by name patterns
 	ins_vol_ls | jq -r --argjson patterns "$vol_patterns_json" '.volumes[]? | select([ $patterns[] as $p | (.name | contains($p)) ] | any) | "\(.volumeID) \(.name)"' > "$volumes_file" 2>>"$log_file"
-	# Extract IDs (comma-separated) and names (space-separated)
 	volumes=$(awk '{print $1}' "$volumes_file" | paste -sd, -)
 	volumes_name=$(awk '{print $2}' "$volumes_file" | tr '\n' ' ')
 	vchtier
@@ -1573,7 +1568,6 @@ case $1 in
 	tier="tier$3"
 	test=0
 	flagj=1
-	# Argument validation
 	if [ $# -lt 3 ]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport_api.sh $1 VSI_NAME TIER_TO_CHANGE_TO"
@@ -1586,7 +1580,6 @@ case $1 in
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Changing ALL volumes of VSI $vsi_cloud_name to tier $tier..." "1"
-	# List ALL volumes attached to this VSI
 	ins_vol_ls | jq -r '.volumes[]? | "\(.volumeID) \(.name)"' > "$volumes_file" 2>>"$log_file"
 	volumes=$(awk '{print $1}' "$volumes_file" | paste -sd, -)
 	volumes_name=$(awk '{print $2}' "$volumes_file" | tr '\n' ' ')
@@ -1748,11 +1741,7 @@ case $1 in
 	fi
 	test=0
 	flagj=1
-#	vsi=$2
-#	vsi_id_bluexscrt
-#	check_locally_VSI_exists
-#	dc_vsi_list
-	snap_name="$3"
+	snap_name="$2"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Searching for snapshot name $snap_name" "1"
 	IFS=':' read -r -a wsnames_array <<< "$wsnames"
 	# Convert allws (space separated) → array
