@@ -1043,21 +1043,15 @@ do_volume_clone() {
 
 ####  START:FUNCTION  Check if VSI ID exists in bluexscrt file  ####
 vsi_id_bluexscrt() {
-	# Lookup VSI data inside the "systems" array
 	vsi_ip=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .ip' "$bluexscrt")
 	vsi_id=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .pvmInstanceID' "$bluexscrt")
-
 	PVM_ID="$vsi_id"
-
-	# Validation: instance not found
 	if [[ -z "$vsi_id" || "$vsi_id" == "null" ]]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI ID missing or VSI Name '$vsi' not found in $bluexscrt. Please add it to the JSON..."
 	fi
-
 	# Retrieve workspace key, example: "WSMAD2"
 	vsi_ws=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .workspace' "$bluexscrt")
-
 	# Retrieve workspace ID using the workspace key
 	vsi_ws_id=$(jq -r --arg ws "$vsi_ws" '.workspaces[$ws].id' "$bluexscrt")
 }
@@ -1686,7 +1680,7 @@ case $1 in
 		fi
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Snapshot $snap_name Update !" "1"
-	snap_name_exists=$(snap_ls | grep -w $snap_name)
+#####	snap_name_exists=$(snap_ls | grep -w $snap_name)
 	if [[ "$snap_name_exists" == "" ]]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Snapshot with name $snap_name does not exist, please choose a diferent name or use flag -snapcr to create one."
@@ -1768,6 +1762,7 @@ case $1 in
                 # Check if there are snapshots
                 if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
 		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone with name $vclone_name doesn't exists in Workspace $full_ws_name, moving on to next Workspace!" "1"
 			continue
 		else
 			do_snap_delete
