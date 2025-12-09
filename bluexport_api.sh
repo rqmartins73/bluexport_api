@@ -1960,6 +1960,7 @@ case $1 in
                   + "Status: \(.status)\n"
                   + "Percent Complete: \(.percentComplete)\n"
                   + "Creation Date: \(.creationDate)\n"
+                  + "Volumes Clone IDs \(.volumesCloneID)\n"
                   + "------------------------------------------------------------"
                 ' 2>>"$log_file" | tee -a "$log_file"
             fi
