@@ -1908,65 +1908,61 @@ case $1 in
     ;;
 
   -vclonelsall)
-        # Too many arguments?
-        if [ $# -gt 1 ]
-        then
-            abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
-        fi
-        test=0
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Volume Clones in all Workspaces !" "1"
-        # Convert 'wsnames' (colon-separated) to array
-        IFS=':' read -r -a wsnames_array <<< "$wsnames"
-        # Convert 'allws' (space-separated) to array
-        read -r -a allws_array <<< "$allws"
-        # Map workspace short name -> full name
-        declare -A wsmap
-        for i in "${!allws_array[@]}"
-        do
-            wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-        done
-        # Loop all workspaces
-        for ws in "${allws_array[@]}"
-        do
-            # Get workspace CRN and ID from JSON
-            CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
-            CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
-            full_ws_name="${wsmap[$ws]}"
-            if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
-            then
-                    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping..." "1"
-                    continue
-            fi
-
-            echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing Volume Clones at Workspace $full_ws_name :" "1"
-            # Resolve region and base_url from CRN
-            region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
-            base_url_var="base_${region_api}"
-            base_url="${!base_url_var}"
-            # Call API to list volume clones (for this workspace context)
-            clones_json=$(vol_cl_ls 2>>"$log_file")
-            # Check if there are volume clones in this workspace
-            if ! echo "$clones_json" | jq -e '.volumesClone | length > 0' >/dev/null 2>&1
-            then
-                msg="----------------------- No Volumes Clones Found -----------------------"
-                echo "$msg" | tee -a "$log_file"
-            else
-                # Pretty formatted output
-                echo "$clones_json" | jq -r '
-                  .volumesClone[] |
-                  "----------------------- Volumes Clone Found -----------------------\n"
-                  + "Clone ID: \(.volumesCloneID)\n"
-                  + "Name: \(.name)\n"
-                  + "Status: \(.status)\n"
-                  + "Percent Complete: \(.percentComplete)\n"
-                  + "Creation Date: \(.creationDate)\n"
-                  + "Volumes Clone IDs \(.volumesCloneID)\n"
-                  + "------------------------------------------------------------"
-                ' 2>>"$log_file" | tee -a "$log_file"
-            fi
-            echoscreen "" "1"
-        done
-        abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all Volume Clones in all Workpsaces"
+	# Too many arguments?
+	if [ $# -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
+	fi
+	test=0
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Volume Clones in all Workspaces !" "1"
+	# Convert 'wsnames' (colon-separated) to array
+	IFS=':' read -r -a wsnames_array <<< "$wsnames"
+	# Convert 'allws' (space-separated) to array
+	read -r -a allws_array <<< "$allws"
+	# Map workspace short name -> full name
+	declare -A wsmap
+	for i in "${!allws_array[@]}"
+	do
+		 wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+	done
+	# Loop all workspaces
+	for ws in "${allws_array[@]}"
+	do
+		# Get workspace CRN and ID from JSON
+		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+		full_ws_name="${wsmap[$ws]}"
+		if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping..." "1"
+			continue
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing Volume Clones at Workspace $full_ws_name :" "1"
+		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+		clones_json=$(vol_cl_ls 2>>"$log_file")
+		# Check if there are volume clones in this workspace
+		if ! echo "$clones_json" | jq -e '.volumesClone | length > 0' >/dev/null 2>&1
+		then
+			msg="----------------------- No Volumes Clones Found -----------------------"
+			echo "$msg" | tee -a "$log_file"
+		else
+			echo "$clones_json" | jq -r '
+			.volumesClone[] |
+			"----------------------- Volumes Clone Found -----------------------\n"
+			+ "Clone ID: \(.volumesCloneID)\n"
+			+ "Name: \(.name)\n"
+			+ "Status: \(.status)\n"
+			+ "Percent Complete: \(.percentComplete)\n"
+			+ "Creation Date: \(.creationDate)\n"
+			+ "Volumes Clone IDs \(.volumesCloneID)\n"
+			+ "------------------------------------------------------------"
+			' 2>>"$log_file" | tee -a "$log_file"
+		fi
+		echoscreen "" "1"
+	done
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all Volume Clones in all Workpsaces"
     ;;
 
   -vclone)
