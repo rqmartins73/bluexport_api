@@ -1792,7 +1792,7 @@ case $1 in
                 CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
                 # Workspace human friendly name
                 full_ws_name="${wsmap[$ws]}"
-                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name :" "1"
+                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name" "1"
                 # Resolve region and base_url
                 region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
                 base_url_var="base_${region_api}"
@@ -1954,13 +1954,13 @@ case $1 in
             # Check if there are volume clones in this workspace
             if ! echo "$clones_json" | jq -e '.volumesClone | length > 0' >/dev/null 2>&1
             then
-                msg="----------------------- No Volume Clones Found -----------------------"
+                msg="----------------------- No Volumes Clones Found -----------------------"
                 echo "$msg" | tee -a "$log_file"
             else
                 # Pretty formatted output
                 echo "$clones_json" | jq -r '
                   .volumesClone[] |
-                  "----------------------- Volume Clone Found -----------------------\n"
+                  "----------------------- Volumes Clone Found -----------------------\n"
                   + "Clone ID: \(.volumesCloneID)\n"
                   + "Name: \(.name)\n"
                   + "Status: \(.status)\n"
@@ -2091,7 +2091,7 @@ case $1 in
 		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
 		# Workspace human friendly name
 		full_ws_name="${wsmap[$ws]}"
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name :" "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing volumes clones at workspace $full_ws_name " "1"
 		# Resolve region and base_url
 		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
 		base_url_var="base_${region_api}"
