@@ -1384,13 +1384,13 @@ case $1 in
    -j)
 	if [ $# -lt 3 ]
 	then
-		echoscreen "Flag -j selected, but Arguments Missing!! Syntax: bluexport.api -j VSI_NAME IMAGE_NAME"
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but Arguments Missing!! Syntax: bluexport.api -j VSI_NAME IMAGE_NAME"
+		echoscreen "Flag -j selected, but Arguments Missing!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but Arguments Missing!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
 	fi
 	if [ $# -gt 3 ]
 	then
-		echoscreen "Flag -j selected, but too many arguments!! Syntax: bluexport.api -j VSI_NAME IMAGE_NAME"
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but too many arguments!! Syntax: bluexport.api -j VSI_NAME IMAGE_NAME"
+		echoscreen "Flag -j selected, but too many arguments!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but too many arguments!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
 	fi
 	vsi=$2
 	capture_name=${3^^}
@@ -1411,11 +1411,11 @@ case $1 in
    -a | -ta)
 	if [ $# -lt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 VSI_NAME IMAGE_NAME EXPORT_LOCATION [daily|weekly|monthly|single]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME EXPORT_LOCATION [daily|weekly|monthly|single]"
 	fi
 	if [ $# -gt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VSI_NAME IMAGE_NAME EXPORT_LOCATION [daily|weekly|monthly|single]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME EXPORT_LOCATION [daily|weekly|monthly|single]"
 	fi
 	destination=$4
 	capture_img_name=${3^^}
@@ -1479,11 +1479,11 @@ case $1 in
    -x | -tx)
 	if [ $# -lt 6 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME EXPORT_LOCATION [daily|weekly|monthly|single]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME EXPORT_LOCATION [daily|weekly|monthly|single]"
 	fi
 	if [ $# -gt 6 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME EXPORT_LOCATION [daily|weekly|monthly|single]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME EXPORT_LOCATION [daily|weekly|monthly|single]"
 	fi
 	capture_img_name=${4^^}
 	capture_name=$capture_img_name"_"$capture_time
@@ -1553,11 +1553,11 @@ case $1 in
 	# Argument validation
 	if [ $# -lt 4 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport.api $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
 	fi
 	if [ $# -gt 4 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport.api $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
 	fi
 	# Volume name patterns (space-separated list in $3)
 	IFS=' ' read -r -a volchtier_names <<< "$3"
@@ -1582,11 +1582,11 @@ case $1 in
 	# Argument validation
 	if [ $# -lt 3 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport.api $1 VSI_NAME TIER_TO_CHANGE_TO"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport_api.sh $1 VSI_NAME TIER_TO_CHANGE_TO"
 	fi
 	if [ $# -gt 3 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport.api $1 VSI_NAME TIER_TO_CHANGE_TO"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME TIER_TO_CHANGE_TO"
 	fi
 	vsi=$2
 	vsi_id_bluexscrt
@@ -1603,11 +1603,11 @@ case $1 in
   -chscrt)
 	if [ $# -lt 2 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 bluexscrt_file_name - Use the full path ex: /home/user/bluexscrt_new"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 bluexscrt_file_name - Use the full path ex: /home/user/bluexscrt_new"
 	fi
 	if [ $# -gt 2 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 bluexscrt_file_name - Use the full path ex: /home/user/bluexscrt_new"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 bluexscrt_file_name - Use the full path ex: /home/user/bluexscrt_new"
 	fi
 	new_scrt=$2
 	jq --arg new "$new_scrt" '.bluexscrt = $new' "$conf_file" > "$conf_file.tmp" && mv "$conf_file.tmp" "$conf_file"
@@ -1617,7 +1617,7 @@ case $1 in
   -viewscrt)
     if [ $# -gt 1 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1"
 	fi
 	scrt_in_use=$(jq -r '.bluexscrt' "$conf_file")
 	abort "`date +%Y-%m-%d_%H:%M:%S` - Secret file in use is $scrt_in_use"
@@ -1626,11 +1626,11 @@ case $1 in
   -snapcr)
 	if [ $# -lt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
 	fi
 	if [ $# -gt 5 ] 
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
 	fi
 	vsi=$2
 	vsi_id_bluexscrt
@@ -1648,7 +1648,7 @@ case $1 in
 		then
 			description=""
 		else
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax: bluexport.api $1 LPAR_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|[VOLUMES - Comma separated Volumes name list to snap]"
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|[VOLUMES - Comma separated Volumes name list to snap]"
 		fi
 	else
 		description="--description \""$description"\""
@@ -1662,7 +1662,7 @@ case $1 in
 			volumes_to_snap=""
 			volumes_to_echo="ALL"
 		else
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument VOLUMES must be 0 or comma separated names or IDs!! Syntax: bluexport.api $1 LPAR_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|[VOLUMES - Comma separated Volumes name list to snap]"
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument VOLUMES must be 0 or comma separated names or IDs!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|[VOLUMES - Comma separated Volumes name list to snap]"
 		fi
 	else
 		flag_volumes="--volumes "
@@ -1678,11 +1678,11 @@ case $1 in
   -snapupd)
 	if [ $# -lt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 	fi
 	if [ $# -gt 5 ] 
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 	fi
 	test=0
 	flagj=1
@@ -1712,7 +1712,7 @@ case $1 in
 			description=""
 			new_description_echo=""
 		else
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax:  bluexport.api $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax:  bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 		fi
 	else
 		description="--description \""$description"\""
@@ -1726,7 +1726,7 @@ case $1 in
 			new_name_echo=""
 			new_name="--name \""$snap_name"\""
 		else
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument NEW_SNAPSHOT_NAME must be 0 or a name!! Syntax:  bluexport.api $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument NEW_SNAPSHOT_NAME must be 0 or a name!! Syntax:  bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 		fi
 	else
 		if [[ "$new_snap_name" == "$snap_name" ]]
@@ -1746,10 +1746,10 @@ case $1 in
   -snapdel)
         # Validate arguments
         if [ $# -lt 3 ]; then
-            abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME"
+            abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
         fi
         if [ $# -gt 3 ]; then
-            abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME"
+            abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
         fi
 
         test=0
@@ -1770,7 +1770,7 @@ case $1 in
         # Too many arguments?
         if [ $# -gt 1 ]
         then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport.api $1"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
         fi
         test=0
         echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing all snapshots in all workspaces!" "1"
@@ -1920,7 +1920,7 @@ case $1 in
             abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
         fi
         test=0
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Volumes Clones in all Workspaces !" "1"
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Volume Clones in all Workspaces !" "1"
         # Convert 'wsnames' (colon-separated) to array
         IFS=':' read -r -a wsnames_array <<< "$wsnames"
         # Convert 'allws' (space-separated) to array
@@ -1978,11 +1978,11 @@ case $1 in
         # Args: VOLUME_CLONE_NAME BASE_NAME LPAR_NAME Replication(True|False) Rollback(True|False) TARGET_TIER volumes(ALL|id1,id2,...)
         if [ $# -lt 8 ]
         then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
         fi
         if [ $# -gt 8 ]
         then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
         fi
 
         test=0
@@ -2065,11 +2065,11 @@ case $1 in
 	flagj=1
 	if [ $# -lt 2 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME VSI_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME VSI_NAME"
 	fi
 	if [ $# -gt 2 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME VSI_NANE"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME VSI_NANE"
 	fi
 	test=0
 	vclone_name=$2
@@ -2116,11 +2116,11 @@ case $1 in
    -createvg)
 	if [ $# -gt 4 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 LPAR_NAME -vg VG_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 LPAR_NAME -vg VG_NAME"
 	fi
 	if [ $# -lt 4 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport.api $1 LPAR_NAME -vg VG_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport_api.sh $1 LPAR_NAME -vg VG_NAME"
 	fi
 	flagvg=$3
 	if [[ "$flagvg" == "-vg" ]]
@@ -2140,11 +2140,11 @@ case $1 in
    -onboard)
 	if [ $# -gt 3 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 LPAR_NAME SHORT_NAME_TARGET_WS"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 LPAR_NAME SHORT_NAME_TARGET_WS"
 	fi
 	if [ $# -lt 3 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport.api $1 LPAR_NAME SHORT_NAME_TARGET_WS"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport_api.sh $1 LPAR_NAME SHORT_NAME_TARGET_WS"
 	fi
 #	vsi="${2,,}"
 	vsi=$2
@@ -2173,7 +2173,7 @@ case $1 in
    -v | --version)
     if [ $# -gt 1 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api -v | --version"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -v | --version"
 	fi
     echoscreen ""
 	echoscreen "  ### bluexport by Ricardo Martins - Blue Chip Portugal - 2023-2025"
