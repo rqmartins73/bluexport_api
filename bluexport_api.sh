@@ -1693,7 +1693,7 @@ case $1 in
 		fi
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Snapshot $snap_name Update !" "1"
-##############!!!!!!	snap_name_exists=$(/usr/local/bin/ibmcloud pi ins snap ls | grep -w $snap_name)
+	snap_name_exists=$(snap_ls | grep -w $snap_name)
 	if [[ "$snap_name_exists" == "" ]]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Snapshot with name $snap_name does not exist, please choose a diferent name or use flag -snapcr to create one."
@@ -1739,21 +1739,51 @@ case $1 in
 
   -snapdel)
 	# Validate arguments
-	if [ $# -lt 3 ]
+	if [ $# -lt 2 ]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
 	fi
-	if [ $# -gt 3 ]; then
+	if [ $# -gt 2 ]; then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
 	fi
 	test=0
 	flagj=1
-	vsi=$2
-	vsi_id_bluexscrt
-	check_locally_VSI_exists
-	dc_vsi_list
+#	vsi=$2
+#	vsi_id_bluexscrt
+#	check_locally_VSI_exists
+#	dc_vsi_list
 	snap_name="$3"
-	do_snap_delete
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Searching for snapshot name $snap_name" "1"
+	IFS=':' read -r -a wsnames_array <<< "$wsnames"
+	# Convert allws (space separated) → array
+        read -r -a allws_array <<< "$allws"
+        # Create mapping: workspace shortname → full name
+        declare -A wsmap
+        for i in "${!allws_array[@]}"
+        do
+                wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+        done
+        # Loop all workspaces
+        for ws in "${allws_array[@]}"
+        do
+		# Get workspace CRN and ID from JSON
+                CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+                CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+                # Workspace human friendly name
+                full_ws_name="${wsmap[$ws]}"
+                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name" "1"
+                region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+                base_url_var="base_${region_api}"
+                base_url="${!base_url_var}"
+		snaps_json=$(snap_ls 2>>"$log_file")
+                # Check if there are snapshots
+                if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
+		then
+			continue
+		else
+			do_snap_delete
+		fi
+	done
     ;;
 
   -snaplsall)
