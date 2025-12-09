@@ -895,82 +895,135 @@ do_snap_delete() {
 
 ####  START:FUNCTION - Do the Volume Clone Execute ####
 do_volume_clone_execute() {
-	flush_asps
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Executing Volume Clone with name $vclone_name ..." "1"
-	/usr/local/bin/ibmcloud pi vol cl ex $vclone_id --name $base_name --replication-enabled=$replication --rollback-prepare=$rollback --target-tier $target_tier 2>> $log_file
-	if [ $? -eq 0 ]
-	then
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Waiting for Volume Clone $vclone_name execution to finish..." "1"
-		vcloneex_percent=0
-		while [ $vcloneex_percent -lt 100 ]
-		do
-			vcloneex_percent_before=$vcloneex_percent
-			sleep 5
-			vcloneex_percent=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -A6 $vclone_name | grep "Percent Completed:" | awk {'print $3'})
-			if [[ "$vcloneex_percent" != "$vcloneex_percent_before" ]]
-			then
-				if [ $vcloneex_percent -eq 100 ]
-				then
-					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone $vclone_name Done and ready to be used!" "1"
-				else
-					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone $vclone_name execution at $vcloneex_percent%" "1"
-				fi
-			fi
-		done
-	else
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Oops something went wrong!... Check the log above this line..."
-	fi
+        # Flush ASPs na origem antes de executar o clone
+        flush_asps
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Volume Clone with name $vclone_name ..." "1"
+        if [[ -z "$vclone_id" ]]; then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_execute."
+        fi
+        VOL_CLONE_ID="$vclone_id"
+        # Chamada API para execute
+        local resp_ex
+        resp_ex=$(vol_cl_ex 2>>"$log_file")
+        if [ $? -ne 0 ]; then
+                echo "$resp_ex" >>"$log_file"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error executing Volume Clone $vclone_name (API call failed)."
+        fi
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone $vclone_name execution to finish..." "1"
+        local vcloneex_percent=0
+        local vcloneex_percent_before=0
+        while :; do
+                sleep 5
+                local status_json
+                status_json=$(vol_cl_get 2>>"$log_file")
+                if [ $? -ne 0 ] || [ -z "$status_json" ]; then
+                        echo "$status_json" >>"$log_file"
+                        abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error getting status for Volume Clone execution $vclone_name."
+                fi
+                vcloneex_percent=$(echo "$status_json" | jq -r '.percentComplete // .status.percentComplete // 0' 2>/dev/null)
+                [[ "$vcloneex_percent" =~ ^[0-9]+$ ]] || vcloneex_percent=0
+
+                if [ "$vcloneex_percent" -ne "$vcloneex_percent_before" ]; then
+                        if [ "$vcloneex_percent" -ge 100 ]; then
+                                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name Done and ready to be used!" "1"
+                                break
+                        else
+                                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name execution at ${vcloneex_percent}%." "1"
+                                vcloneex_percent_before=$vcloneex_percent
+                        fi
+                fi
+        done
 }
 ####  END:FUNCTION -  Do the Volume Clone Execute ####
-##
+
 ####  START:FUNCTION - Do the Volume Clone Start ####
 do_volume_clone_start() {
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Starting Volume Clone with name $vclone_name ..." "1"
-	vclone_id=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -A6 $vclone_name | grep "Volume Clone Request ID:" | awk {'print $5'})
-	/usr/local/bin/ibmcloud pi vol cl st $vclone_id 2>> $log_file
-	if [ $? -eq 0 ]
-	then
-		vclone_start_action=$(/usr/local/bin/ibmcloud pi vol cl get $vclone_id | grep "Action" | awk {'print $2'})
-		vclone_start_status=$(/usr/local/bin/ibmcloud pi vol cl get $vclone_id | grep "Status" | awk {'print $2'})
-		if [[ "$vclone_start_action" == "start" ]] && [[ "$vclone_start_status" == "available" ]]
-		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone $vclone_name Started and ready to execute..." "1"
-		else
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Oops something went wrong!... Check the log above this line..."
-		fi
-	else
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Oops something went wrong!... Check the log above this line..."
-	fi
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Starting Volume Clone with name $vclone_name ..." "1"
 
+        # Garantir que temos o ID do clone na variável global
+        if [[ -z "$vclone_id" ]]; then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_start."
+        fi
+        VOL_CLONE_ID="$vclone_id"
+        # Chamada API para start
+        local resp_start
+        resp_start=$(vol_cl_st 2>>"$log_file")
+        if [ $? -ne 0 ]; then
+            echo "$resp_start" >>"$log_file"
+            abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting Volume Clone $vclone_name (API call failed)."
+        fi
+        # Confirmar estado via GET
+        local status_json
+        status_json=$(vol_cl_get 2>>"$log_file")
+        if [ $? -ne 0 ] || [ -z "$status_json" ]; then
+                echo "$status_json" >>"$log_file"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading status after start for Volume Clone $vclone_name."
+        fi
+        local vclone_start_action vclone_start_status
+        vclone_start_action=$(echo "$status_json" | jq -r '.action // .status.action // empty')
+        vclone_start_status=$(echo "$status_json" | jq -r '.status // .state // .status.state // empty')
+
+        if [[ "$vclone_start_action" == "start" && "$vclone_start_status" == "available" ]]; then
+                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name Started and ready to execute..." "1"
+        else
+                echo "$status_json" >>"$log_file"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone $vclone_name not in expected state after start (action=$vclone_start_action status=$vclone_start_status)."
+        fi
 }
 ####  END:FUNCTION -  Do the Volume Clone Start ####
 
 ####  START:FUNCTION - Do the Volume Clone ####
 do_volume_clone() {
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Creating Volume Clone Request with name $vclone_name ..." "1"
-	/usr/local/bin/ibmcloud pi vol cl cr --name $vclone_name --volumes $volumes_to_clone 2>> $log_file
-	if [ $? -eq 0 ]
-	then
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Waiting for Volume Clone Request $vclone_name creation to finish..." "1"
-		vclone_percent=0
-		while [ $vclone_percent -lt 100 ]
-		do
-			vclone_percent_before=$vclone_percent
-			sleep 5
-			vclone_percent=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -A6 $vclone_name | grep "Percent Completed:" | awk {'print $3'})
-			if [[ "$vclone_percent" != "$vclone_percent_before" ]]
-			then
-				if [ $vclone_percent -eq 100 ]
-				then
-					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone Request $vclone_name Done!" "1"
-				else
-					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone Request $vclone_name creation at $vclone_percent%" "1"
-				fi
-			fi
-		done
-	else
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Oops something went wrong!... Check the log above this line..."
-	fi
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Creating Volume Clone Request with name $vclone_name ..." "1"
+        # Build JSON body for the create call based on $vclone_name and $volumes_to_clone
+        # $volumes_to_clone deve vir como lista separada por vírgulas (IDs de volumes)
+        # Ex.: "volid1,volid2,volid3"
+        local vols_json
+        vols_json=$(printf '%s\n' "$volumes_to_clone" \
+                    | tr ',' '\n' \
+                    | sed '/^$/d' \
+                    | jq -R . | jq -s .)
+        ACTIONS="\"name\":\"$vclone_name\",\"volumes\":$vols_json"
+        # Chamada API de criação
+        local resp
+        resp=$(vol_cl_cr 2>>"$log_file")
+        if [ $? -ne 0 ] || [ -z "$resp" ]; then
+                echo "$resp" >>"$log_file"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error creating Volume Clone Request $vclone_name (API call failed)."
+        fi
+        # Tentar apanhar o ID do pedido de clone no JSON de resposta
+        vclone_id=$(echo "$resp" | jq -r '.id // .volumeCloneRequestID // .volumeCloneID // empty')
+        if [[ -z "$vclone_id" || "$vclone_id" == "null" ]]; then
+                echo "$resp" >>"$log_file"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not determine Volume Clone Request ID for $vclone_name."
+        fi
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone Request $vclone_name creation to finish (ID: $vclone_id)..." "1"
+        # Monitor progress via GET /volume-clones/{id}
+        VOL_CLONE_ID="$vclone_id"
+        local vclone_percent=0
+        local vclone_percent_before=0
+        while :; do
+                sleep 5
+                local status_json
+                status_json=$(vol_cl_get 2>>"$log_file")
+                if [ $? -ne 0 ] || [ -z "$status_json" ]; then
+                        echo "$status_json" >>"$log_file"
+                        abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error getting status for Volume Clone Request $vclone_name."
+                fi
+                # Tentar ler percentComplete; se não for numérico, assumir 0
+                vclone_percent=$(echo "$status_json" | jq -r '.percentComplete // .status.percentComplete // 0' 2>/dev/null)
+                [[ "$vclone_percent" =~ ^[0-9]+$ ]] || vclone_percent=0
+
+                if [ "$vclone_percent" -ne "$vclone_percent_before" ]; then
+                        if [ "$vclone_percent" -ge 100 ]; then
+                                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request $vclone_name Done!" "1"
+                                break
+                        else
+                                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request $vclone_name creation at ${vclone_percent}%." "1"
+                                vclone_percent_before=$vclone_percent
+                        fi
+                fi
+        done
 }
 ####  END:FUNCTION -  Do the Volume Clone ####
 
