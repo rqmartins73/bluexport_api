@@ -1762,7 +1762,7 @@ case $1 in
                 # Check if there are snapshots
                 if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
 		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone with name $vclone_name doesn't exists in Workspace $full_ws_name, moving on to next Workspace!" "1"
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Snapshot with name $snap_name doesn't exists in Workspace $full_ws_name, moving on to next Workspace!" "1"
 			continue
 		else
 			do_snap_delete
