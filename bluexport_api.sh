@@ -1922,37 +1922,6 @@ case $1 in
         abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all Volume Clones in all Workpsaces"
     ;;
 
-#  -vclonelsall)
-#    if [ $# -gt 1 ]
-#	then
-#		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VSI_NAME SNAPSHOT_NAME"
-#	fi
-#	test=0
-#	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Listing all Volume Clones in all Workspaces !" "1"
-#
-#	# Convert 'wsnames' string to an array
-#	IFS=':' read -r -a wsnames_array <<< "$wsnames"
-#
-#	# Convert 'allws' string to an array
-#	read -r -a allws_array <<< "$allws"
-#
-#	# Initialize an associative array to map workspace abbreviations to full names
-#	declare -A wsmap
-#	# Populate the wsmap with dynamic values from allws and wsnames_array
-#	for i in "${!allws_array[@]}"; do
-#		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-#	done
-#
-#	for ws in "${allws_array[@]}"
-#	do
-#		CRN=$(grep "^$ws " "$bluexscrt" | awk '{print $2}')
-#		full_ws_name="${wsmap[$ws]}" # Get the full workspace name from the map
-#		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Listing Volume Clones at Workspace $full_ws_name :" "1"
-#		/usr/local/bin/ibmcloud pi vol cl ls 2>> $log_file | tee -a $log_file
-#		echoscreen "" "1"
-#	done
-#	abort "`date +%Y-%m-%d_%H:%M:%S` - === Finished Listing all Volume Clones in all Workpsaces"
-
    -vclone)
 	if [ $# -lt 8 ]
 	then
