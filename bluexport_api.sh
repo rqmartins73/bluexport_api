@@ -1738,113 +1738,103 @@ case $1 in
     ;;
 
   -snapdel)
-        # Validate arguments
-        if [ $# -lt 3 ]; then
-            abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
-        fi
-        if [ $# -gt 3 ]; then
-            abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
-        fi
-
-        test=0
-        flagj=1
-
-        # Normalize VSI name to lowercase
-        vsi=$2
-
-        # Resolve VSI ID, workspace, CLOUD_INSTANCE_ID, CRN, etc.
-        vsi_id_bluexscrt
+	# Validate arguments
+	if [ $# -lt 3 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
+	fi
+	if [ $# -gt 3 ]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
+	fi
+	test=0
+	flagj=1
+	vsi=$2
+	vsi_id_bluexscrt
 	check_locally_VSI_exists
 	dc_vsi_list
-        snap_name="$3"
+	snap_name="$3"
 	do_snap_delete
     ;;
 
   -snaplsall)
-        # Too many arguments?
-        if [ $# -gt 1 ]
-        then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
-        fi
-        test=0
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing all snapshots in all workspaces!" "1"
-        # Convert wsnames from colon-separated string → array
-        IFS=':' read -r -a wsnames_array <<< "$wsnames"
-        # Convert allws (space separated) → array
-        read -r -a allws_array <<< "$allws"
-        # Create mapping: workspace shortname → full name
-        declare -A wsmap
-        for i in "${!allws_array[@]}"
-        do
-                wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-        done
-        # Loop all workspaces
-        for ws in "${allws_array[@]}"
-        do
-                # Get workspace CRN and ID from JSON
-                CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
-                CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
-                # Workspace human friendly name
-                full_ws_name="${wsmap[$ws]}"
-                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name" "1"
-                # Resolve region and base_url
-                region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
-                base_url_var="base_${region_api}"
-                base_url="${!base_url_var}"
-                # Call API to list snapshots via function snap_ls (API version)
-                snaps_json=$(snap_ls 2>>"$log_file")
-                # Check if there are snapshots
-                if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
-                then
-                        msg="----------------------- No Snapshots Found -----------------------"
-                        echo "$msg" | tee -a "$log_file"
-                else
-                        # Transform snapshots into TSV to process in bash
-                        echo "$snaps_json" | jq -r '
-                              .snapshots // [] |
-                              .[] |
-                              [
-                                .name,
-                                .creationDate,
-                                .lastUpdateDate,
-                                .action,
-                                .snapshotID,
-                                .percentComplete,
-                                .status,
-                                .statusDetail,
-                                .pvmInstanceID,
-                                (.volumeSnapshots | tostring)
-                              ] | @tsv
-                        ' 2>>"$log_file" | \
-                        while IFS=$'\t' read -r s_name s_cdate s_udate s_action s_id s_pct s_status s_sdetail s_pvmid s_vols
-                        do
-                                # Resolve Instance Name from config JSON for this workspace + pvmInstanceID
-                                instname=$(jq -r --arg ws "$ws" --arg id "$s_pvmid" '
-                                        (.systems // [])
-                                        | map(select(.workspace == $ws and .pvmInstanceID == $id))
-                                        | if length > 0 then .[0].name else "NOT-IN-CONFIG" end
-                                ' "$bluexscrt")
-
-                                {
-                                        echo "----------------------- Snapshot Found -----------------------"
-                                        echo "Name: $s_name"
-                                        echo "Creation Date: $s_cdate"
-                                        echo "Last Update Date: $s_udate"
-                                        echo "Action: $s_action"
-                                        echo "Snapshot ID: $s_id"
-                                        echo "Percentage Complete: $s_pct"
-                                        echo "Status: $s_status"
-                                        echo "Status Detail: $s_sdetail"
-                                        echo "Instance ID: $s_pvmid"
-                                        echo "Instance Name: $instname"
-                                        echo "Volumes: $s_vols"
-                                        echo "------------------------------------------------------------"
-                                } | tee -a "$log_file"
-                        done
-                fi
-                echoscreen "" "1"
-        done
-        abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing all snapshots in all workspaces"
+	# Too many arguments?
+	if [ $# -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
+	fi
+	test=0
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing all snapshots in all workspaces!" "1"
+	# Convert wsnames from colon-separated string → array
+	IFS=':' read -r -a wsnames_array <<< "$wsnames"
+	# Convert allws (space separated) → array
+	read -r -a allws_array <<< "$allws"
+	# Create mapping: workspace shortname → full name
+	declare -A wsmap
+	for i in "${!allws_array[@]}"
+	do
+		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+	done
+	# Loop all workspaces
+	for ws in "${allws_array[@]}"
+	do
+		# Get workspace CRN and ID from JSON
+		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+		# Workspace human friendly name
+		full_ws_name="${wsmap[$ws]}"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name" "1"
+		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+		snaps_json=$(snap_ls 2>>"$log_file")
+		# Check if there are snapshots
+		if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
+		then
+			msg="----------------------- No Snapshots Found -----------------------"
+			echoscreen "$msg"
+		else
+			# Transform snapshots into TSV to process in bash
+			echo "$snaps_json" | jq -r '.snapshots // [] |.[] |
+			[
+			.name,
+			.creationDate,
+			.lastUpdateDate,
+			.action,
+			.snapshotID,
+			.percentComplete,
+			.status,
+			.statusDetail,
+			.pvmInstanceID,
+			(.volumeSnapshots | tostring)
+			] | @tsv' 2>>"$log_file" | \
+			while IFS=$'\t' read -r s_name s_cdate s_udate s_action s_id s_pct s_status s_sdetail s_pvmid s_vols
+			do
+				# Resolve Instance Name from config JSON for this workspace + pvmInstanceID
+				instname=$(jq -r --arg ws "$ws" --arg id "$s_pvmid" '
+				(.systems // [])
+				| map(select(.workspace == $ws and .pvmInstanceID == $id))
+				| if length > 0 then .[0].name else "NOT-IN-CONFIG" end
+				' "$bluexscrt")
+				{
+					echo "----------------------- Snapshot Found -----------------------"
+					echo "Name: $s_name"
+					echo "Creation Date: $s_cdate"
+					echo "Last Update Date: $s_udate"
+					echo "Action: $s_action"
+					echo "Snapshot ID: $s_id"
+					echo "Percentage Complete: $s_pct"
+					echo "Status: $s_status"
+					echo "Status Detail: $s_sdetail"
+					echo "Instance ID: $s_pvmid"
+					echo "Instance Name: $instname"
+					echo "Volumes: $s_vols"
+					echo "------------------------------------------------------------"
+				} | tee -a "$log_file"
+			done
+		fi
+		echoscreen "" "1"
+	done
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing all snapshots in all workspaces"
     ;;
 
   -imglsall)
@@ -1888,19 +1878,19 @@ case $1 in
 		else
 			# If images exist → pretty formatted output
 			echo "$images_json" | jq -r '
-			      .images[] |
-			      "----------------------- Image Found -----------------------\n" +
-			      "Name: \(.name)\n" +
-			      "Creation Date: \(.creationDate)\n" +
-			      "Last Update Date: \(.lastUpdateDate)\n" +
-			      "Description: \(.description)\n" +
-			      "Image ID: \(.imageID)\n" +
-			      "Operating System: \(.specifications.operatingSystem)\n" +
-			      "State: \(.state)\n" +
-			      "Storage Pool: \(.storagePool)\n" +
-			      "Storage Type: \(.storageType)\n" +
-			      "------------------------------------------------------------"
-			    ' 2>>"$log_file" | tee -a "$log_file"
+			.images[] |
+			"----------------------- Image Found -----------------------\n" +
+			"Name: \(.name)\n" +
+			"Creation Date: \(.creationDate)\n" +
+			"Last Update Date: \(.lastUpdateDate)\n" +
+			"Description: \(.description)\n" +
+			"Image ID: \(.imageID)\n" +
+			"Operating System: \(.specifications.operatingSystem)\n" +
+			"State: \(.state)\n" +
+			"Storage Pool: \(.storagePool)\n" +
+			"Storage Type: \(.storageType)\n" +
+			"------------------------------------------------------------"
+			' 2>>"$log_file" | tee -a "$log_file"
 		fi
 		echoscreen "" "1"
 	done
@@ -1966,90 +1956,72 @@ case $1 in
     ;;
 
   -vclone)
-        # Args: VOLUME_CLONE_NAME BASE_NAME LPAR_NAME Replication(True|False) Rollback(True|False) TARGET_TIER volumes(ALL|id1,id2,...)
-        if [ $# -lt 8 ]
-        then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
-        fi
-        if [ $# -gt 8 ]
-        then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
-        fi
-
-        test=0
-
-        vclone_name="$2"
-        base_name="$3"
-        # Normalizar VSI para lower-case, para bater certo com o JSON
-        vsi="$4"
-
-        # Resolve VSI → workspace, CLOUD_INSTANCE_ID, CRN, base_url, PVM_ID, etc.
-        vsi_id_bluexscrt
+	# Args: VOLUME_CLONE_NAME BASE_NAME LPAR_NAME Replication(True|False) Rollback(True|False) TARGET_TIER volumes(ALL|id1,id2,...)
+	if [ $# -lt 8 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
+	fi
+	if [ $# -gt 8 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
+	fi
+	test=0
+	vclone_name="$2"
+	base_name="$3"
+	vsi="$4"
+	vsi_id_bluexscrt
 	check_locally_VSI_exists
-#	flush_asps
-        replication="$5"
-        rollback="$6"
-        target_tier="$7"
-        volumes_to_clone_arg="$8"
-
-        # Validar replication / rollback
-        if [[ "$replication" != "True" && "$replication" != "False" ]]
-        then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Replication value must be True or False...!"
-        fi
-        if [[ "$rollback" != "True" && "$rollback" != "False" ]]
-        then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Rollback value must be True or False...!"
-        fi
-
-        # Validar tier
-        if [[ "$target_tier" != "tier0" && "$target_tier" != "tier1" && "$target_tier" != "tier3" && "$target_tier" != "tier5k" ]]
-        then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Tier must be tier0 or tier1 or tier3 or tier5k...!"
-        fi
-
-        # Garantir que não existe já um Volume Clone com este nome (via API)
-        existing_vclone_json=$(vol_cl_ls 2>>"$log_file")
-        if echo "$existing_vclone_json" | jq -e --arg name "$vclone_name" '.volumeClones[]? | select(.name == $name)' >/dev/null 2>&1
-        then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone with name $vclone_name already exists, please choose a different name!"
-        fi
-
-        # Resolver volumes a clonar
-        if [[ "$volumes_to_clone_arg" == "ALL" ]]
-        then
-                # ALL → ir buscar os volumes anexados à VSI pelo API
-                volumes_to_clone=$(ins_vol_ls 2>>"$log_file" \
-                        | jq -r '.volumes[]?.volumeID' \
-                        | paste -sd, -)
-
-                if [[ -z "$volumes_to_clone" ]]
-                then
-                        abort "$(date +%Y-%m-%d_%H:%M:%S) - No volumes found attached to VSI $vsi to clone."
-                fi
-        else
-                # Lista explícita de IDs, tal como passado na linha de comando
-                volumes_to_clone="$volumes_to_clone_arg"
-        fi
-
-        # Validar que temos pelo menos 2 volumes
-        IFS=',' read -r -a vclone_array <<< "$volumes_to_clone"
-        if [ "${#vclone_array[@]}" -lt 2 ]
-        then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request must contain at least 2 volumes. You provided: ${#vclone_array[@]} ($volumes_to_clone)"
-        fi
-
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting the three processes of Volume Clone $vclone_name" "1"
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - This is the list of volumes that will be cloned: $volumes_to_clone" "1"
-
-        # Guardar a lista para as funções seguintes
-        volumes_to_clone="$volumes_to_clone"
-
-        do_volume_clone
-        do_volume_clone_start
-        do_volume_clone_execute
-
-        abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished -  Volume Clone $vclone_name !"
+	replication="$5"
+	rollback="$6"
+	target_tier="$7"
+	volumes_to_clone_arg="$8"
+	# Validar replication / rollback
+	if [[ "$replication" != "True" && "$replication" != "False" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Replication value must be True or False...!"
+	fi
+	if [[ "$rollback" != "True" && "$rollback" != "False" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Rollback value must be True or False...!"
+	fi
+	# Validar tier
+	if [[ "$target_tier" != "tier0" && "$target_tier" != "tier1" && "$target_tier" != "tier3" && "$target_tier" != "tier5k" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Tier must be tier0 or tier1 or tier3 or tier5k...!"
+	fi
+	# Garantir que não existe já um Volume Clone com este nome (via API)
+	existing_vclone_json=$(vol_cl_ls 2>>"$log_file")
+	if echo "$existing_vclone_json" | jq -e --arg name "$vclone_name" '.volumeClones[]? | select(.name == $name)' >/dev/null 2>&1
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone with name $vclone_name already exists, please choose a different name!"
+	fi
+	# Resolver volumes a clonar
+	if [[ "$volumes_to_clone_arg" == "ALL" ]]
+	then
+		# ALL → ir buscar os volumes anexados à VSI pelo API
+		volumes_to_clone=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]?.volumeID' | paste -sd, -)
+		if [[ -z "$volumes_to_clone" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - No volumes found attached to VSI $vsi to clone."
+		fi
+	else
+		# Lista explícita de IDs, tal como passado na linha de comando
+		volumes_to_clone="$volumes_to_clone_arg"
+	fi
+	# Validar que temos pelo menos 2 volumes
+	IFS=',' read -r -a vclone_array <<< "$volumes_to_clone"
+	if [ "${#vclone_array[@]}" -lt 2 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request must contain at least 2 volumes. You provided: ${#vclone_array[@]} ($volumes_to_clone)"
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting the three processes of Volume Clone $vclone_name" "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - This is the list of volumes that will be cloned: $volumes_to_clone" "1"
+	# Guardar a lista para as funções seguintes
+	volumes_to_clone="$volumes_to_clone"
+	do_volume_clone
+	do_volume_clone_start
+	do_volume_clone_execute
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished -  Volume Clone $vclone_name !"
     ;;
 
   -vclonedel)
