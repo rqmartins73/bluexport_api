@@ -793,12 +793,22 @@ flush_asps() {
 		else
 			# Remote via SSH
 			ssh -T -i "$sshkeypath" "$vsi_user@$vsi_ip" 'system "CHGASPACT ASPDEV(*SYSBAS) OPTION(*FRCWRT)"' >> "$log_file" | tee -a "$log_file"
+			if [[ $? -ne 0 ]]
+			then
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - ERRO: ligação SSH falhou ou deu timeout, abortando..."
+			fi
+
+
 			if [[ -n "$iasp_names" ]]
 			then
 				for iasp_name in $iasp_names
 				do
 					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Flushing Memory to Disk for $iasp_name ..." "1"
 					ssh -T -i "$sshkeypath" "$vsi_user@$vsi_ip" "system \"CHGASPACT ASPDEV('$iasp_name') OPTION(*FRCWRT)\"" >> "$log_file" | tee -a "$log_file"
+					if [[ $? -ne 0 ]]
+					then
+						abort "$(date +%Y-%m-%d_%H:%M:%S) - ERRO: ligação SSH falhou ou deu timeout, abortando..."
+					fi
 				done
 			fi
 		fi
@@ -895,51 +905,53 @@ do_snap_delete() {
 
 ####  START:FUNCTION - Do the Volume Clone Execute ####
 do_volume_clone_execute() {
-        # Flush ASPs na origem antes de executar o clone
-        flush_asps
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Volume Clone with name $vclone_name ..." "1"
-        if [[ -z "$vclone_id" ]]; then
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_execute."
-        fi
-        VOL_CLONE_ID="$vclone_id"
-        # Chamada API para execute
-        local resp_ex
-        resp_ex=$(vol_cl_ex 2>>"$log_file")
-        if [ $? -ne 0 ]; then
-                echo "$resp_ex" >>"$log_file"
-                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error executing Volume Clone $vclone_name (API call failed)."
-        fi
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone $vclone_name execution to finish..." "1"
-        local vcloneex_percent=0
-        local vcloneex_percent_before=0
-        while :; do
-                sleep 5
-                local status_json
-                status_json=$(vol_cl_get 2>>"$log_file")
-                if [ $? -ne 0 ] || [ -z "$status_json" ]; then
-                        echo "$status_json" >>"$log_file"
-                        abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error getting status for Volume Clone execution $vclone_name."
-                fi
-                vcloneex_percent=$(echo "$status_json" | jq -r '.percentComplete // .status.percentComplete // 0' 2>/dev/null)
-                [[ "$vcloneex_percent" =~ ^[0-9]+$ ]] || vcloneex_percent=0
-
-                if [ "$vcloneex_percent" -ne "$vcloneex_percent_before" ]; then
-                        if [ "$vcloneex_percent" -ge 100 ]; then
-                                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name Done and ready to be used!" "1"
-                                break
-                        else
-                                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name execution at ${vcloneex_percent}%." "1"
-                                vcloneex_percent_before=$vcloneex_percent
-                        fi
-                fi
-        done
+	# Flush ASPs na origem antes de executar o clone
+	flush_asps
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Volume Clone with name $vclone_name ..." "1"
+	if [[ -z "$vclone_id" ]]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_execute."
+	fi
+	VOL_CLONE_ID="$vclone_id"
+	# Chamada API para execute
+	local resp_ex
+	resp_ex=$(vol_cl_ex 2>>"$log_file")
+	if [ $? -ne 0 ]; then
+		echo "$resp_ex" >>"$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error executing Volume Clone $vclone_name (API call failed)."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone $vclone_name execution to finish..." "1"
+	local vcloneex_percent=0
+	local vcloneex_percent_before=0
+	while :
+	do
+		sleep 5
+		local status_json
+		status_json=$(vol_cl_get 2>>"$log_file")
+		if [ $? -ne 0 ] || [ -z "$status_json" ]
+		then
+			echo "$status_json" >>"$log_file"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error getting status for Volume Clone execution $vclone_name."
+		fi
+		vcloneex_percent=$(echo "$status_json" | jq -r '.percentComplete // .status.percentComplete // 0' 2>/dev/null)
+		[[ "$vcloneex_percent" =~ ^[0-9]+$ ]] || vcloneex_percent=0
+		if [ "$vcloneex_percent" -ne "$vcloneex_percent_before" ]
+		then
+			if [ "$vcloneex_percent" -ge 100 ]
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name Done and ready to be used!" "1"
+				break
+			else
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name execution at ${vcloneex_percent}%." "1"
+				vcloneex_percent_before=$vcloneex_percent
+			fi
+		fi
+	done
 }
 ####  END:FUNCTION -  Do the Volume Clone Execute ####
 
 ####  START:FUNCTION - Do the Volume Clone Start ####
 do_volume_clone_start() {
         echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Starting Volume Clone with name $vclone_name ..." "1"
-
         # Garantir que temos o ID do clone na variável global
         if [[ -z "$vclone_id" ]]; then
                 abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_start."
@@ -972,60 +984,66 @@ do_volume_clone_start() {
 }
 ####  END:FUNCTION -  Do the Volume Clone Start ####
 
-####  START:FUNCTION - Do the Volume Clone ####
+####  START:FUNCTION - Do the Volume Clone  ####
 do_volume_clone() {
-        echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Creating Volume Clone Request with name $vclone_name ..." "1"
-        # Split the volumes_to_clone list into an array (comma-separated)
-        IFS=',' read -r -a vol_array <<< "$volumes_to_clone"
-        # Guard: API requires at least 2 volumes in the clone request
-        if [ "${#vol_array[@]}" -lt 2 ]; then
-                abort "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone Request must contain at least 2 volumes. You provided: ${#vol_array[@]} ($volumes_to_clone)"
-        fi
-        # Build JSON array of volume objects: { "id": "id1" }, { "id": "id2" }, ...
-        vol_list_json=""
-        for vid in "${vol_array[@]}"; do
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Creating Volume Clone Request with name $vclone_name ..." "1"
+
+        # volumes_to_clone é uma lista comma-separated de IDs (id1,id2,...)
+        IFS=',' read -r -a vc_array <<< "$volumes_to_clone"
+        # Construir JSON array de IDs: ["id1","id2",...]
+        json_ids=""
+        for vid in "${vc_array[@]}"
+        do
+                # trim básico de espaços, por segurança
                 vid_trimmed=$(echo "$vid" | xargs)
                 [ -z "$vid_trimmed" ] && continue
-                if [ -n "$vol_list_json" ]; then
-                        vol_list_json="$vol_list_json,{\"id\":\"$vid_trimmed\"}"
-                else
-                        vol_list_json="{\"id\":\"$vid_trimmed\"}"
-                fi
+                json_ids="$json_ids\"$vid_trimmed\","
         done
-        # Final safety check: depois de limpar, continuamos a precisar de pelo menos 2 IDs
-        # Conta o número de objetos pelo número de ocorrências de '"id":'
-        ids_count=$(echo "$vol_list_json" | grep -o '"id"' | wc -l)
-        if [ "$ids_count" -lt 2 ]; then
-                abort "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone Request must contain at least 2 valid volume IDs after processing. Got: $volumes_to_clone"
-        fi
-        # Build ACTIONS JSON para o helper vol_cl_cr (que faz: -d "{ $ACTIONS }")
-        ACTIONS="\"name\":\"$vclone_name\",\"volumes\":[${vol_list_json}]"
-        # Log do payload para troubleshooting
-        echo "`date +%Y-%m-%d_%H:%M:%S` - DEBUG vclone payload: { $ACTIONS }" >> "$log_file"
-        # Call the API wrapper
-        resp=$(vol_cl_cr 2>>"$log_file")
-        rc=$?
-        # Log API response para debugging
-        echo "`date +%Y-%m-%d_%H:%M:%S` - DEBUG vclone response: $resp" >> "$log_file"
+        # remover última vírgula
+        json_ids="${json_ids%,}"
+        # Corpo esperado pelo API volumes-clone:
+        # { "name": "...", "volumeIDs": ["id1","id2",...] }
+        ACTIONS="\"name\":\"$vclone_name\",\"volumeIDs\":[${json_ids}]"
+        # Chamada ao wrapper da API
+        output=$(vol_cl_cr 2>>"$log_file")
+	ret=$?
+	if echo "$output" | jq -e '.error? | length > 0' >/dev/null
+	then
+		echo "$output" | jq | tee -a "$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Check message above" "1"
+	fi
+        if [ $ret -eq 0 ]
+        then
+                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone Request $vclone_name creation to finish..." "1"
 
-        if [ $rc -ne 0 ]; then
-                abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error creating Volume Clone Request $vclone_name (API call failed). See $log_file for details."
-        fi
-        echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Waiting for Volume Clone Request $vclone_name creation to finish..." "1"
-        vclone_percent=0
-        while [ $vclone_percent -lt 100 ]
-        do
-                vclone_percent_before=$vclone_percent
-                sleep 5
-                vclone_percent=$(vol_cl_ls | grep -A6 "$vclone_name" | grep "Percent Completed:" | awk '{print $3}')
-                if [[ "$vclone_percent" != "$vclone_percent_before" ]]; then
-                        if [ "$vclone_percent" -eq 100 ] 2>/dev/null; then
-                                echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone Request $vclone_name Done!" "1"
-                        else
-                                echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone Request $vclone_name creation at $vclone_percent%" "1"
-                        fi
+                # Obter o ID do volume-clone criado via API
+                vclone_id=$(vol_cl_ls 2>>"$log_file" | jq -r --arg name "$vclone_name" '.volumesClone[]? | select(.name == $name) | .volumesCloneID' | head -n1)
+                if [[ -z "$vclone_id" ]]
+                then
+                        abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve Volume Clone Request ID for $vclone_name. Check the log above this line..."
                 fi
-        done
+                vclone_percent=0
+                while [ "$vclone_percent" -lt 100 ]
+                do
+                        vclone_percent_before=$vclone_percent
+                        sleep 5
+                        # Ler percentagem pelo GET do clone
+                        vclone_percent=$(vol_cl_ls 2>>"$log_file" | jq -r --arg id "$vclone_id" '.volumesClone[]? | select(.volumesCloneID == $id) | .percentComplete // 0')
+                        # Garantir valor numérico
+                        [ -z "$vclone_percent" ] && vclone_percent=0
+                        if [ "$vclone_percent" != "$vclone_percent_before" ]
+                        then
+                                if [ "$vclone_percent" -eq 100 ]
+                                then
+                                        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request $vclone_name Done!" "1"
+                                else
+                                        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request $vclone_name creation at $vclone_percent%" "1"
+                                fi
+                        fi
+                done
+        else
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error creating Volume Clone Request $vclone_name (API call failed). See $log_file for details."
+        fi
 }
 ####  END:FUNCTION -  Do the Volume Clone ####
 
@@ -1274,7 +1292,6 @@ onboard_aux_vol() {
 	vsi_id_bluexscrt
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting onboarding volumes for LPAR $vsi" "1"
 	echoscreen ""
-#	cloud_login
 	check_locally_VSI_exists
 ###########!!!!!!!!	volumes_to_GRS=$(/usr/local/bin/ibmcloud pi ins vol ls $vsi_id | tail -n +2 | awk {'print $1'} | sed -z 's/\n/,/g' | sed 's/.$//')
 	ret=$?
@@ -1375,7 +1392,6 @@ case $1 in
 		echoscreen "Flag -j selected, but too many arguments!! Syntax: bluexport.api -j VSI_NAME IMAGE_NAME"
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but too many arguments!! Syntax: bluexport.api -j VSI_NAME IMAGE_NAME"
 	fi
-#	vsi="${2,,}"
 	vsi=$2
 	capture_name=${3^^}
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, watching only the Job Status for Capture Image $capture_name! Logging at $HOME/bluexport_j_$capture_name.log" "1"
@@ -1445,7 +1461,6 @@ case $1 in
 	else
 		test=0
 	fi
-#	vsi="${2,,}"
 	vsi=$2
 	vsi_id_bluexscrt
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting Capture&Export for VSI Name: $vsi ..." "1"
@@ -1516,7 +1531,6 @@ case $1 in
 	exclude_names=$2
 	exclude_names_regex=$(printf "%s" "$exclude_names" | sed 's/ /|/g')
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes Name to exclude: ${exclude_names[*]}" "1"
-#	vsi="${3,,}"
 	vsi=$3
 	vsi_id_bluexscrt
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting Capture&Export for VSI Name: $vsi ..." "1"
@@ -1548,7 +1562,6 @@ case $1 in
 	# Volume name patterns (space-separated list in $3)
 	IFS=' ' read -r -a volchtier_names <<< "$3"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Common name of volumes to change to tier $tier: ${volchtier_names[*]}" "1"
-#	vsi="${2,,}"
 	vsi=$2
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
@@ -1575,7 +1588,6 @@ case $1 in
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport.api $1 VSI_NAME TIER_TO_CHANGE_TO"
 	fi
-#	vsi="${2,,}"
 	vsi=$2
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
@@ -1620,7 +1632,6 @@ case $1 in
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
 	fi
-#	vsi="${2,,}"
 	vsi=$2
 	vsi_id_bluexscrt
 	test=0
@@ -1675,7 +1686,6 @@ case $1 in
 	fi
 	test=0
 	flagj=1
-#	vsi="${2,,}"
 	vsi=$2
 	vsi_id_bluexscrt
 	snap_name=$3
@@ -1689,7 +1699,6 @@ case $1 in
 		fi
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Snapshot $snap_name Update !" "1"
-#	cloud_login
 ##############!!!!!!	snap_name_exists=$(/usr/local/bin/ibmcloud pi ins snap ls | grep -w $snap_name)
 	if [[ "$snap_name_exists" == "" ]]
 	then
@@ -1785,10 +1794,7 @@ case $1 in
                 full_ws_name="${wsmap[$ws]}"
                 echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name :" "1"
                 # Resolve region and base_url
-                region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn
-                        | capture("power-iaas:(?<region>[^:]+)")
-                        | .region
-                        | gsub("-"; "_")' "$bluexscrt")
+                region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
                 base_url_var="base_${region_api}"
                 base_url="${!base_url_var}"
                 # Call API to list snapshots via function snap_ls (API version)
@@ -1850,7 +1856,7 @@ case $1 in
   -imglsall)
 	if [ $# -gt 1 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport.api $1"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
 	fi
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Captured Images in all Workspaces !" "1"
@@ -1907,154 +1913,200 @@ case $1 in
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all Captured Images in all Workpsaces"
     ;;
 
-    -vclonelsall)
+  -vclonelsall)
         # Too many arguments?
         if [ $# -gt 1 ]
         then
             abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
         fi
-
         test=0
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Volume Clones in all Workspaces !" "1"
-
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Volumes Clones in all Workspaces !" "1"
         # Convert 'wsnames' (colon-separated) to array
         IFS=':' read -r -a wsnames_array <<< "$wsnames"
         # Convert 'allws' (space-separated) to array
         read -r -a allws_array <<< "$allws"
-
         # Map workspace short name -> full name
         declare -A wsmap
         for i in "${!allws_array[@]}"
         do
             wsmap[${allws_array[i]}]="${wsnames_array[i]}"
         done
-
         # Loop all workspaces
         for ws in "${allws_array[@]}"
         do
             # Get workspace CRN and ID from JSON
             CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
             CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
-
             full_ws_name="${wsmap[$ws]}"
+            if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
+            then
+                    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping..." "1"
+                    continue
+            fi
 
             echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing Volume Clones at Workspace $full_ws_name :" "1"
-
             # Resolve region and base_url from CRN
-            region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn
-                    | capture("power-iaas:(?<region>[^:]+)")
-                    | .region
-                    | gsub("-"; "_")' "$bluexscrt")
+            region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
             base_url_var="base_${region_api}"
             base_url="${!base_url_var}"
-
-            # Call API to list volume clones
+            # Call API to list volume clones (for this workspace context)
             clones_json=$(vol_cl_ls 2>>"$log_file")
-
-            # Check if there are volume clones
-            if ! echo "$clones_json" | jq -e '(.volumeClones // .clones // []) | length > 0' >/dev/null 2>&1
+            # Check if there are volume clones in this workspace
+            if ! echo "$clones_json" | jq -e '.volumesClone | length > 0' >/dev/null 2>&1
             then
                 msg="----------------------- No Volume Clones Found -----------------------"
                 echo "$msg" | tee -a "$log_file"
             else
-                # Pretty formatted output – try to be tolerant to field names
+                # Pretty formatted output
                 echo "$clones_json" | jq -r '
-                  (.volumeClones // .clones // [])[] |
+                  .volumesClone[] |
                   "----------------------- Volume Clone Found -----------------------\n"
-                  + "Clone ID: \(.volumeCloneID // .cloneID // \"N/A\")\n"
-                  + "Name: \(.name // .cloneName // \"N/A\")\n"
-                  + "Source Volume ID: \(.sourceVolumeID // .originVolumeID // \"N/A\")\n"
-                  + "Status: \(.status // \"N/A\")\n"
-                  + "Percent Complete: \(.percentComplete // .percentageComplete // \"N/A\")\n"
-                  + "Creation Date: \(.creationDate // \"N/A\")\n"
+                  + "Clone ID: \(.volumesCloneID)\n"
+                  + "Name: \(.name)\n"
+                  + "Status: \(.status)\n"
+                  + "Percent Complete: \(.percentComplete)\n"
+                  + "Creation Date: \(.creationDate)\n"
                   + "------------------------------------------------------------"
                 ' 2>>"$log_file" | tee -a "$log_file"
             fi
-
             echoscreen "" "1"
         done
-
         abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all Volume Clones in all Workpsaces"
     ;;
 
   -vclone)
+        # Args: VOLUME_CLONE_NAME BASE_NAME LPAR_NAME Replication(True|False) Rollback(True|False) TARGET_TIER volumes(ALL|id1,id2,...)
         if [ $# -lt 8 ]
         then
-                abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma seperated Volumes name or IDs list to clone)"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
         fi
         if [ $# -gt 8 ]
         then
-                abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma seperated Volumes name or IDs list to clone)"
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
         fi
 
         test=0
-        vclone_name=$2
-        base_name=$3
-        vsi=$4
+
+        vclone_name="$2"
+        base_name="$3"
+        # Normalizar VSI para lower-case, para bater certo com o JSON
+        vsi="$4"
+
+        # Resolve VSI → workspace, CLOUD_INSTANCE_ID, CRN, base_url, PVM_ID, etc.
         vsi_id_bluexscrt
-        replication=$5
-        rollback=$6
-        target_tier=$7
-        volumes_to_clone=$8
+	check_locally_VSI_exists
+#	flush_asps
+        replication="$5"
+        rollback="$6"
+        target_tier="$7"
+        volumes_to_clone_arg="$8"
 
-        if [[ "$replication" != "True" && "$replication" != "False" ]]; then
-                abort "`date +%Y-%m-%d_%H:%M:%S` - Replication value must be True or False...!"
+        # Validar replication / rollback
+        if [[ "$replication" != "True" && "$replication" != "False" ]]
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Replication value must be True or False...!"
         fi
-        if [[ "$rollback" != "True" && "$rollback" != "False" ]]; then
-                abort "`date +%Y-%m-%d_%H:%M:%S` - Rollback value must be True or False...!"
-        fi
-        if [[ "$target_tier" != "tier0" && "$target_tier" != "tier1" && "$target_tier" != "tier3" && "$target_tier" != "tier5k" ]]; then
-                abort "`date +%Y-%m-%d_%H:%M:%S` - Target Tier must be tier0 or tier1 or tier3 or tier5k...!"
-        fi
-
-        # Verifica se já existe um volume clone com este nome (via API helper)
-        existing_vc=$(vol_cl_ls 2>>"$log_file" | grep -w "$vclone_name" || true)
-        if [[ -n "$existing_vc" ]]; then
-                abort "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone with name $vclone_name already exists, please choose a diferent name!"
+        if [[ "$rollback" != "True" && "$rollback" != "False" ]]
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Rollback value must be True or False...!"
         fi
 
-        # Se o utilizador pediu ALL, vamos buscar TODOS os volumes anexados à VSI via API
-        if [[ "$volumes_to_clone" == "ALL" ]]; then
-                # ins_vol_ls já usa CLOUD_INSTANCE_ID, PVM_ID, base_url definidos por vsi_id_bluexscrt
+        # Validar tier
+        if [[ "$target_tier" != "tier0" && "$target_tier" != "tier1" && "$target_tier" != "tier3" && "$target_tier" != "tier5k" ]]
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Tier must be tier0 or tier1 or tier3 or tier5k...!"
+        fi
+
+        # Garantir que não existe já um Volume Clone com este nome (via API)
+        existing_vclone_json=$(vol_cl_ls 2>>"$log_file")
+        if echo "$existing_vclone_json" | jq -e --arg name "$vclone_name" '.volumeClones[]? | select(.name == $name)' >/dev/null 2>&1
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone with name $vclone_name already exists, please choose a different name!"
+        fi
+
+        # Resolver volumes a clonar
+        if [[ "$volumes_to_clone_arg" == "ALL" ]]
+        then
+                # ALL → ir buscar os volumes anexados à VSI pelo API
                 volumes_to_clone=$(ins_vol_ls 2>>"$log_file" \
                         | jq -r '.volumes[]?.volumeID' \
                         | paste -sd, -)
 
-                if [[ -z "$volumes_to_clone" ]]; then
-                        abort "`date +%Y-%m-%d_%H:%M:%S` - No volumes found attached to VSI $vsi_cloud_name to clone."
+                if [[ -z "$volumes_to_clone" ]]
+                then
+                        abort "$(date +%Y-%m-%d_%H:%M:%S) - No volumes found attached to VSI $vsi to clone."
                 fi
+        else
+                # Lista explícita de IDs, tal como passado na linha de comando
+                volumes_to_clone="$volumes_to_clone_arg"
         fi
 
-        echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting the 3 processes of Volume Clone $vclone_name" "1"
-        echoscreen "`date +%Y-%m-%d_%H:%M:%S` - This is the list of volumes that will be cloned: $volumes_to_clone" "1"
+        # Validar que temos pelo menos 2 volumes
+        IFS=',' read -r -a vclone_array <<< "$volumes_to_clone"
+        if [ "${#vclone_array[@]}" -lt 2 ]
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request must contain at least 2 volumes. You provided: ${#vclone_array[@]} ($volumes_to_clone)"
+        fi
+
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting the three processes of Volume Clone $vclone_name" "1"
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - This is the list of volumes that will be cloned: $volumes_to_clone" "1"
+
+        # Guardar a lista para as funções seguintes
+        volumes_to_clone="$volumes_to_clone"
 
         do_volume_clone
         do_volume_clone_start
         do_volume_clone_execute
 
-        abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully finished -  Volume Clone $vclone_name !"
+        abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished -  Volume Clone $vclone_name !"
     ;;
 
   -vclonedel)
+	flagj=1
 	if [ $# -lt 2 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME VSI_NAME"
 	fi
-	if [ $# -gt 2 ] 
+	if [ $# -gt 2 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME VSI_NANE"
 	fi
 	test=0
 	vclone_name=$2
-###########!!!!!!!!!!!!!	vclone_name_exists=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -w $vclone_name)
-	if [[ "$vclone_name_exists" == "" ]]
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone with name $vclone_name doesn't exists, please choose a diferent name!"
-	fi
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Trying to Delete Volume Clone with name $vclone_name" "1"
-############!!!!!!!!!!!!!	vclone_id=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -A6 $vclone_name | grep "Volume Clone Request ID:" | awk {'print $5'})
-################!!!!!!!!!!!	/usr/local/bin/ibmcloud pi vol cl del $vclone_id
-	abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully Deleted Volume Clone with name $vclone_name !"
+	# Convert 'wsnames' (colon-separated) to array
+	IFS=':' read -r -a wsnames_array <<< "$wsnames"
+	# Convert 'allws' (space-separated) to array
+	read -r -a allws_array <<< "$allws"
+	# Map workspace short name -> full name
+	declare -A wsmap
+	for i in "${!allws_array[@]}"
+	do
+		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+	done
+	# Loop all workspaces  
+	for ws in "${allws_array[@]}"
+	do
+		# Get workspace CRN and ID from JSON
+		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+		# Workspace human friendly name
+		full_ws_name="${wsmap[$ws]}"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name :" "1"
+		# Resolve region and base_url
+		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+		vclone_name_exists=$(vol_cl_ls | jq -r --arg vclname "$vclone_name" '.volumesClone[] | select(.name == $vclname) | .name')
+		if [[ "$vclone_name_exists" == "" ]]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone with name $vclone_name doesn't exists in Workspace $full_ws_name, moving on to next Workspace!" "1"
+			continue
+		fi
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Trying to Delete Volume Clone with name $vclone_name" "1"
+		VOL_CLONE_ID=$(vol_cl_ls | jq -r --arg vclname "$vclone_name" '.volumesClone[] | select(.name == $vclname) | .volumesCloneID')
+		vol_cl_del
+		abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully Deleted Volume Clone with name $vclone_name !"
+	done
     ;;
 
    -expimg)
