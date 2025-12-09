@@ -1965,7 +1965,6 @@ case $1 in
 	test=0
 	vclone_name=$2
 	base_name=$3
-#	vsi="${4,,}"
 	vsi=$4
 	vsi_id_bluexscrt
 	replication=$5
@@ -1984,16 +1983,14 @@ case $1 in
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Target Tier must be tier0 or tier1 or tier3 or tier5k...!"
 	fi
-##########!!!!!!!!!!	vclone_name_exists=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -w $vclone_name)
+	vclone_name_exists=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -w $vclone_name)
 	if [[ "$vclone_name_exists" != "" ]]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone with name $vclone_name already exists, please choose a diferent name!"
 	fi
-###############!!!!!!	/usr/local/bin/ibmcloud pi ws tg $vsi_ws_id
 	if [[ "$volumes_to_clone" == "ALL" ]]
 	then
-echo
-##########!!!!!!!		volumes_to_clone=$(/usr/local/bin/ibmcloud pi ins get $vsi_id | grep Volumes | sed -z 's/ //g' | sed -z 's/Volumes//g')
+		volumes_to_clone=$(/usr/local/bin/ibmcloud pi ins get $vsi_id | grep Volumes | sed -z 's/ //g' | sed -z 's/Volumes//g')
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting the 3 processes of Volume Clone $vclone_name" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - This is the list of volumes that will be cloned: $volumes_to_clone" "1"
