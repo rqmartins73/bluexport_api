@@ -935,7 +935,7 @@ do_volume_clone_execute() {
         done
 }
 ####  END:FUNCTION -  Do the Volume Clone Execute ####
-
+#
 ####  START:FUNCTION - Do the Volume Clone Start ####
 do_volume_clone_start() {
         echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Starting Volume Clone with name $vclone_name ..." "1"
