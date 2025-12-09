@@ -897,7 +897,7 @@ do_snap_delete() {
 do_volume_clone_execute() {
 	flush_asps
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Executing Volume Clone with name $vclone_name ..." "1"
-#############!!!!!!!!!!!	/usr/local/bin/ibmcloud pi vol cl ex $vclone_id --name $base_name --replication-enabled=$replication --rollback-prepare=$rollback --target-tier $target_tier 2>> $log_file
+	/usr/local/bin/ibmcloud pi vol cl ex $vclone_id --name $base_name --replication-enabled=$replication --rollback-prepare=$rollback --target-tier $target_tier 2>> $log_file
 	if [ $? -eq 0 ]
 	then
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Waiting for Volume Clone $vclone_name execution to finish..." "1"
@@ -906,7 +906,7 @@ do_volume_clone_execute() {
 		do
 			vcloneex_percent_before=$vcloneex_percent
 			sleep 5
-##########!!!!!!!!!!!!!			vcloneex_percent=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -A6 $vclone_name | grep "Percent Completed:" | awk {'print $3'})
+			vcloneex_percent=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -A6 $vclone_name | grep "Percent Completed:" | awk {'print $3'})
 			if [[ "$vcloneex_percent" != "$vcloneex_percent_before" ]]
 			then
 				if [ $vcloneex_percent -eq 100 ]
@@ -922,16 +922,16 @@ do_volume_clone_execute() {
 	fi
 }
 ####  END:FUNCTION -  Do the Volume Clone Execute ####
-
+#
 ####  START:FUNCTION - Do the Volume Clone Start ####
 do_volume_clone_start() {
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Starting Volume Clone with name $vclone_name ..." "1"
-###########!!!!!!!!!	vclone_id=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -A6 $vclone_name | grep "Volume Clone Request ID:" | awk {'print $5'})
-############!!!!!!!!	/usr/local/bin/ibmcloud pi vol cl st $vclone_id 2>> $log_file
+	vclone_id=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -A6 $vclone_name | grep "Volume Clone Request ID:" | awk {'print $5'})
+	/usr/local/bin/ibmcloud pi vol cl st $vclone_id 2>> $log_file
 	if [ $? -eq 0 ]
 	then
-#######!!!!!!!!!!		vclone_start_action=$(/usr/local/bin/ibmcloud pi vol cl get $vclone_id | grep "Action" | awk {'print $2'})
-########!!!!!!!!!!		vclone_start_status=$(/usr/local/bin/ibmcloud pi vol cl get $vclone_id | grep "Status" | awk {'print $2'})
+		vclone_start_action=$(/usr/local/bin/ibmcloud pi vol cl get $vclone_id | grep "Action" | awk {'print $2'})
+		vclone_start_status=$(/usr/local/bin/ibmcloud pi vol cl get $vclone_id | grep "Status" | awk {'print $2'})
 		if [[ "$vclone_start_action" == "start" ]] && [[ "$vclone_start_status" == "available" ]]
 		then
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone $vclone_name Started and ready to execute..." "1"
@@ -948,7 +948,7 @@ do_volume_clone_start() {
 ####  START:FUNCTION - Do the Volume Clone ####
 do_volume_clone() {
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Creating Volume Clone Request with name $vclone_name ..." "1"
-#########!!!!!!!!!!	/usr/local/bin/ibmcloud pi vol cl cr --name $vclone_name --volumes $volumes_to_clone 2>> $log_file
+	/usr/local/bin/ibmcloud pi vol cl cr --name $vclone_name --volumes $volumes_to_clone 2>> $log_file
 	if [ $? -eq 0 ]
 	then
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Waiting for Volume Clone Request $vclone_name creation to finish..." "1"
@@ -957,7 +957,7 @@ do_volume_clone() {
 		do
 			vclone_percent_before=$vclone_percent
 			sleep 5
-##########!!!!!!!!!!!!!			vclone_percent=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -A6 $vclone_name | grep "Percent Completed:" | awk {'print $3'})
+			vclone_percent=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -A6 $vclone_name | grep "Percent Completed:" | awk {'print $3'})
 			if [[ "$vclone_percent" != "$vclone_percent_before" ]]
 			then
 				if [ $vclone_percent -eq 100 ]
@@ -1927,7 +1927,7 @@ case $1 in
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma seperated Volumes name or IDs list to clone)"
 	fi
-	if [ $# -gt 8 ] 
+	if [ $# -gt 8 ]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma seperated Volumes name or IDs list to clone)"
 	fi
@@ -1952,14 +1952,16 @@ case $1 in
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Target Tier must be tier0 or tier1 or tier3 or tier5k...!"
 	fi
-	vclone_name_exists=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -w $vclone_name)
+	vclone_name_exists=$(vol_cl_ls 2>>"$log_file" | grep -w "$vclone_name")
+#	vclone_name_exists=$(/usr/local/bin/ibmcloud pi vol cl ls | grep -w $vclone_name)
 	if [[ "$vclone_name_exists" != "" ]]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone with name $vclone_name already exists, please choose a diferent name!"
 	fi
 	if [[ "$volumes_to_clone" == "ALL" ]]
 	then
-		volumes_to_clone=$(/usr/local/bin/ibmcloud pi ins get $vsi_id | grep Volumes | sed -z 's/ //g' | sed -z 's/Volumes//g')
+		volumes_to_clone=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .volumeID' | paste -sd, -)
+#		volumes_to_clone=$(/usr/local/bin/ibmcloud pi ins get $vsi_id | grep Volumes | sed -z 's/ //g' | sed -z 's/Volumes//g')
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting the 3 processes of Volume Clone $vclone_name" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - This is the list of volumes that will be cloned: $volumes_to_clone" "1"
