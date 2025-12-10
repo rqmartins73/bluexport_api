@@ -1809,22 +1809,22 @@ case $1 in
     ;;
 
   -snapupd)
-	# Args: VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|["DESCRIPTION"]
-	if [ $# -lt 5 ]
+	# Args: SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|["DESCRIPTION"]
+	if [ $# -lt 4 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 	fi
-	if [ $# -gt 5 ]
+	if [ $# -gt 4 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 	fi
 
 	test=0
 	flagj=1
-	vsi="$2"              # Mantemos o argumento por compatibilidade/logs
-	snap_name="$3"
-	new_name_arg="$4"
-	description_arg="$5"
+
+	snap_name="$2"
+	new_name_arg="$3"
+	description_arg="$4"
 
 	# Verificar se pelo menos um dos dois parâmetros não é "0"
 	if [ -n "$new_name_arg" ] && [ -n "$description_arg" ] \
@@ -1852,7 +1852,7 @@ case $1 in
 			snap_new_description=""
 			new_description_echo=""
 		else
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax:  bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax:  bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 		fi
 	else
 		# texto => nova descrição
@@ -1875,7 +1875,7 @@ case $1 in
 			snap_new_name=""
 			new_name_echo=""
 		else
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument NEW_SNAPSHOT_NAME must be 0 or a name!! Syntax:  bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument NEW_SNAPSHOT_NAME must be 0 or a name!! Syntax:  bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 		fi
 	else
 		# texto
@@ -1894,7 +1894,7 @@ case $1 in
 	if [[ -z "$snap_new_name" && -z "$snap_new_description" ]]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Nothing to update: NEW_SNAPSHOT_NAME and DESCRIPTION both resolve to 'no change'."
-	fi
+	end
 
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Searching for snapshot name $snap_name in all workspaces ===" "1"
 
