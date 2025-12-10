@@ -294,7 +294,7 @@ abort() {
 }
 #### END:FUNCTION - Finish log file when aborting  ####
 
-#### START:FUNCTION - API Commands ####
+#### START:FUNCTIONS - API Commands ####
 ##  Workspace management aliases
 ws_ls() {
 	curl -sX GET "$base_url/v1/workspaces" -H "$header_auth" -H "$header_json"
@@ -497,7 +497,80 @@ snap_del() {
 snap_upd() {
 	curl -sX PUT $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots/$SNAP_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
-#### END:FUNCTION - API Commands ####
+#### END:FUNCTIONS - API Commands ####
+
+#### START:FUNCTIONS - GRS Code Helpers ####
+## Helper: check and enable replication on volumes, then wait until all are replicationEnabled=true
+chk_vol_rep() {
+	echoscreen "" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking and enabling replication on source volumes if needed..." "1"
+	echoscreen "" "1"
+	flag=0
+	for i in $vol_ids
+	do
+		VOL_ID=$i
+		rep_enabled=$(vol_get | jq -r '.replicationEnabled' 2>>"$log_file")
+		if [[ "$rep_enabled" == "false" ]]
+		then
+			flag=1
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume ID: $i replicationEnabled=false. Enabling replication..." "1"
+			ACTIONS='"replicationEnabled": true'
+			vol_act 2>>"$log_file" | tee -a "$log_file" >/dev/null
+		fi
+		printf "."
+	done
+	echo
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Replication check done." "1"
+	if [[ "$flag" == "1" ]]
+	then
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Some volumes had replicationEnabled=false and were changed to true. Rechecking until all are updated..." "1"
+		sleep 10
+		while true
+		do
+			if vol_ls | jq -r '.volumes[]? | "\(.name) \(.replicationEnabled)"' | grep -w "$vol_com_name" | grep false >/dev/null
+			then
+				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - There are still volumes with replicationEnabled=false. Waiting 10 seconds..." "1"
+				sleep 10
+			else
+				break
+			fi
+		done
+	fi
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - All volumes are replicationEnabled=true." "1"
+}
+
+## Helper: wait until all volumes with the given prefix are in consistent_copying
+chk_vol_mirror() {
+	while true
+	do
+		if vol_ls | jq -r '.volumes[]? | "\(.name) \(.mirroringState)"' | grep -w "$vol_com_name" | grep inconsistent_copying >/dev/null
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes still in inconsistent_copying. Waiting 60 seconds..." "1"
+			sleep 60
+		else
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - All volumes are in consistent_copying state." "1"
+			break
+		fi
+	done
+}
+
+## Helper: monitor onboarding status until completion
+chk_on_status() {
+	while true
+	do
+		on_status=$(on_get | jq -r '.status' 2>>"$log_file")
+		if [[ "$on_status" == "RUNNING" ]]
+		then
+			on_progress=$(on_get | jq -r '.progress' 2>>"$log_file")
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Onboarding status RUNNING at ${on_progress}% - waiting 60 seconds..." "1"
+			sleep 60
+		else
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Onboarding finished with status: $on_status" "1"
+			break
+		fi
+	done
+}
+#### END:FUNCTIONS - GRS Code Helpers ####
 
 #### START:FUNCTION - Check if image-catalog and Cloud Object has images from last time and deleted it ####
 delete_previous_img() {
@@ -1236,245 +1309,113 @@ vchtier() {
 }
 ####  END:FUNCTION  Change Instance Volumes Tier  ####
 
-####  START:FUNCTION  Export to COS an existent Image  ####
-export_img() {
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Under construction!!"
-}
-####  END:FUNCTION  Export to COS an existent Image  ####
-
-####  START:FUNCTION  Delete Image from image-catalog  ####
-delete_img() {
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Under construction!!"
-}
-####  END:FUNCTION  Export to COS an existent Image  ####
-
-#################  GRS Code  ####################
-
-####  START:FUNCTION  Create Volume Group  ####
-create_vg() {
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting Create $vg_flag_echo $vg_name" "1"
-	echoscreen ""
-	test=0
-	flagj=1
-	vsi_id_bluexscrt
-#	cloud_login
-	check_locally_VSI_exists
-######!!!!!!!!!!!!!!!!	volumes_to_GRS=$(/usr/local/bin/ibmcloud pi ins vol ls $vsi_id | tail -n +2 | awk {'print $1'} | sed -z 's/\n/,/g' | sed 's/.$//')
-	ret=$?
-	if [ $ret -ne 0 ]
+####  START:FUNCTION  Main GRS function: create VG in source and onboard aux volumes in target  ####
+create_grs() {
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting GRS configuration between source VSI $source_vsi and target VSI $target_vsi (VG: $vg_name) ===" "1"
+	echoscreen "" "1"
+	####################################
+	# 1. SOURCE WORKSPACE / SOURCE VSI #
+	####################################
+	# Restaurar contexto da workspace/source VSI
+	base_url="$source_base_url"
+	CRN="$source_ws_crn"
+	CLOUD_INSTANCE_ID="$source_CLOUD_INSTANCE_ID"
+	PVM_ID="$source_PVM_ID"
+	# 2.3 – Obter volumes associados ao SOURCE_VSI
+	vol_ids=$(ins_vol_ls | jq -r '.volumes[]? | .volumeID' 2>>"$log_file")
+	if [[ -z "$vol_ids" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line..."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - No volumes attached to source VSI $source_vsi. Aborting GRS creation."
 	fi
-	volumes_rep=$(echo $volumes_to_GRS | sed 's/,/\n/g')
-	index=0
-	fail=0
-	all_good=0
-	while [ $all_good -eq 0 ]
-	do
-		for volume in $volumes_rep
-		do
-###########!!!!!!!!!!!			tmp_vol=$(/usr/local/bin/ibmcloud pi vol get $volume | grep -we "Replication Enabled" -we "Name" -we "ID")
-			ret=$?
-			if [ $ret -ne 0 ]
-			then
-				abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line..."
-			fi
-			is_vol_rep_enabled=$(echo $tmp_vol | awk {'print $7'})
-			vol_name=$(echo $tmp_vol | awk {'print $4'})
-			vol_id=$(echo $tmp_vol | awk {'print $2'})
-			if [[ "$is_vol_rep_enabled" != "true" ]]
-			then
-				fail=1
-				vol_not_rep_enabled[$index]=$vol_name
-				vol_id_not_rep_enabled[$index]=$vol_id
-				index=$((index + 1))
-			fi
-		done
-		all_good=1
-		if [ $fail -eq 1 ]
-		then
-			echoscreen ""
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Create $vg_flag_echo $vg_name can not continue because the following volumes are not replication enabled" "1"	
-			for i in ${vol_not_rep_enabled[@]}
-			do
-				echoscreen "$i" "1"
-			done
-			read -p "Do you want to enable replication on these volumes (Y/N) ? " enable_rep
-			if [[ "$enable_rep" == "Y" ]] || [[ "$enable_rep" == "y" ]]
-			then
-				echoscreen ""
-				echoscreen "OK, let's try enable the replication on the volumes..." "1"
-				echoscreen ""
-				index=0
-				for i in ${vol_not_rep_enabled[@]}
-				do
-					echoscreen "Enabling replication on volume $i" "1"
-#########!!!!!!!!!!!!!!!					/usr/local/bin/ibmcloud pi vol act ${vol_id_not_rep_enabled[$index]} --replication-enabled=True
-					index=$((index + 1))
-					ret=$?
-					if [ $ret -ne 0 ]
-					then
-						abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line..."
-					fi
-					echoscreen ""
-				done
-				fail=0
-				all_good=0
-				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Now waiting one minute for the volumes to update..." "1"
-				sleep 60
-			fi
-		fi
-	done
-	if [ $fail -eq 1 ]
+	vol_count=$(echo "$vol_ids" | wc -w)
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Source VSI $source_vsi has $vol_count attached volumes." "1"
+	# 2.4 – Garantir que todos os volumes estão com replicationEnabled=true
+	chk_vol_rep
+	# 2.4 (cont.) – Assegurar consistent_copying antes de criar o VG
+	chk_vol_mirror
+	# 2.5 – Criar Volume Group no SOURCE
+	volids_api=$(echo "$vol_ids" | sed 's/ /","/g')
+	ACTIONS="\"name\": \"$vg_name\", \"volumeIDs\": [\"$volids_api\"]"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Creating Volume Group $vg_name in source workspace..." "1"
+	vg_cr 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	# Confirmar ID do VG
+	VOLUME_GROUP_ID=$(vg_ls | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .id' 2>>"$log_file")
+	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - If you still want to create a $vg_flag_echo, please enable replication on the volumes listed above!..."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find Volume Group ID for $vg_name after creation."
 	fi
-	echoscreen ""
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - All good with the volumes, now creating $vg_flag_echo $vg_name" "1"
-#########!!!!!!!!!!!!!	/usr/local/bin/ibmcloud pi vg cr $vg_flag $vg_name --member-volume-ids "$volumes_to_GRS"
-	ret=$?
-	if [ $ret -ne 0 ]
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Group $vg_name created with ID $VOLUME_GROUP_ID." "1"
+	# 2.6 – Obter nomes dos auxiliary volumes (auxVolumeName)
+	auxvol_names=$(vg_rcr | jq -r '.remoteCopyRelationships[]? | .auxVolumeName' 2>>"$log_file")
+	if [[ -z "$auxvol_names" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line..."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - No auxiliary volumes found in remote-copy relationships for $vg_name. Aborting."
 	fi
-	vgcsg_ready=""
-	while [[ "$vgcsg_ready" != "available" ]]
-	do
-		sleep 5
-########!!!!!!!!!!!		vgcsg_ready=$(/usr/local/bin/ibmcloud pi vg ls | grep -w $vg_name | awk {'print $5'})
-		ret=$?
-		if [ $ret -ne 0 ]
-		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line..."
-		fi
-		if [[ "$vgcsg_ready" == "available" ]]
-		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - $vg_flag_echo $vg_name created!... Done!" "1"
-		else
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - $vg_flag_echo $vg_name still $vgcsg_ready" "1"
-		fi
-		if [[ "$vgcsg_ready" == "error" ]]
-		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - $vg_flag_echo $vg_name still $vgcsg_ready" "1"
-			abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line..."
-		fi
-	done
-#########!!!!!!!!!	vg_id=$(/usr/local/bin/ibmcloud pi vg ls | grep -w $vg_name | awk {'print $1'})
-	ret=$?
-	if [ $ret -ne 0 ]
+	auxvolnames=$(echo "$auxvol_names" | tr ' ' ',')
+	aux_count=$(echo "$auxvol_names" | wc -w)
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Found $aux_count auxiliary volumes for VG $vg_name." "1"
+	# 2.7 – Boot volume aux name (apenas logging)
+	bootvol_auxname=$(ins_vol_ls | jq -r '.volumes[]? | "\(.bootable) \(.auxVolumeName) \(.name)"' 2>>"$log_file" \
+		| grep "$vol_com_name" | grep true | awk '{print $2}')
+	if [[ -n "$bootvol_auxname" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line..."
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Boot auxiliary volume: $bootvol_auxname" "1"
 	fi
-	copy_sts="inconsistent_copying"	
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking state of the Consistency Group, please wait..." "1"
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Copy Status: $copy_sts" "1"
-	error=0
-	while [[ "$copy_sts" == "inconsistent_copying" ]] || [[ "$copy_sts" == "updating" ]]
-	do
-		if [ $error -eq 5 ]
-		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong with the VG Creation... Check in IBM Cloud CLI the possibles reasons."
-		fi
-		sleep 40
-##########!!!!!!!!!!!!!		copy_sts=$(/usr/local/bin/ibmcloud pi vg sd $vg_id | grep -w "State:" | awk {'print $2'})
-		#ret=$?
-		if [[ $copy_sts == "" ]]
-		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line... Retrying..."
-			error=$((error+1))
-		fi
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Percentage by Volumes:"
-##########!!!!!!!!!!!!!!		/usr/local/bin/ibmcloud pi vg rcr $vg_id | grep rcrel | awk {'print $1" "$4" "$11"%"'}
-		# ret=$?
-		# if [ $ret -ne 0 ]
-		# then
-			# abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line..."
-		# fi
-		if [[ "$copy_sts" == "consistent_copying" ]]
-		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Copy Status: $copy_sts" "1"
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - $vg_flag_echo $vg_name ready to be onboarded in the DR site!" "1"
-		fi
-	done
-}
-####  END:FUNCTION  Create Volume Group  ####
+	# 2.8 – Detalhes do VG e RCRs
+	vg_sd 2>>"$log_file" | jq -r '"State: \(.state) - Number of Volumes: \(.numOfvols)"' | tee -a "$log_file"
+	vg_get 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	vg_rcr 2>>"$log_file" | jq -r '.remoteCopyRelationships[]? | "Progress: \(.progress) -- RCR: \(.name) -- Master: \(.masterVolumeName)"' | tee -a "$log_file"
+	cgname=$(vg_ls | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .consistencyGroupName' 2>>"$log_file")
+	if [[ -z "$cgname" || "$cgname" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not retrieve consistencyGroupName for VG $vg_name."
+	fi
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Consistency group name: $cgname" "1"
+	###################################
+	# 2. TARGET WORKSPACE / TARGET VSI #
+	###################################
+	base_url="$target_base_url"
+	CRN="$target_ws_crn"
+	CLOUD_INSTANCE_ID="$target_CLOUD_INSTANCE_ID"
+	PVM_ID="$target_PVM_ID"
+	# 2.10 – Onboarding dos auxiliary volumes no TARGET
+	ondesc="onboard_aux_vols_$vol_com_name"
+	auxvolnames_api=$(echo "$auxvolnames" | sed 's/,/"},{"auxVolumeName": "/g')
 
-####  START:FUNCTION  Onboarding auxiliary Volumes  ####
-onboard_aux_vol() {
-# ./bluexport_api.sh -onboard LPAR_NAME
-	test=0
-	flagj=1
-	vsi_id_bluexscrt
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting onboarding volumes for LPAR $vsi" "1"
-	echoscreen ""
-	check_locally_VSI_exists
-###########!!!!!!!!	volumes_to_GRS=$(/usr/local/bin/ibmcloud pi ins vol ls $vsi_id | tail -n +2 | awk {'print $1'} | sed -z 's/\n/,/g' | sed 's/.$//')
-	ret=$?
-	if [ $ret -ne 0 ]
+	ACTIONS=$(cat <<EOF
+		"Volumes": [
+		{
+		"auxiliaryVolumes": [
+			{
+			"auxVolumeName": "$auxvolnames_api"
+			}
+			],
+		"sourceCRN": "$source_ws_crn"
+		}
+		],
+		"description": "$ondesc"
+EOF
+)
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting auxiliary volume onboarding on target workspace for VSI $target_vsi..." "1"
+	on_cr 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	VOLUME_ONBOARDING_ID=$(on_ls | jq -r --arg desc "$ondesc" '[.onboardings[]? | select(.description == $desc)][-1].id' 2>>"$log_file")
+	if [[ -z "$VOLUME_ONBOARDING_ID" || "$VOLUME_ONBOARDING_ID" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line..."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find onboarding ID for description $ondesc."
 	fi
-##########!!!!!!!!!!	aux_volumes_to_onboard=$(/usr/local/bin/ibmcloud pi ins vol ls $vsi_id --json | grep -w '"auxVolumeName":' | awk {'print $2'} | sed -z 's/\"//g'| sed -z 's/,//g')
-	index=0
-	for i in $aux_volumes_to_onboard
-	do
-		aux_volumes[$index]=$i
-		index=$((index + 1))
-	done
-###########!!!!!!!!!!!!!	volume_name_to_onboard=$(/usr/local/bin/ibmcloud pi ins vol ls $vsi_id --json | grep -w '"name":' | awk {'print $2'} | sed -z 's/\"//g'| sed -z 's/,//g')
-	index=0
-	for i in $volume_name_to_onboard
-	do
-		volume_name[$index]=$i
-		index=$((index + 1))
-	done
-	index=0
-	for volume in ${aux_volumes[@]}
-	do
-		if [[ "$volume" == "" ]]
-		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Onboarding can not continue because volume $volume_name[$index] do not have an auxiliary volume!..."
-		fi
-		index=$((index + 1))
-	done
-	aux_vol_to_onboard=$(echo ${aux_volumes[@]}| sed 's/ /,/g')
-#############!!!!!!!!!	/usr/local/bin/ibmcloud pi ws tg $target_ws_crn
-########!!!!!!!!!!!!!!	/usr/local/bin/ibmcloud pi vol on cr --auxiliary-volumes $aux_vol_to_onboard --source-crn $vsi_ws_id
-	ret=$?
-	if [ $ret -ne 0 ]
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Onboarding request ID: $VOLUME_ONBOARDING_ID" "1"
+	# 2.11 – Monitor onboarding
+	chk_on_status
+	# 2.12 – Validar Volume Group no TARGET (mesmo consistencyGroupName)
+	VOLUME_GROUP_ID=$(vg_ls | jq -r --arg cgname "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cgname) | .id' 2>>"$log_file")
+	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` -     FAILED - Oops something went wrong!... Check messages above this line..."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Onboarding finished, but target Volume Group with consistencyGroupName $cgname not found."
 	fi
-#########!!!!!!!!!!!!	# Testar o status do onboard com o onboard_id=$(/usr/local/bin/ibmcloud pi vol on ls | grep ${aux_volumes[0]} | awk {'print $1'})
-#######!!!!!!!!!!	# onboard_status=$(/usr/local/bin/ibmcloud pi vol on ls | grep $onboard_id | awk {'print $2'})
-	# onboard_status=""
-	#while true
-	#do
-	#	onboard_previous_status=$onboard_status
-#########!!!!!!!!!!!!!!!	#	onboard_status=$(/usr/local/bin/ibmcloud pi vol on ls | grep $onboard_id | awk {'print $2'})
-	#	if [[ "$onboard_status" != "$onboard_previous_status" ]]
-	#	then
-	#		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Onboard Request Status is $onboard_status !" "1"
-	#	elif [[ "$onboard_status" == "SUCCESS" ]]
-	#	then
-	#		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Onboard Request done!" "1"
-	#		break
-	#	fi
-	#done
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - GRS completed. Target Volume Group ID: $VOLUME_GROUP_ID" "1"
+	abort "`date +%Y-%m-%d_%H:%M:%S` - === GRS successfully configured between $source_vsi -> $target_vsi (VG: $vg_name). ==="
 }
-####  END:FUNCTION  Onboarding auxiliary Volumes  ####
-
-####  START:FUNCTION  Stop Volume Group  ####
-stop_vg() {
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Under construction!!"
-}
-####  END:FUNCTION  Stop Volume Group  ####
-
-####  START:FUNCTION  Start Volume Group  ####
-start_vg() {
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Under construction!!"
-}
-####  END:FUNCTION  Start Volume Group  ####
+####  END:FUNCTION  Main GRS function: create VG in source and onboard aux volumes in target  ####
 
        ####  END - FUNCTIONS  ####
 
@@ -2317,65 +2258,44 @@ case $1 in
 	done
     ;;
 
-   -expimg)
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Under construction!!"
-    ;;
-
-   -createvg)
-	if [ $# -gt 4 ]
+   -creategrs)
+	# Syntax: bluexport.api -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES
+	if [ $# -lt 6 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 LPAR_NAME -vg VG_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport.api $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES"
 	fi
-	if [ $# -lt 4 ]
+	if [ $# -gt 6 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport_api.sh $1 LPAR_NAME -vg VG_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport.api $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES"
 	fi
-	flagvg=$3
-	if [[ "$flagvg" == "-vg" ]]
-	then
-		vg_flag="--volume-group-name"
-		vg_flag_echo="Volume Group"
-	else
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Argument 3 must be -vg"
-	fi
-#	vsi="${2,,}"
-	vsi=$2
+	test=0
+	flagj=1    # não precisamos de iASP / flush aqui
+	source_vsi=$2
+	target_vsi=$3
 	vg_name=$4
-	create_vg
-	abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully Create $vg_flag_echo $vg_name !"
-    ;;
-
-   -onboard)
-	if [ $# -gt 3 ]
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 LPAR_NAME SHORT_NAME_TARGET_WS"
-	fi
-	if [ $# -lt 3 ]
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport_api.sh $1 LPAR_NAME SHORT_NAME_TARGET_WS"
-	fi
-#	vsi="${2,,}"
-	vsi=$2
-	target_short_ws=$3
-	target_ws_crn=$(cat $bluexscrt | grep -w $target_short_ws | head -n1 | awk {'print $2'})
-	if [[ "$target_ws_crn" == "" ]]
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Workspace with Shortname $target_short_ws does not exist in $bluexscrt file... Aborting!..."
-	fi
-	onboard_aux_vol
-	abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully Onboarded LPAR $vsi !"
-    ;;
-
-   -crgrs)
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Under construction!!"
-    ;;
-
-   -failover)
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Under construction!!"
-    ;;
-
-   -failback)
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Under construction!!"
+	vol_com_name=$5        # prefixo/nome comum dos volumes no SOURCE
+	tgvol_com_name=$6      # mantido para futura lógica no TARGET (neste momento é apenas guardado)
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Validating source VSI $source_vsi and target VSI $target_vsi in config and in IBM Cloud..." "1"
+	# SOURCE VSI – verificar se existe e guardar contexto
+	vsi=$source_vsi
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	source_ws_crn="$shortnamecrn"
+	source_CLOUD_INSTANCE_ID="$CLOUD_INSTANCE_ID"
+	source_base_url="$base_url"
+	source_PVM_ID="$PVM_ID"
+	source_vsi_id="$vsi_id"
+	# TARGET VSI – verificar se existe e guardar contexto
+	vsi=$target_vsi
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	target_ws_crn="$shortnamecrn"
+	target_CLOUD_INSTANCE_ID="$CLOUD_INSTANCE_ID"
+	target_base_url="$base_url"
+	target_PVM_ID="$PVM_ID"
+	target_vsi_id="$vsi_id"
+  	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Both VSIs found and validated. Proceeding with GRS creation..." "1"
+	create_grs
     ;;
 
    -v | --version)
