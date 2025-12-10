@@ -486,6 +486,10 @@ snap_ls() {
 	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
 
+snap_cr() {
+	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/snapshots -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+}
+
 snap_del() {
 	curl -sX DELETE $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots/$SNAP_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
@@ -822,35 +826,130 @@ flush_asps() {
 ####  START:FUNCTION - Do the Snapshot Create  ####
 do_snap_create() {
 	flush_asps
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Executing Snapshot $snap_name of Instance $vsi with volumes $volumes_to_echo" "1"
-########!!!!!!!!!	snap_cr_cmd="/usr/local/bin/ibmcloud pi ins snap cr $vsi_id --name $snap_name $description $flag_volumes $volumes_to_snap"
-	eval $snap_cr_cmd 2>> $log_file
-	if [ $? -eq 1 ]
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Snapshot $snap_name of Instance $vsi with volumes $volumes_to_echo" "1"
+
+	# Construir lista de volumeIDs (se tiveres indicado volumes; se não, o serviço decide)
+	local json_ids=""
+	if [[ -n "$volumes_to_snap" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Oops something went wrong!... Check the log above this line..."
-	else
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Waiting for Snapshot $snap_name to reach 100%..." "1"
-		snap_percent=0
-		while [ $snap_percent -lt 100 ]
+		# Obter lista de volumes da VSI via API
+		local vols_json
+		vols_json=$(ins_vol_ls 2>>"$log_file")
+		if [[ -z "$vols_json" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list instance volumes via API. Check log above this line..."
+		fi
+
+		# volumes_to_snap é comma-separated de nomes ou IDs
+		IFS=',' read -r -a snap_vols_array <<< "$volumes_to_snap"
+
+		for vtoken in "${snap_vols_array[@]}"
 		do
-			snap_percent_before=$snap_percent
-			sleep 10
-#########!!!!!!!!!!!!!			snap_percent=$(/usr/local/bin/ibmcloud pi ins snap ls | grep -w $snap_name | awk 'NF>1{print $NF}')
-			if [[ "$snap_percent" == "" ]]
+			local vtrim
+			vtrim=$(echo "$vtoken" | xargs)
+			[[ -z "$vtrim" ]] && continue
+
+			# Match por volumeID OU por name
+			local vol_id
+			vol_id=$(echo "$vols_json" | jq -r --arg t "$vtrim" '
+				.volumes[]? | select(.volumeID == $t or .name == $t) | .volumeID
+			' 2>>"$log_file" | head -n1)
+
+			if [[ -z "$vol_id" || "$vol_id" == "null" ]]
 			then
-				abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Oops something went wrong!... Check the log above this line..."
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume '$vtrim' not found on VSI $vsi. Use exact Volume Name or Volume ID."
 			fi
-			if [[ "$snap_percent" != "$snap_percent_before" ]]
-			then
-				if [[ "$snap_percent" == "100" ]]
-				then
-					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Snapshot $snap_name reached 100% - Done!" "1"
-				else
-					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Snapshot $snap_name at $snap_percent%" "1"
-				fi
-			fi
+			json_ids="$json_ids\"$vol_id\","
 		done
+
+		# remover última vírgula
+		json_ids="${json_ids%,}"
+		if [[ -z "$json_ids" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No valid volumes resolved from '$volumes_to_snap'."
+		fi
 	fi
+
+	# Construir payload JSON (ACTIONS) só com name, description, volumeIDs
+	ACTIONS="\"name\":\"$snap_name\""
+
+	if [[ -n "$snap_description" ]]
+	then
+		ACTIONS="$ACTIONS,\"description\":\"$snap_description\""
+	fi
+
+	if [[ -n "$json_ids" ]]
+	then
+		ACTIONS="$ACTIONS,\"volumeIDs\":[${json_ids}]"
+	fi
+
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Calling snapshots API (snap_cr) with payload: {$ACTIONS}" "1"
+
+	# Chamada API para criar Snapshot
+	local resp
+	resp=$(snap_cr 2>>"$log_file")
+	if [ $? -ne 0 ] || [[ -z "$resp" ]]
+	then
+		echo "$resp" >>"$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error calling snapshot create API. Check log above this line..."
+	fi
+
+	# Verificar se veio algum erro no JSON
+	if echo "$resp" | jq -e '.error? // .errors? | length > 0' >/dev/null 2>&1
+	then
+		echo "$resp" | jq >>"$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot creation returned error. Check log above this line..."
+	fi
+
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Snapshot $snap_name to reach 100%..." "1"
+
+	# Tentar obter o snapshotID a partir da resposta; se não vier, vamos buscá-lo à lista
+	local snap_id
+	snap_id=$(echo "$resp" | jq -r '.snapshotID // .id // empty' 2>/dev/null)
+	if [[ -z "$snap_id" || "$snap_id" == "null" ]]
+	then
+		local snaps_json
+		snaps_json=$(snap_ls 2>>"$log_file")
+		snap_id=$(echo "$snaps_json" | jq -r --arg name "$snap_name" '.snapshots[]? | select(.name == $name) | .snapshotID' 2>>"$log_file" | head -n1)
+	fi
+
+	if [[ -z "$snap_id" || "$snap_id" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve snapshot ID for $snap_name. Check IBM Cloud portal / API."
+	fi
+
+	# Loop de monitorização do percentComplete
+	local snap_percent=0
+	local snap_percent_before=0
+	while [ "$snap_percent" -lt 100 ]
+	do
+		sleep 10
+		local status_json
+		status_json=$(snap_ls 2>>"$log_file")
+		if [ $? -ne 0 ] || [[ -z "$status_json" ]]
+		then
+			echo "$status_json" >>"$log_file"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading snapshot status from API."
+		fi
+
+		snap_percent=$(echo "$status_json" | jq -r --arg id "$snap_id" '
+			.snapshots[]? | select(.snapshotID == $id) | .percentComplete // 0
+		' 2>>"$log_file")
+
+		[[ "$snap_percent" =~ ^[0-9]+$ ]] || snap_percent=0
+
+		if [ "$snap_percent" -ne "$snap_percent_before" ]
+		then
+			if [ "$snap_percent" -ge 100 ]
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name reached 100% - Done!" "1"
+				break
+			else
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name at ${snap_percent}%." "1"
+				snap_percent_before=$snap_percent
+			fi
+		fi
+	done
 }
 ####  END:FUNCTION - Do the Snapshot Create  ####
 
@@ -1605,55 +1704,62 @@ case $1 in
     ;;
 
   -snapcr)
+	# Args: VSI_NAME SNAPSHOT_NAME 0|"DESCRIPTION" 0|[VOLUMES (comma separated names or IDs)]
 	if [ $# -lt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
 	fi
-	if [ $# -gt 5 ] 
+	if [ $# -gt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
 	fi
-	vsi=$2
+
+	vsi="$2"
 	vsi_id_bluexscrt
 	test=0
-	snap_name=$3
-##########!!!!!!!!!!!	snap_name_exists=$(/usr/local/bin/ibmcloud pi ins snap ls | grep -w $snap_name)
-	if [[ "$snap_name_exists" != "" ]]
+	snap_name="$3"
+
+	# Verificar se já existe snapshot com este nome via API
+	snaps_json=$(snap_ls 2>>"$log_file")
+	if echo "$snaps_json" | jq -e --arg name "$snap_name" '.snapshots[]? | select(.name == $name)' >/dev/null 2>&1
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Already exists one Snapshot with name $snap_name, please choose a diferent name or use flag -snapupd to change the name."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Already exists one Snapshot with name $snap_name, please choose a different name or use flag -snapupd to change the name."
 	fi
-	description=$4
-	if [ -n "$description" ] && [ "$description" -eq "$description" ] 2>/dev/null
+
+	# Argumento DESCRIPTION: 0 ou frase entre aspas
+	description_arg="$4"
+	if [ -n "$description_arg" ] && [ "$description_arg" -eq "$description_arg" ] 2>/dev/null
 	then
-		if [ $4 -eq 0 ]
+		if [ "$description_arg" -eq 0 ]
 		then
-			description=""
+			snap_description=""
 		else
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|[VOLUMES - Comma separated Volumes name list to snap]"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|[VOLUMES - Comma separated Volumes name list to snap]"
 		fi
 	else
-		description="--description \""$description"\""
+		snap_description="$description_arg"
 	fi
-	volumes_to_snap=$5
-	if [ -n "$volumes_to_snap" ] && [ "$volumes_to_snap" -eq "$volumes_to_snap" ] 2>/dev/null
+
+	# Argumento VOLUMES: 0 ou lista comma separated de nomes/IDs
+	volumes_arg="$5"
+	if [ -n "$volumes_arg" ] && [ "$volumes_arg" -eq "$volumes_arg" ] 2>/dev/null
 	then
-		if [ $5 -eq 0 ]
+		if [ "$volumes_arg" -eq 0 ]
 		then
-			flag_volumes=""
 			volumes_to_snap=""
 			volumes_to_echo="ALL"
 		else
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument VOLUMES must be 0 or comma separated names or IDs!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|[VOLUMES - Comma separated Volumes name list to snap]"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument VOLUMES must be 0 or comma separated names or IDs!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|[VOLUMES - Comma separated Volumes name list to snap]"
 		fi
 	else
-		flag_volumes="--volumes "
-		volumes_to_echo=$volumes_to_snap
-#		volumes_to_snap="--volumes "$volumes_to_snap
+		volumes_to_snap="$volumes_arg"
+		volumes_to_echo="$volumes_arg"
 	fi
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Snapshot $snap_name of VSI $vsi with volumes: $volumes_to_echo !" "1"
+
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot $snap_name of VSI $vsi with volumes: $volumes_to_echo !" "1"
 	check_locally_VSI_exists
 	do_snap_create
-	abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully finished Snapshot $snap_name of VSI $vsi with volumes: $volumes_to_echo !"
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished Snapshot $snap_name of VSI $vsi with volumes: $volumes_to_echo !"
     ;;
 
   -snapupd)
@@ -1811,6 +1917,7 @@ case $1 in
 			echo "$snaps_json" | jq -r '.snapshots // [] |.[] |
 			[
 			.name,
+			.description,
 			.creationDate,
 			.lastUpdateDate,
 			.action,
@@ -1821,7 +1928,7 @@ case $1 in
 			.pvmInstanceID,
 			(.volumeSnapshots | tostring)
 			] | @tsv' 2>>"$log_file" | \
-			while IFS=$'\t' read -r s_name s_cdate s_udate s_action s_id s_pct s_status s_sdetail s_pvmid s_vols
+			while IFS=$'\t' read -r s_name s_description s_cdate s_udate s_action s_id s_pct s_status s_sdetail s_pvmid s_vols
 			do
 				# Resolve Instance Name from config JSON for this workspace + pvmInstanceID
 				instname=$(jq -r --arg ws "$ws" --arg id "$s_pvmid" '
@@ -1832,6 +1939,7 @@ case $1 in
 				{
 					echo "----------------------- Snapshot Found -----------------------"
 					echo "Name: $s_name"
+					echo "Description: $s_description" 
 					echo "Creation Date: $s_cdate"
 					echo "Last Update Date: $s_udate"
 					echo "Action: $s_action"
