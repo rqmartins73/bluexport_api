@@ -493,6 +493,10 @@ snap_cr() {
 snap_del() {
 	curl -sX DELETE $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots/$SNAP_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
+
+snap_upd() {
+	curl -sX PUT $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots/$SNAP_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+}
 #### END:FUNCTION - API Commands ####
 
 #### START:FUNCTION - Check if image-catalog and Cloud Object has images from last time and deleted it ####
@@ -955,16 +959,61 @@ do_snap_create() {
 
 ####  START:FUNCTION - Do the Snapshot Update  ####
 do_snap_update() {
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Executing Snapshot $snap_name Update $new_name_echo" "1"
-########!!!!!!!!!!!!	snap_id=$(/usr/local/bin/ibmcloud pi ins snap ls | grep -w $snap_name | awk {'print $1'})
-##########!!!!!!!!	snap_upd_cmd="/usr/local/bin/ibmcloud pi ins snap upd $snap_id $description $new_name"
-	eval $snap_upd_cmd 2>> $log_file
-	if [ $? -eq 0 ]
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Snapshot $snap_name Update $new_name_echo $new_description_echo" "1"
+
+	# Obter o ID do snapshot pelo nome + PVM_ID
+	local snaps_json
+	snaps_json=$(snap_ls 2>>"$log_file")
+	local snap_id
+	snap_id=$(echo "$snaps_json" | jq -r \
+		--arg name "$snap_name" \
+		--arg pvm "$PVM_ID" \
+		'.snapshots // [] | .[] | select(.name == $name and .pvmInstanceID == $pvm) | .snapshotID' \
+		2>>"$log_file" | head -n1)
+
+	if [[ -z "$snap_id" || "$snap_id" == "null" ]]
 	then
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Snapshot $snap_name updated $new_name_echo $new_description_echo - Done!" "1"
-	else
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Oops something went wrong!... Check the log above this line..."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID) does not exist. Use -snapcr to create one."
 	fi
+
+	# Construir payload ACTIONS com o que mudar (name / description)
+	local ACTIONS=""
+	if [[ -n "$snap_new_name" ]]
+	then
+		ACTIONS="\"name\":\"$snap_new_name\""
+	fi
+	if [[ -n "$snap_new_description" ]]
+	then
+		if [[ -n "$ACTIONS" ]]; then
+			ACTIONS="$ACTIONS,\"description\":\"$snap_new_description\""
+		else
+			ACTIONS="\"description\":\"$snap_new_description\""
+		fi
+	fi
+
+	if [[ -z "$ACTIONS" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR: no fields to update for snapshot $snap_name."
+	fi
+
+	SNAP_ID="$snap_id"
+	local resp
+	resp=$(snap_upd 2>>"$log_file")
+
+	if [ $? -ne 0 ] || [[ -z "$resp" ]]
+	then
+		echo "$resp" >>"$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error calling snapshot update API. Check the log above this line..."
+	fi
+
+	# Verificar se veio algum erro no JSON (se a API devolver corpo)
+	if echo "$resp" | jq -e '.error? // .errors? | length > 0' >/dev/null 2>&1
+	then
+		echo "$resp" | jq >>"$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot update returned error. Check log above this line..."
+	fi
+
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name updated $new_name_echo $new_description_echo - Done!" "1"
 }
 ####  END:FUNCTION - Do the Snapshot Update  ####
 
@@ -1772,71 +1821,115 @@ case $1 in
     ;;
 
   -snapupd)
+	# Args: VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|["DESCRIPTION"]
 	if [ $# -lt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 	fi
-	if [ $# -gt 5 ] 
+	if [ $# -gt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 	fi
+
 	test=0
-	flagj=1
-	vsi=$2
+	flagj=1               # não vamos buscar iASP nem fazer flush aqui
+	vsi="$2"
 	vsi_id_bluexscrt
-	snap_name=$3
-	desc=$5
-	sname=$4
-	if ([ -n "$desc" ] && [ "$desc" -eq "$desc" ] && [ -n "$sname" ] && [ "$sname" -eq "$sname" ])2>/dev/null
+	snap_name="$3"
+
+	new_name_arg="$4"
+	description_arg="$5"
+
+	# Validar que pelo menos uma flag faz sentido (não pode ser 0 e 0)
+	if [ -n "$new_name_arg" ] && [ -n "$description_arg" ] \
+	   && [ "$new_name_arg" -eq "$new_name_arg" ] 2>/dev/null \
+	   && [ "$description_arg" -eq "$description_arg" ] 2>/dev/null
 	then
-		if [ $4 -eq 0 ] && [ $5 -eq 0 ]
+		if [ "$new_name_arg" -eq 0 ] && [ "$description_arg" -eq 0 ]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - You must pass at least one flag, DESCRIPTION or NEW_SNAPSHOT_NAME!..."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - You must pass at least one flag, DESCRIPTION or NEW_SNAPSHOT_NAME!..."
 		fi
 	fi
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Snapshot $snap_name Update !" "1"
-#####	snap_name_exists=$(snap_ls | grep -w $snap_name)
-	if [[ "$snap_name_exists" == "" ]]
+
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot $snap_name Update !" "1"
+
+	# Garantir que o snapshot existe para esta VSI
+	snaps_json=$(snap_ls 2>>"$log_file")
+	existing_snap_name=$(
+		echo "$snaps_json" | jq -r \
+			--arg name "$snap_name" \
+			--arg pvm "$PVM_ID" \
+			'.snapshots // [] | .[] | select(.name == $name and .pvmInstanceID == $pvm) | .name' \
+			2>>"$log_file" | head -n1
+	)
+
+	if [ -z "$existing_snap_name" ] || [ "$existing_snap_name" = "null" ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Snapshot with name $snap_name does not exist, please choose a diferent name or use flag -snapcr to create one."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name does not exist for VSI $vsi, please choose a different name or use flag -snapcr to create one."
 	fi
-	description=$5
-	if [ -n "$description" ] && [ "$description" -eq "$description" ] 2>/dev/null
+
+	########################
+	# Tratar DESCRIPTION
+	########################
+	snap_new_description=""
+	new_description_echo=""
+
+	if [ -n "$description_arg" ] && [ "$description_arg" -eq "$description_arg" ] 2>/dev/null
 	then
-		if [ $5 -eq 0 ]
+		# numérico
+		if [ "$description_arg" -eq 0 ]
 		then
-			description=""
+			# 0 => não muda descrição
+			snap_new_description=""
 			new_description_echo=""
 		else
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax:  bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax:  bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 		fi
 	else
-		description="--description \""$description"\""
-		new_description_echo="with new Description \"$5\""
+		# texto => nova descrição
+		snap_new_description="$description_arg"
+		new_description_echo="with new Description \"$description_arg\""
 	fi
-	new_snap_name=$4
-	if [ -n "$new_snap_name" ] && [ "$new_snap_name" -eq "$new_snap_name" ] 2>/dev/null
+
+	########################
+	# Tratar NEW_SNAPSHOT_NAME
+	########################
+	snap_new_name=""
+	new_name_echo=""
+
+	if [ -n "$new_name_arg" ] && [ "$new_name_arg" -eq "$new_name_arg" ] 2>/dev/null
 	then
-		if [ $4 -eq 0 ]
+		# numérico
+		if [ "$new_name_arg" -eq 0 ]
 		then
+			# 0 => não muda nome
+			snap_new_name=""
 			new_name_echo=""
-			new_name="--name \""$snap_name"\""
 		else
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Argument NEW_SNAPSHOT_NAME must be 0 or a name!! Syntax:  bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument NEW_SNAPSHOT_NAME must be 0 or a name!! Syntax:  bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 		fi
 	else
-		if [[ "$new_snap_name" == "$snap_name" ]]
+		# texto
+		if [[ "$new_name_arg" == "$snap_name" ]]
 		then
+			# mesmo nome => efetivamente não muda
+			snap_new_name=""
 			new_name_echo=""
 		else
-			new_name_echo="with new Name "$new_snap_name
-			snap_name_new=$new_snap_name
-			new_name="--name \""$new_snap_name"\""
+			snap_new_name="$new_name_arg"
+			new_name_echo="with new Name $snap_new_name"
 		fi
 	fi
+
+	# Garantir que pelo menos uma coisa vai ser alterada
+	if [[ -z "$snap_new_name" && -z "$snap_new_description" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Nothing to update: NEW_SNAPSHOT_NAME and DESCRIPTION both resolve to 'no change'."
+	fi
+
 	check_locally_VSI_exists
 	do_snap_update
-	abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully finished Snapshot $snap_name Update $new_name_echo !"
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished Snapshot $snap_name Update $new_name_echo $new_description_echo !"
     ;;
 
   -snapdel)
