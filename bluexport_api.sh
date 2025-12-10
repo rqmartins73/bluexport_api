@@ -34,12 +34,12 @@
 #
 # === GRS (Global Replication Services) ===
 # Create GRS Volume Group and onboard auxiliary volumes:
-#   ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES
+#   ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 #
 #  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON.
 #  VG_NAME:                        Name for the Volume Group to create on the source workspace.
-#  SOURCE_VOLUME_NAMES:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS).
-#  TARGET_VOLUME_NAMES:            Common name/prefix for target VSI volumes (used mainly for documentation/logging).
+#  SOURCE_VOLUMES_NAME:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS).
+#  TARGET_VOLUMES_NAME:            Common name/prefix for target VSI volumes (used mainly for documentation/logging).
 #
 # === Examples ===
 # Capture all volumes:          ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily
@@ -276,12 +276,14 @@ help() {
 	echoscreen ""
 	echoscreen "=== GRS (Global Replication Services) ==="
 	echoscreen "Create GRS Volume Group and onboard auxiliary volumes:"
-	echoscreen "  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES"
+	echoscreen "  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+	echoscreen "Delete GRS Volume Group and auxiliary volumes:"
+	echoscreen "  ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	echoscreen ""
 	echoscreen "  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON."
 	echoscreen "  VG_NAME:                        Name for the Volume Group to create on the source workspace."
-	echoscreen "  SOURCE_VOLUME_NAMES:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS)."
-	echoscreen "  TARGET_VOLUME_NAMES:            Common name/prefix for target VSI volumes (used mainly for documentation/logging)."
+	echoscreen "  SOURCE_VOLUMES_NAME:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS)."
+	echoscreen "  TARGET_VOLUMES_NAME:            Common name/prefix for target VSI volumes (used mainly for documentation/logging)."
 	echoscreen ""
 	echoscreen "=== Examples ==="
 	echoscreen "Capture all volumes:          ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
@@ -1352,7 +1354,6 @@ vchtier() {
 ####  START:FUNCTION  Main GRS function: create VG in source and onboard aux volumes in target  ####
 create_grs() {
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting GRS configuration between source VSI $source_vsi and target VSI $target_vsi (VG: $vg_name) ===" "1"
-
 	####################################
 	# 1. SOURCE WORKSPACE / SOURCE VSI #
 	####################################
@@ -1361,7 +1362,6 @@ create_grs() {
 	CRN="$source_ws_crn"
 	CLOUD_INSTANCE_ID="$source_CLOUD_INSTANCE_ID"
 	PVM_ID="$source_PVM_ID"
-
 	# 2.3 – Obter volumes associados ao SOURCE_VSI
 	vol_ids=$(ins_vol_ls | jq -r '.volumes[]? | .volumeID' 2>>"$log_file")
 	if [[ -z "$vol_ids" ]]
@@ -1370,13 +1370,10 @@ create_grs() {
 	fi
 	vol_count=$(echo "$vol_ids" | wc -w)
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Source VSI $source_vsi has $vol_count attached volumes." "1"
-
 	# 2.4 – Garantir que todos os volumes estão com replicationEnabled=true
 	chk_vol_rep
-
 	# 2.4 (cont.) – Assegurar consistent_copying antes de criar o VG
 	chk_vol_mirror
-
 	# 2.5 – Criar Volume Group no SOURCE
 	# Construir JSON array de volumeIDs sem quebras de linha
 	json_vol_ids=""
@@ -1386,13 +1383,10 @@ create_grs() {
 	done
 	# remover última vírgula
 	json_vol_ids="${json_vol_ids%,}"
-
 	ACTIONS="\"name\":\"$vg_name\",\"volumeIDs\":[${json_vol_ids}]"
-
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Creating Volume Group $vg_name in source workspace with volumeIDs: [${json_vol_ids}]..." "1"
 	resp_vg=$(vg_cr 2>>"$log_file")
 	echo "$resp_vg" >>"$log_file"
-
 	# Confirmar ID do VG
 	VOLUME_GROUP_ID=$(vg_ls | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .id' 2>>"$log_file")
 	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]
@@ -1400,7 +1394,6 @@ create_grs() {
 		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find Volume Group ID for $vg_name after creation."
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Group $vg_name created with ID $VOLUME_GROUP_ID." "1"
-
 	# 2.6 – Obter nomes dos auxiliary volumes (auxVolumeName)
 	auxvol_names=$(vg_rcr | jq -r '.remoteCopyRelationships[]? | select(.primaryRole=="master") | .auxVolumeName' 2>>"$log_file")
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Auxiliary volumes on target storage: $auxvol_names" "1"
@@ -1438,7 +1431,6 @@ create_grs() {
 	# 2.10 – Onboarding dos auxiliary volumes no TARGET
 	ondesc="onboard_aux_vols_$vol_com_name"
 	auxvolnames_api=$(echo "$auxvolnames" | sed 's/,/"},{"auxVolumeName": "/g')
-
 	ACTIONS=$(cat <<EOF
 		"Volumes": [
 		{
@@ -1473,6 +1465,167 @@ EOF
 	abort "`date +%Y-%m-%d_%H:%M:%S` - === GRS successfully configured between $source_vsi -> $target_vsi (VG: $vg_name). ==="
 }
 ####  END:FUNCTION  Main GRS function: create VG in source and onboard aux volumes in target  ####
+
+#### START:FUNCTION - Delete GRS (without deleting primary volumes) ####
+delete_grs() {
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting GRS delete between source VSI $source_vsi and target VSI $target_vsi (VG: $vg_name) ===" "1"
+	####################################
+	# 1. SOURCE WORKSPACE / SOURCE VG  #
+	####################################
+	base_url="$source_base_url"
+	CRN="$source_ws_crn"
+	CLOUD_INSTANCE_ID="$source_CLOUD_INSTANCE_ID"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Working on SOURCE workspace for VSI $source_vsi..." "1"
+	local vg_json
+	vg_json=$(vg_ls 2>>"$log_file")
+	VOLUME_GROUP_ID=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '
+		.volumeGroups[]? | select(.name == $vg) | .id
+	' 2>>"$log_file")
+
+	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Group $vg_name not found in source workspace. Aborting GRS delete."
+	fi
+	cgname=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '
+		.volumeGroups[]? | select(.name == $vg) | .consistencyGroupName
+	' 2>>"$log_file")
+	if [[ -z "$cgname" || "$cgname" == "null" ]]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for VG $vg_name in source workspace."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG $vg_name has ID $VOLUME_GROUP_ID and consistencyGroupName $cgname." "1"
+	# 1.1 Remover volumes do VG (source)
+	src_vol_ids=$(vol_ls 2>>"$log_file" | jq -r --arg prefix "$vol_com_name" '
+		.volumes[]? | select(.name | startswith($prefix)) | .volumeID
+	')
+	if [[ -z "$src_vol_ids" ]]; then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No source volumes found with prefix $vol_com_name to remove from VG $vg_name. Continuing..." "1"
+	else
+		local json_ids=""
+		for vid in $src_vol_ids; do
+			json_ids="$json_ids\"$vid\","
+		done
+		json_ids="${json_ids%,}"
+
+		ACTIONS="\"removeVolumes\":[${json_ids}]"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Removing source volumes from VG $vg_name: [${json_ids}]..." "1"
+		vg_upd 2>>"$log_file" | tee -a "$log_file" >/dev/null
+		# 1.2 Esperar o VG ficar em estado empty
+		while true
+		do
+			local vg_state
+			vg_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty')
+			if [[ "$vg_state" == "empty" ]]; then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name is in state 'empty'." "1"
+				break
+			fi
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG $vg_name still in state '$vg_state'. Waiting 30 seconds..." "1"
+			sleep 30
+		done
+	fi
+	# 1.3 Apagar o VG no source
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Deleting source Volume Group $vg_name..." "1"
+	vg_del 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	# 1.4 Desativar replication nos volumes de origem (sem os apagar)
+	if [[ -n "$src_vol_ids" ]]; then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Disabling replication on source volumes with prefix $vol_com_name..." "1"
+		for vid in $src_vol_ids
+		do
+			VOL_ID="$vid"
+			ACTIONS='"replicationEnabled": false'
+			vol_act 2>>"$log_file" | tee -a "$log_file" >/dev/null
+		done
+		# Esperar até todos ficarem replicationEnabled=false
+		while true
+		do
+			if vol_ls 2>>"$log_file" | jq -r --arg prefix "$vol_com_name" '
+				.volumes[]? | select(.name | startswith($prefix)) | .replicationEnabled
+			' | grep -q true
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Some source volumes still have replicationEnabled=true. Waiting 10 seconds..." "1"
+				sleep 10
+			else
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - All source volumes with prefix $vol_com_name now have replicationEnabled=false." "1"
+				break
+			fi
+		done
+	else
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No source volumes to disable replication for (prefix $vol_com_name)." "1"
+	fi
+	####################################
+	# 2. TARGET WORKSPACE / TARGET VG  #
+	####################################
+	base_url="$target_base_url"
+	CRN="$target_ws_crn"
+	CLOUD_INSTANCE_ID="$target_CLOUD_INSTANCE_ID"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Working on TARGET workspace for VSI $target_vsi..." "1"
+	vg_json=$(vg_ls 2>>"$log_file")
+	VOLUME_GROUP_ID=$(echo "$vg_json" | jq -r --arg cg "$cgname" '
+		.volumeGroups[]? | select(.name | startswith($cg)) | .id
+	' 2>>"$log_file")
+
+	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]; then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group for consistencyGroupName $cgname not found. Skipping VG delete on target." "1"
+	else
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG found with ID $VOLUME_GROUP_ID (name starts with $cgname)." "1"
+		# 2.1 Remover auxiliary volumes do VG no target
+		# Usamos o mesmo prefixo vol_com_name, tal como no source,
+		# porque os volumes auxiliares mantêm o padrão (ex.: IBMiGRS)
+		tg_vol_ids=$(vol_ls 2>>"$log_file" | jq -r --arg prefix "$vol_com_name" '
+			.volumes[]? 
+			| select(.name | contains($prefix)) 
+			| .volumeID
+			')
+		if [[ -z "$tg_vol_ids" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No target volumes found with pattern $vol_com_name to remove from VG. Continuing..." "1"
+		else
+			local tg_json_ids=""
+			for vid in $tg_vol_ids
+			do
+				tg_json_ids="$tg_json_ids\"$vid\","
+			done
+			tg_json_ids="${tg_json_ids%,}"
+			ACTIONS="\"removeVolumes\":[${tg_json_ids}]"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Removing target volumes from VG (CG: $cgname): [${tg_json_ids}]..." "1"
+			vg_upd 2>>"$log_file" | tee -a "$log_file" >/dev/null
+		fi
+	fi
+	####################################
+	# 3. TARGET VSI: Detach & delete aux volumes #
+	####################################
+	# Contexto da VSI target para detach volumes
+	PVM_ID="$target_PVM_ID"
+	# 3.1 Detach de todos os volumes (incluindo boot) do TARGET_VSI
+	ACTIONS='"detachAllVolumes": true, "detachPrimaryBootVolume": true'
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Detaching all volumes (including boot) from target VSI $target_vsi..." "1"
+	ins_vol_bdet 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	# Esperar até não haver volumes anexados
+	while true
+	do
+		local attached
+		attached=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .name' 2>/dev/null)
+		if [[ -z "$attached" ]]; then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No volumes attached to target VSI $target_vsi." "1"
+			break
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VSI $target_vsi still has attached volumes. Waiting 30 seconds..." "1"
+		sleep 30
+	done
+	# 3.2 Apagar auxiliary volumes no target (os mesmos IDs apanhados antes)
+	if [[ -n "$tg_vol_ids" ]]; then
+		local tg_del_ids=""
+		for vid in $tg_vol_ids; do
+			tg_del_ids="$tg_del_ids\"$vid\","
+		done
+		tg_del_ids="${tg_del_ids%,}"
+		ACTIONS="\"volumeIDs\":[${tg_del_ids}]"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Deleting auxiliary volumes on target: [${tg_del_ids}]..." "1"
+		vol_bdel 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	else
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No auxiliary volumes to delete on target (tgvol_com_name=$tgvol_com_name)." "1"
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === GRS delete completed between $source_vsi and $target_vsi (VG: $vg_name). Primary VSI remains with its volumes; auxiliary side cleaned up. ===" "1"
+}
+#### END:FUNCTION - Delete GRS ####
 
        ####  END - FUNCTIONS  ####
 
@@ -2347,14 +2500,14 @@ EOF
     ;;
 
    -creategrs)
-	# Syntax: bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES
-	if [ $# -lt 6 ]
+	# Syntax: bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
+	if [ $# -lt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	fi
-	if [ $# -gt 6 ]
+	if [ $# -gt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES TARGET_VOLUME_NAMES"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	fi
 	test=0
 	flagj=1    # não precisamos de iASP / flush aqui
@@ -2362,7 +2515,6 @@ EOF
 	target_vsi=$3
 	vg_name=$4
 	vol_com_name=$5        # prefixo/nome comum dos volumes no SOURCE
-	tgvol_com_name=$6      # mantido para futura lógica no TARGET (neste momento é apenas guardado)
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Validating source VSI $source_vsi and target VSI $target_vsi in config and in IBM Cloud." "1"
 	# SOURCE VSI – verificar se existe e guardar contexto
 	vsi=$source_vsi
@@ -2421,6 +2573,88 @@ EOF
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Both VSIs found and validated. Proceeding with GRS creation..." "1"
 	create_grs
     ;;
+
+  -deletegrs)
+	# Syntax: bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES
+	if [ $# -lt 5 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES"
+	fi
+	if [ $# -gt 5 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES"
+	fi
+	test=0
+	flagj=1    # não precisamos de iASP / flush aqui
+	source_vsi=$2
+	target_vsi=$3
+	vg_name=$4
+	vol_com_name=$5    # prefixo/nome comum dos volumes no SOURCE (e padrão para TARGET)
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Validating source VSI $source_vsi and target VSI $target_vsi in config and in IBM Cloud." "1"
+	# SOURCE VSI – verificar se existe e guardar contexto
+	vsi=$source_vsi
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	source_ws_crn="$shortnamecrn"
+	source_CLOUD_INSTANCE_ID="$CLOUD_INSTANCE_ID"
+	source_base_url="$base_url"
+	source_PVM_ID="$PVM_ID"
+	source_vsi_id="$vsi_id"
+	# TARGET VSI – verificar se existe e guardar contexto
+	vsi=$target_vsi
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	target_ws_crn="$shortnamecrn"
+	target_CLOUD_INSTANCE_ID="$CLOUD_INSTANCE_ID"
+	target_base_url="$base_url"
+	target_PVM_ID="$PVM_ID"
+	target_vsi_id="$vsi_id"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Both VSIs validated. Proceeding with GRS delete..." "1"
+	delete_grs
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished GRS delete for VG $vg_name between $source_vsi and $target_vsi ==="
+    ;;
+
+   -deletegrs)
+	# Syntax: bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
+	if [ $# -lt 5 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+	fi
+	if [ $# -gt 5 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+	fi
+		test=0
+	flagj=1   # não queremos SSH / iASP discovery aqui
+		source_vsi=$2
+	target_vsi=$3
+	vg_name=$4
+	vol_com_name=$5       # prefixo volumes SOURCE
+	tgvol_com_name=$6     # prefixo volumes TARGET
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Validating source VSI $source_vsi and target VSI $target_vsi in config and IBM Cloud..." "1"
+	# SOURCE VSI – obter contexto
+	vsi=$source_vsi
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	source_ws_crn="$shortnamecrn"
+	source_CLOUD_INSTANCE_ID="$CLOUD_INSTANCE_ID"
+	source_base_url="$base_url"
+	source_PVM_ID="$PVM_ID"
+	source_vsi_id="$vsi_id"
+	# TARGET VSI – obter contexto
+	vsi=$target_vsi
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	target_ws_crn="$shortnamecrn"
+	target_CLOUD_INSTANCE_ID="$CLOUD_INSTANCE_ID"
+	target_base_url="$base_url"
+	target_PVM_ID="$PVM_ID"
+	target_vsi_id="$vsi_id"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Both VSIs validated. Proceeding with GRS delete..." "1"
+	delete_grs
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished GRS delete for VG $vg_name between $source_vsi and $target_vsi ==="
+    ;;
+
 
    -v | --version)
     if [ $# -gt 1 ]
