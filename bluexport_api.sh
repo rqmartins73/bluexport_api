@@ -355,6 +355,9 @@ vol_bdel() {
 	curl -X DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
+vol_rcr() {
+	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volumes/$VOL_ID/remote-copy -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+}
 
 ## Volume cloning (attached / detached)
 vol_cl_cr() {
@@ -503,9 +506,7 @@ snap_upd() {
 #### START:FUNCTIONS - GRS Code Helpers ####
 ## Helper: check and enable replication on volumes, then wait until all are replicationEnabled=true
 chk_vol_rep() {
-	echoscreen "" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking and enabling replication on source volumes if needed..." "1"
-	echoscreen "" "1"
 	flag=0
 	for i in $vol_ids
 	do
@@ -518,9 +519,7 @@ chk_vol_rep() {
 			ACTIONS='"replicationEnabled": true'
 			vol_act 2>>"$log_file" | tee -a "$log_file" >/dev/null
 		fi
-		printf "."
 	done
-	echo
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Replication check done." "1"
 	if [[ "$flag" == "1" ]]
 	then
@@ -544,14 +543,36 @@ chk_vol_rep() {
 chk_vol_mirror() {
 	while true
 	do
-		if vol_ls | jq -r '.volumes[]? | "\(.name) \(.mirroringState)"' | grep -w "$vol_com_name" | grep inconsistent_copying >/dev/null
+		# Volumes do VG com nome a conter vol_com_name e ainda em inconsistent_copying
+		inc_vols=$(vol_ls 2>>"$log_file" | jq -r --arg pat "$vol_com_name" '
+			.volumes[]? 
+			| select(.name | contains($pat)) 
+			| select(.mirroringState == "inconsistent_copying")
+			| "\(.volumeID) \(.name)"
+		')
+		# Se já não há volumes em inconsistent_copying, terminamos
+		if [ -z "$inc_vols" ]
 		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes still in inconsistent_copying. Waiting 60 seconds..." "1"
-			sleep 60
-		else
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - All volumes are in consistent_copying state." "1"
 			break
 		fi
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Some volumes are still in inconsistent_copying. Checking remote copy progress per volume (vol_rcr)..." "1"
+		# Para cada volume inconsistente, chamar vol_rcr e mostrar progresso
+		while read -r vol_id vol_name
+		do
+			[ -z "$vol_id" ] && continue
+			VOL_ID="$vol_id"
+			rcr_json=$(vol_rcr 2>>"$log_file")
+			if [ $? -ne 0 ] || [ -z "$rcr_json" ]; then
+				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING: Could not retrieve remote copy relationship for volume $vol_name ($vol_id). Will retry..." "1"
+				continue
+			fi
+			# progress e state vêm diretamente do objeto (como no exemplo que enviaste)
+			prog=$(echo "$rcr_json"   | jq -r '.progress // 0'           2>>"$log_file")
+			state=$(echo "$rcr_json"  | jq -r '.state // "unknown"'     2>>"$log_file")
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume $vol_name ($vol_id): state = $state, progress = ${prog}%." "1"
+		done <<< "$inc_vols"
+		sleep 180
 	done
 }
 
@@ -1313,7 +1334,7 @@ vchtier() {
 ####  START:FUNCTION  Main GRS function: create VG in source and onboard aux volumes in target  ####
 create_grs() {
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting GRS configuration between source VSI $source_vsi and target VSI $target_vsi (VG: $vg_name) ===" "1"
-	echoscreen "" "1"
+
 	####################################
 	# 1. SOURCE WORKSPACE / SOURCE VSI #
 	####################################
@@ -1322,6 +1343,7 @@ create_grs() {
 	CRN="$source_ws_crn"
 	CLOUD_INSTANCE_ID="$source_CLOUD_INSTANCE_ID"
 	PVM_ID="$source_PVM_ID"
+
 	# 2.3 – Obter volumes associados ao SOURCE_VSI
 	vol_ids=$(ins_vol_ls | jq -r '.volumes[]? | .volumeID' 2>>"$log_file")
 	if [[ -z "$vol_ids" ]]
@@ -1330,15 +1352,29 @@ create_grs() {
 	fi
 	vol_count=$(echo "$vol_ids" | wc -w)
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Source VSI $source_vsi has $vol_count attached volumes." "1"
+
 	# 2.4 – Garantir que todos os volumes estão com replicationEnabled=true
 	chk_vol_rep
+
 	# 2.4 (cont.) – Assegurar consistent_copying antes de criar o VG
 	chk_vol_mirror
+
 	# 2.5 – Criar Volume Group no SOURCE
-	volids_api=$(echo "$vol_ids" | sed 's/ /","/g')
-	ACTIONS="\"name\": \"$vg_name\", \"volumeIDs\": [\"$volids_api\"]"
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Creating Volume Group $vg_name in source workspace..." "1"
-	vg_cr 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	# Construir JSON array de volumeIDs sem quebras de linha
+	json_vol_ids=""
+	for vid in $vol_ids
+	do
+		json_vol_ids="$json_vol_ids\"$vid\","
+	done
+	# remover última vírgula
+	json_vol_ids="${json_vol_ids%,}"
+
+	ACTIONS="\"name\":\"$vg_name\",\"volumeIDs\":[${json_vol_ids}]"
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Creating Volume Group $vg_name in source workspace with volumeIDs: [${json_vol_ids}]..." "1"
+	resp_vg=$(vg_cr 2>>"$log_file")
+	echo "$resp_vg" >>"$log_file"
+
 	# Confirmar ID do VG
 	VOLUME_GROUP_ID=$(vg_ls | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .id' 2>>"$log_file")
 	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]
@@ -1346,8 +1382,10 @@ create_grs() {
 		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find Volume Group ID for $vg_name after creation."
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Group $vg_name created with ID $VOLUME_GROUP_ID." "1"
+
 	# 2.6 – Obter nomes dos auxiliary volumes (auxVolumeName)
-	auxvol_names=$(vg_rcr | jq -r '.remoteCopyRelationships[]? | .auxVolumeName' 2>>"$log_file")
+	auxvol_names=$(vg_rcr | jq -r '.remoteCopyRelationships[]? | select(.primaryRole=="master") | .auxVolumeName' 2>>"$log_file")
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Auxiliary volumes on target storage: $auxvol_names" "1"
 	if [[ -z "$auxvol_names" ]]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - No auxiliary volumes found in remote-copy relationships for $vg_name. Aborting."
@@ -2307,7 +2345,7 @@ case $1 in
 		then
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Existing Snapshots were found for volumes attached to source VSI $source_vsi. Replication cannot be enabled while these Snapshots exist." "1"
 			echoscreen "$vols_with_snaps" "1"
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Aborting GRS creation - please delete the snapshots for these volumes and run -creategrs again."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Aborting GRS creation - please delete the snapshots for these volumes and run bluexport_api.sh $flags again."
 		fi
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Both VSIs found and validated. Proceeding with GRS creation..." "1"
