@@ -961,49 +961,40 @@ do_snap_create() {
 do_snap_update() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Snapshot $snap_name Update $new_name_echo $new_description_echo" "1"
 
-	# Construir payload ACTIONS com os campos a alterar
-	local ACTIONS=""
-
-	if [[ -n "$snap_new_name" ]]
-	then
-		ACTIONS="\"name\":\"$snap_new_name\""
+	# Construir JSON ACTIONS com os campos a atualizar
+	local actions=""
+	if [[ -n "$snap_new_name" ]]; then
+		actions="\"name\":\"$snap_new_name\""
 	fi
-
-	if [[ -n "$snap_new_description" ]]
-	then
-		if [[ -n "$ACTIONS" ]]
-		then
-			ACTIONS="$ACTIONS,\"description\":\"$snap_new_description\""
+	if [[ -n "$snap_new_description" ]]; then
+		if [[ -n "$actions" ]]; then
+			actions="$actions,\"description\":\"$snap_new_description\""
 		else
-			ACTIONS="\"description\":\"$snap_new_description\""
+			actions="\"description\":\"$snap_new_description\""
 		fi
 	fi
 
-	if [[ -z "$ACTIONS" ]]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR: no fields to update for snapshot $snap_name."
+	if [[ -z "$actions" ]]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR - No fields to update for snapshot $snap_name (ACTIONS empty)."
 	fi
 
-	# Chamar API de update
+	ACTIONS="$actions"
+
+	if [[ -z "$SNAP_ID" ]]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR - SNAP_ID not set before do_snap_update."
+	fi
+
 	local resp
 	resp=$(snap_upd 2>>"$log_file")
-
-	if [ $? -ne 0 ] || [[ -z "$resp" ]]
-	then
+	if [ $? -ne 0 ] || [[ -z "$resp" ]]; then
 		echo "$resp" >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error calling snapshot update API. Check the log above this line..."
-	fi
-
-	# Se a API devolver JSON com erro, apanhamos
-	if echo "$resp" | jq -e '.error? // .errors? | length > 0' >/dev/null 2>&1
-	then
-		echo "$resp" | jq >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot update returned error. Check log above this line..."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error calling snapshot update API. Check log above this line..."
 	fi
 
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name updated $new_name_echo $new_description_echo - Done!" "1"
 }
 ####  END:FUNCTION - Do the Snapshot Update  ####
+
 
 ####  START:FUNCTION - Do the Snapshot Delete  ####
 do_snap_delete() {
@@ -1974,7 +1965,8 @@ case $1 in
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
 	fi
-	if [ $# -gt 2 ]; then
+	if [ $# -gt 2 ]
+	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
 	fi
 	test=0
