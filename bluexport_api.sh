@@ -1719,11 +1719,20 @@ case $1 in
 	test=0
 	snap_name="$3"
 
-	# Verificar se já existe snapshot com este nome via API
+	# Verificar se já existe snapshot com este nome PARA ESTA VSI via API
 	snaps_json=$(snap_ls 2>>"$log_file")
-	if echo "$snaps_json" | jq -e --arg name "$snap_name" '.snapshots[]? | select(.name == $name)' >/dev/null 2>&1
+
+	existing_snap_name=$(
+		echo "$snaps_json" | jq -r \
+			--arg name "$snap_name" \
+			--arg pvm "$PVM_ID" \
+			'.snapshots // [] | .[] | select(.name == $name and .pvmInstanceID == $pvm) | .name' \
+			2>>"$log_file" | head -n1
+	)
+
+	if [ -n "$existing_snap_name" ] && [ "$existing_snap_name" != "null" ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Already exists one Snapshot with name $snap_name, please choose a different name or use flag -snapupd to change the name."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Already exists one Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID), please choose a different name or use flag -snapupd to change the name."
 	fi
 
 	# Argumento DESCRIPTION: 0 ou frase entre aspas
