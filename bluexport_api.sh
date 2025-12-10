@@ -1920,7 +1920,7 @@ case $1 in
 		if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
 		then
 			msg="----------------------- No Snapshots Found -----------------------"
-			echoscreen "$msg"
+			echoscreen "$msg" "1"
 		else
 			# Transform snapshots into TSV to process in bash
 			echo "$snaps_json" | jq -r '.snapshots // [] |.[] |
