@@ -239,8 +239,8 @@ help() {
 	echoscreen ""
 	echoscreen "=== Snapshots ==="
 	echoscreen "Create snapshot:              ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]"
-	echoscreen "Update snapshot:              ./bluexport_api.sh -snapupd  VSI_NAME SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]"
-	echoscreen "Delete snapshot:              ./bluexport_api.sh -snapdel  VSI_NAME SNAPSHOT_NAME"
+	echoscreen "Update snapshot:              ./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]"
+	echoscreen "Delete snapshot:              ./bluexport_api.sh -snapdel  SNAPSHOT_NAME"
 	echoscreen "List all snapshots (all WS):  ./bluexport_api.sh -snaplsall"
 	echoscreen ""
 	echoscreen "=== Captured Images ==="
@@ -961,30 +961,18 @@ do_snap_create() {
 do_snap_update() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Snapshot $snap_name Update $new_name_echo $new_description_echo" "1"
 
-	# Obter o ID do snapshot pelo nome + PVM_ID
-	local snaps_json
-	snaps_json=$(snap_ls 2>>"$log_file")
-	local snap_id
-	snap_id=$(echo "$snaps_json" | jq -r \
-		--arg name "$snap_name" \
-		--arg pvm "$PVM_ID" \
-		'.snapshots // [] | .[] | select(.name == $name and .pvmInstanceID == $pvm) | .snapshotID' \
-		2>>"$log_file" | head -n1)
-
-	if [[ -z "$snap_id" || "$snap_id" == "null" ]]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID) does not exist. Use -snapcr to create one."
-	fi
-
-	# Construir payload ACTIONS com o que mudar (name / description)
+	# Construir payload ACTIONS com os campos a alterar
 	local ACTIONS=""
+
 	if [[ -n "$snap_new_name" ]]
 	then
 		ACTIONS="\"name\":\"$snap_new_name\""
 	fi
+
 	if [[ -n "$snap_new_description" ]]
 	then
-		if [[ -n "$ACTIONS" ]]; then
+		if [[ -n "$ACTIONS" ]]
+		then
 			ACTIONS="$ACTIONS,\"description\":\"$snap_new_description\""
 		else
 			ACTIONS="\"description\":\"$snap_new_description\""
@@ -996,7 +984,7 @@ do_snap_update() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR: no fields to update for snapshot $snap_name."
 	fi
 
-	SNAP_ID="$snap_id"
+	# Chamar API de update
 	local resp
 	resp=$(snap_upd 2>>"$log_file")
 
@@ -1006,7 +994,7 @@ do_snap_update() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error calling snapshot update API. Check the log above this line..."
 	fi
 
-	# Verificar se veio algum erro no JSON (se a API devolver corpo)
+	# Se a API devolver JSON com erro, apanhamos
 	if echo "$resp" | jq -e '.error? // .errors? | length > 0' >/dev/null 2>&1
 	then
 		echo "$resp" | jq >>"$log_file"
@@ -1832,15 +1820,13 @@ case $1 in
 	fi
 
 	test=0
-	flagj=1               # não vamos buscar iASP nem fazer flush aqui
-	vsi="$2"
-	vsi_id_bluexscrt
+	flagj=1
+	vsi="$2"              # Mantemos o argumento por compatibilidade/logs
 	snap_name="$3"
-
 	new_name_arg="$4"
 	description_arg="$5"
 
-	# Validar que pelo menos uma flag faz sentido (não pode ser 0 e 0)
+	# Verificar se pelo menos um dos dois parâmetros não é "0"
 	if [ -n "$new_name_arg" ] && [ -n "$description_arg" ] \
 	   && [ "$new_name_arg" -eq "$new_name_arg" ] 2>/dev/null \
 	   && [ "$description_arg" -eq "$description_arg" ] 2>/dev/null
@@ -1849,23 +1835,6 @@ case $1 in
 		then
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - You must pass at least one flag, DESCRIPTION or NEW_SNAPSHOT_NAME!..."
 		fi
-	fi
-
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot $snap_name Update !" "1"
-
-	# Garantir que o snapshot existe para esta VSI
-	snaps_json=$(snap_ls 2>>"$log_file")
-	existing_snap_name=$(
-		echo "$snaps_json" | jq -r \
-			--arg name "$snap_name" \
-			--arg pvm "$PVM_ID" \
-			'.snapshots // [] | .[] | select(.name == $name and .pvmInstanceID == $pvm) | .name' \
-			2>>"$log_file" | head -n1
-	)
-
-	if [ -z "$existing_snap_name" ] || [ "$existing_snap_name" = "null" ]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name does not exist for VSI $vsi, please choose a different name or use flag -snapcr to create one."
 	fi
 
 	########################
@@ -1927,9 +1896,76 @@ case $1 in
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Nothing to update: NEW_SNAPSHOT_NAME and DESCRIPTION both resolve to 'no change'."
 	fi
 
-	check_locally_VSI_exists
-	do_snap_update
-	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished Snapshot $snap_name Update $new_name_echo $new_description_echo !"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Searching for snapshot name $snap_name in all workspaces ===" "1"
+
+	# Preparar arrays de workspaces (como no -snapdel)
+	IFS=':' read -r -a wsnames_array <<< "$wsnames"
+	read -r -a allws_array <<< "$allws"
+
+	# Mapear shortname -> nome completo
+	declare -A wsmap
+	for i in "${!allws_array[@]}"
+	do
+		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+	done
+
+	found=0
+
+	# Loop em todos os workspaces até encontrar o snapshot
+	for ws in "${allws_array[@]}"
+	do
+		# CRN e ID do workspace
+		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+		full_ws_name="${wsmap[$ws]}"
+
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name" "1"
+
+		# Determinar base_url a partir do CRN (região power-iaas)
+		region_api=$(jq -r --arg k "$ws" \
+			'.workspaces[$k].crn
+			 | capture("crn:v1:bluemix:public:power-iaas:(?<region>[^:]+)")
+			 | .region
+			 | gsub("-"; "_")' "$bluexscrt")
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+
+		# Listar snapshots neste workspace
+		snaps_json=$(snap_ls 2>>"$log_file")
+
+		# Se não há snapshots, avança
+		if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No snapshots in Workspace $full_ws_name, moving on to next Workspace!" "1"
+			continue
+		fi
+
+		# Procurar snapshot pelo nome neste workspace
+		snap_id=$(echo "$snaps_json" | jq -r --arg name "$snap_name" \
+			'.snapshots[]? | select(.name == $name) | .snapshotID' \
+			2>>"$log_file" | head -n1)
+
+		if [[ -z "$snap_id" || "$snap_id" == "null" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name not found in Workspace $full_ws_name, moving on to next Workspace!" "1"
+			continue
+		fi
+
+		# Encontrou o snapshot neste workspace
+		SNAP_ID="$snap_id"
+		found=1
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name found in Workspace $full_ws_name with ID: $snap_id" "1"
+
+		# Faz o update e termina o script com sucesso
+		do_snap_update
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished Snapshot $snap_name Update $new_name_echo $new_description_echo in Workspace $full_ws_name !"
+	done
+
+	# Se chegou aqui, é porque não encontrou o snapshot em nenhum workspace
+	if [ "$found" -eq 0 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name does not exist in any configured workspace. Use -snapcr to create one."
+	fi
     ;;
 
   -snapdel)
