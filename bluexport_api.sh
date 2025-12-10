@@ -1799,164 +1799,157 @@ case $1 in
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished Snapshot $snap_name of VSI $vsi with volumes: $volumes_to_echo !"
     ;;
 
-  -snapupd)
-	# Args: SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|["DESCRIPTION"]
-	if [ $# -lt 4 ]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
-	fi
-	if [ $# -gt 4 ]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
-	fi
+    -snapupd)
+        # Sintaxe: bluexport_api.sh -snapupd SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|["DESCRIPTION"]
+        if [ $# -lt 4 ]
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+        fi
+        if [ $# -gt 4 ]
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+        fi
 
-	test=0
-	flagj=1
+        test=0
+        flagj=1
 
-	snap_name="$2"
-	new_name_arg="$3"
-	description_arg="$4"
+        snap_name="$2"
+        new_name_arg="$3"
+        description_arg="$4"
 
-	# Verificar se pelo menos um dos dois parâmetros não é "0"
-	if [ -n "$new_name_arg" ] && [ -n "$description_arg" ] \
-	   && [ "$new_name_arg" -eq "$new_name_arg" ] 2>/dev/null \
-	   && [ "$description_arg" -eq "$description_arg" ] 2>/dev/null
-	then
-		if [ "$new_name_arg" -eq 0 ] && [ "$description_arg" -eq 0 ]
-		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - You must pass at least one flag, DESCRIPTION or NEW_SNAPSHOT_NAME!..."
-		fi
-	fi
+        snap_new_name=""
+        snap_new_description=""
+        new_name_echo=""
+        new_description_echo=""
+        keep_current_desc=0
 
-	########################
-	# Tratar DESCRIPTION
-	########################
-	snap_new_description=""
-	new_description_echo=""
+        # Têm de vir pelo menos um campo para alterar
+        if [ "$new_name_arg" = "0" ] && [ "$description_arg" = "0" ]
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - You must pass at least one flag, DESCRIPTION or NEW_SNAPSHOT_NAME!..."
+        fi
 
-	if [ -n "$description_arg" ] && [ "$description_arg" -eq "$description_arg" ] 2>/dev/null
-	then
-		# numérico
-		if [ "$description_arg" -eq 0 ]
-		then
-			# 0 => não muda descrição
-			snap_new_description=""
-			new_description_echo=""
-		else
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax:  bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
-		fi
-	else
-		# texto => nova descrição
-		snap_new_description="$description_arg"
-		new_description_echo="with new Description \"$description_arg\""
-	fi
+        #### Tratar NEW_SNAPSHOT_NAME
+        if [ -n "$new_name_arg" ]
+        then
+                # Se for numérico
+                if [ "$new_name_arg" -eq "$new_name_arg" ] 2>/dev/null
+                then
+                        if [ "$new_name_arg" -eq 0 ]
+                        then
+                                # 0 = manter o nome atual
+                                new_name_echo=""
+                        else
+                                abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument NEW_SNAPSHOT_NAME must be 0 or a name!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+                        fi
+                else
+                        # Nome novo e diferente do atual
+                        if [ "$new_name_arg" = "$snap_name" ]
+                        then
+                                new_name_echo=""
+                        else
+                                snap_new_name="$new_name_arg"
+                                new_name_echo="with new Name $snap_new_name"
+                        fi
+                fi
+        fi
 
-	########################
-	# Tratar NEW_SNAPSHOT_NAME
-	########################
-	snap_new_name=""
-	new_name_echo=""
+        #### Tratar DESCRIPTION
+        if [ -n "$description_arg" ]
+        then
+                # Se for numérico
+                if [ "$description_arg" -eq "$description_arg" ] 2>/dev/null
+                then
+                        if [ "$description_arg" -eq 0 ]
+                        then
+                                # 0 = manter descrição atual (vamos buscar ao snapshot)
+                                keep_current_desc=1
+                        else
+                                abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+                        fi
+                else
+                        # Nova descrição
+                        snap_new_description="$description_arg"
+                        new_description_echo="with new Description \"$description_arg\""
+                fi
+        fi
 
-	if [ -n "$new_name_arg" ] && [ "$new_name_arg" -eq "$new_name_arg" ] 2>/dev/null
-	then
-		# numérico
-		if [ "$new_name_arg" -eq 0 ]
-		then
-			# 0 => não muda nome
-			snap_new_name=""
-			new_name_echo=""
-		else
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument NEW_SNAPSHOT_NAME must be 0 or a name!! Syntax:  bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
-		fi
-	else
-		# texto
-		if [[ "$new_name_arg" == "$snap_name" ]]
-		then
-			# mesmo nome => efetivamente não muda
-			snap_new_name=""
-			new_name_echo=""
-		else
-			snap_new_name="$new_name_arg"
-			new_name_echo="with new Name $snap_new_name"
-		fi
-	fi
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot $snap_name Update !" "1"
 
-	# Garantir que pelo menos uma coisa vai ser alterada
-	if [[ -z "$snap_new_name" && -z "$snap_new_description" ]]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Nothing to update: NEW_SNAPSHOT_NAME and DESCRIPTION both resolve to 'no change'."
-	end
+        #### Procurar o snapshot em TODOS os workspaces (como no -snapdel)
+        IFS=':' read -r -a wsnames_array <<< "$wsnames"
+        read -r -a allws_array <<< "$allws"
 
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Searching for snapshot name $snap_name in all workspaces ===" "1"
+        # Mapear ID -> nome do workspace
+        declare -A wsmap
+        for i in "${!allws_array[@]}"
+        do
+                wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+        done
 
-	# Preparar arrays de workspaces (como no -snapdel)
-	IFS=':' read -r -a wsnames_array <<< "$wsnames"
-	read -r -a allws_array <<< "$allws"
+        SNAP_ID=""
+        current_desc=""
+        found_workspace_name=""
 
-	# Mapear shortname -> nome completo
-	declare -A wsmap
-	for i in "${!allws_array[@]}"
-	do
-		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-	done
+        for ws in "${allws_array[@]}"
+        do
+                CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+                CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+                full_ws_name="${wsmap[$ws]}"
 
-	found=0
+                # Descobrir região para montar o base_url correto
+                region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+                base_url_var="base_${region_api}"
+                base_url="${!base_url_var}"
 
-	# Loop em todos os workspaces até encontrar o snapshot
-	for ws in "${allws_array[@]}"
-	do
-		# CRN e ID do workspace
-		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
-		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
-		full_ws_name="${wsmap[$ws]}"
+                echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Checking snapshots at workspace $full_ws_name..." "1"
 
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name" "1"
+                snaps_json=$(snap_ls 2>>"$log_file")
+                if [ $? -ne 0 ] || [[ -z "$snaps_json" ]]
+                then
+                        echo "$snaps_json" >>"$log_file"
+                        continue
+                fi
 
-		# Determinar base_url a partir do CRN (região power-iaas)
-		region_api=$(jq -r --arg k "$ws" \
-			'.workspaces[$k].crn
-			 | capture("crn:v1:bluemix:public:power-iaas:(?<region>[^:]+)")
-			 | .region
-			 | gsub("-"; "_")' "$bluexscrt")
-		base_url_var="base_${region_api}"
-		base_url="${!base_url_var}"
+                snap_id=$(echo "$snaps_json" | jq -r --arg name "$snap_name" '.snapshots[]? | select(.name == $name) | .snapshotID' 2>>"$log_file" | head -n1)
 
-		# Listar snapshots neste workspace
-		snaps_json=$(snap_ls 2>>"$log_file")
+                if [[ -n "$snap_id" && "$snap_id" != "null" ]]
+                then
+                        SNAP_ID="$snap_id"
+                        found_workspace_name="$full_ws_name"
+                        # Buscar a descrição atual para poder preservá-la se necessário
+                        current_desc=$(echo "$snaps_json" | jq -r --arg name "$snap_name" '.snapshots[]? | select(.name == $name) | .description // ""' 2>>"$log_file" | head -n1)
+                        break
+                fi
+        done
 
-		# Se não há snapshots, avança
-		if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
-		then
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No snapshots in Workspace $full_ws_name, moving on to next Workspace!" "1"
-			continue
-		fi
+        if [[ -z "$SNAP_ID" ]]
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name does not exist in any configured workspace. Use -snapcr to create one."
+        fi
 
-		# Procurar snapshot pelo nome neste workspace
-		snap_id=$(echo "$snaps_json" | jq -r --arg name "$snap_name" \
-			'.snapshots[]? | select(.name == $name) | .snapshotID' \
-			2>>"$log_file" | head -n1)
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Found snapshot $snap_name in workspace $found_workspace_name with ID $SNAP_ID" "1"
 
-		if [[ -z "$snap_id" || "$snap_id" == "null" ]]
-		then
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name not found in Workspace $full_ws_name, moving on to next Workspace!" "1"
-			continue
-		fi
+        # Se o utilizador pediu para manter a descrição (0), usamos a atual
+        if [ "$keep_current_desc" -eq 1 ]
+        then
+                snap_new_description="$current_desc"
+                if [ -n "$snap_new_description" ]
+                then
+                        new_description_echo="(keeping existing Description \"$snap_new_description\")"
+                else
+                        new_description_echo="(keeping existing empty Description)"
+                fi
+        fi
 
-		# Encontrou o snapshot neste workspace
-		SNAP_ID="$snap_id"
-		found=1
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name found in Workspace $full_ws_name with ID: $snap_id" "1"
+        # Se no fim não houver nada para alterar, não vale a pena chamar a API
+        if [ -z "$snap_new_name" ] && [ "$keep_current_desc" -eq 1 ] && [ -z "$current_desc" ]
+        then
+                abort "$(date +%Y-%m-%d_%H:%M:%S) - Nothing to update for snapshot $snap_name."
+        fi
 
-		# Faz o update e termina o script com sucesso
-		do_snap_update
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished Snapshot $snap_name Update $new_name_echo $new_description_echo in Workspace $full_ws_name !"
-	done
-
-	# Se chegou aqui, é porque não encontrou o snapshot em nenhum workspace
-	if [ "$found" -eq 0 ]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name does not exist in any configured workspace. Use -snapcr to create one."
-	fi
+        do_snap_update
+        abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished Snapshot $snap_name Update $new_name_echo $new_description_echo !"
     ;;
 
   -snapdel)
@@ -2064,7 +2057,7 @@ case $1 in
 				instname=$(jq -r --arg ws "$ws" --arg id "$s_pvmid" '
 				(.systems // [])
 				| map(select(.workspace == $ws and .pvmInstanceID == $id))
-				| if length > 0 then .[0].name else "NOT-IN-CONFIG" end
+				| if length > 0 then .[0].name else "N/A" end
 				' "$bluexscrt")
 				{
 					echo "----------------------- Snapshot Found -----------------------"
