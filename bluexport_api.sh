@@ -532,6 +532,18 @@ chk_vol_rep() {
 	do
 		VOL_ID=$i
 		rep_enabled=$(vol_get | jq -r '.replicationEnabled' 2>>"$log_file")
+
+#		cg_id=$(vol_get | jq -r '.consistencyGroupID? // empty')
+#		state=$(vol_get | jq -r '.status // "unknown"')
+#		if [[ -n "$cg_id" ]]
+#		then
+#			abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume $VOL_ID is part of a consistency group ($cg_id). Clean up previous GRS/CG before enabling replication."
+#		fi
+#		if [[ "$state" != "available" && "$state" != "in-use" ]]
+#		then
+#			abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume $VOL_ID is in state $state. Must be available or in-use to enable replication."
+#		fi
+
 		if [[ "$rep_enabled" == "false" ]]
 		then
 			flag=1
@@ -563,10 +575,10 @@ chk_vol_rep() {
 chk_vol_mirror() {
 	while true
 	do
-		# Volumes do VG com nome a conter vol_com_name e ainda em inconsistent_copying
+		# Só volumes com o padrão vol_com_name e ainda em inconsistent_copying
 		inc_vols=$(vol_ls 2>>"$log_file" | jq -r --arg pat "$vol_com_name" '
-			.volumes[]? 
-			| select(.name | contains($pat)) 
+			.volumes[]?
+			| select(.name | contains($pat))
 			| select(.mirroringState == "inconsistent_copying")
 			| "\(.volumeID) \(.name)"
 		')
@@ -576,24 +588,57 @@ chk_vol_mirror() {
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - All volumes are in consistent_copying state." "1"
 			break
 		fi
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Some volumes are still in inconsistent_copying. Checking remote copy progress per volume (vol_rcr)..." "1"
-		# Para cada volume inconsistente, chamar vol_rcr e mostrar progresso
+		# Quantos volumes ainda estão inconsistent
+		num_inc=$(printf "%s\n" "$inc_vols" | wc -l | awk '{print $1}')
+		if [ $num_inc -lt 6 ]
+		then
+			cyclemsg=""
+		else
+			cyclemsg="Showing progress for up to 5 volumes this cycle..."
+		fi
+		if [ $num_inc -eq 1 ]
+		then
+			plural=""
+			verb="is"
+		else
+			plural="s"
+			verb="are"
+		fi
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - $num_inc volume$plural $verb still in inconsistent_copying. $cyclemsg" "1"
+		shown=0
+		# Para cada volume inconsistente, chamar vol_rcr e mostrar progresso – até 5 por ciclo
 		while read -r vol_id vol_name
 		do
 			[ -z "$vol_id" ] && continue
 			VOL_ID="$vol_id"
 			rcr_json=$(vol_rcr 2>>"$log_file")
-			if [ $? -ne 0 ] || [ -z "$rcr_json" ]; then
-				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING: Could not retrieve remote copy relationship for volume $vol_name ($vol_id). Will retry..." "1"
-				continue
+			rcr_rc=$?
+			if [ $rcr_rc -ne 0 ] || [ -z "$rcr_json" ]
+			then
+				if echo "$rcr_json" | grep -q "Too Many Requests"
+				then
+					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING: vol_rcr rate limited for volume $vol_name ($vol_id). Backend returned 429 Too Many Requests. Progress for this volume will be retried in the next cycle..." "1"
+				else
+					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING: Could not retrieve remote copy relationship for volume $vol_name ($vol_id). Will retry in next cycle..." "1"
+				fi
+			else
+				prog=$(echo "$rcr_json"  | jq -r '.progress // 0'       2>>"$log_file")
+				state=$(echo "$rcr_json" | jq -r '.state // "unknown"'  2>>"$log_file")
+				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume $vol_name ($vol_id): state = $state, progress = ${prog}%." "1"
 			fi
-			# progress e state vêm diretamente do objeto (como no exemplo que enviaste)
-			prog=$(echo "$rcr_json"   | jq -r '.progress // 0'           2>>"$log_file")
-			state=$(echo "$rcr_json"  | jq -r '.state // "unknown"'     2>>"$log_file")
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume $vol_name ($vol_id): state = $state, progress = ${prog}%. Sleeping 180 seconds..." "1"
+			shown=$((shown + 1))
+			if [ "$shown" -ge 5 ]
+			then
+				break
+			fi
 		done <<< "$inc_vols"
-		sleep 180
-	done
+		if [ "$num_inc" -gt 5 ]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Reached 5 vol_rcr calls in this cycle. Remaining volumes will be checked in the next cycles..." "1"
+		fi
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Sleeping 180 seconds..." "1"
+                sleep 180
+        done
 }
 
 ## Helper: monitor onboarding status until completion
@@ -1394,28 +1439,51 @@ create_grs() {
 		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find Volume Group ID for $vg_name after creation."
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Group $vg_name created with ID $VOLUME_GROUP_ID." "1"
-	# 2.6 – Obter nomes dos auxiliary volumes (auxVolumeName)
-	auxvol_names=$(vg_rcr | jq -r '.remoteCopyRelationships[]? | select(.primaryRole=="master") | .auxVolumeName' 2>>"$log_file")
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Auxiliary volumes on target storage: $auxvol_names" "1"
+	# 2.6 / 2.8 – Esperar VG estabilizar e ter TODOS os aux volumes
+	max_wait_loops=30          # ~30 minutos se usarmos sleep 60
+	loop=0
+	while true
+	do
+		vg_details=$(vg_sd 2>>"$log_file")
+		vg_state=$(echo "$vg_details"   | jq -r '.state // "unknown"'    2>>"$log_file")
+		vg_numvols=$(echo "$vg_details" | jq -r '.numOfvols // 0'        2>>"$log_file")
+		auxvol_names=$(vg_rcr 2>>"$log_file" | jq -r '.remoteCopyRelationships[]? | select(.primaryRole=="master") | .auxVolumeName')
+		aux_count=$(echo "$auxvol_names" | wc -w | awk '{print $1}')
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VG $vg_name state: $vg_state - numOfvols=$vg_numvols - auxVolumes=$aux_count/$vol_count" "1"
+		if [[ "$aux_count" -eq "$vol_count" && "$aux_count" -gt 0 ]]
+		then
+			# OK – já temos todos os aux volumes
+			break
+		fi
+		loop=$((loop + 1))
+		if (( loop >= max_wait_loops ))
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - VG $vg_name did not reach expected aux volume count ($vol_count) after $max_wait_loops minutes. Aborting."
+		fi
+
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Waiting for VG $vg_name aux volumes to match source count... Sleeping 60 seconds..." "1"
+		sleep 60
+	done
 	if [[ -z "$auxvol_names" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - No auxiliary volumes found in remote-copy relationships for $vg_name. Aborting."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - No auxiliary volumes found in remote-copy relationships for $vg_name after waiting. Aborting."
 	fi
 	auxvolnames=$(echo "$auxvol_names" | tr ' ' ',')
-	aux_count=$(echo "$auxvol_names" | wc -w)
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Auxiliary volumes on target storage: $auxvol_names" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Found $aux_count auxiliary volumes for VG $vg_name." "1"
 	# 2.7 – Boot volume aux name (apenas logging)
-	bootvol_auxname=$(ins_vol_ls | jq -r '.volumes[]? | "\(.bootable) \(.auxVolumeName) \(.name)"' 2>>"$log_file" \
+	bootvol_auxname=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | "\(.bootable) \(.auxVolumeName) \(.name)"' \
 		| grep "$vol_com_name" | grep true | awk '{print $2}')
 	if [[ -n "$bootvol_auxname" ]]
 	then
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Boot auxiliary volume: $bootvol_auxname" "1"
 	fi
-	# 2.8 – Detalhes do VG e RCRs
-	vg_sd 2>>"$log_file" | jq -r '"State: \(.state) - Number of Volumes: \(.numOfvols)"' | tee -a "$log_file"
+	# 2.8 – Detalhes do VG e RCRs (apenas para log)
+	echo "$vg_details" | jq -r '"State: \(.state) - Number of Volumes: \(.numOfvols)"' | tee -a "$log_file"
 	vg_get 2>>"$log_file" | tee -a "$log_file" >/dev/null
 	vg_rcr 2>>"$log_file" | jq -r '.remoteCopyRelationships[]? | "Progress: \(.progress) -- RCR: \(.name) -- Master: \(.masterVolumeName)"' | tee -a "$log_file"
-	cgname=$(vg_ls | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .consistencyGroupName' 2>>"$log_file")
+
+	cgname=$(vg_ls 2>>"$log_file" | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .consistencyGroupName')
 	if [[ -z "$cgname" || "$cgname" == "null" ]]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not retrieve consistencyGroupName for VG $vg_name."
@@ -1597,7 +1665,7 @@ delete_grs() {
 	# 3.1 Detach de todos os volumes (incluindo boot) do TARGET_VSI
 	ACTIONS='"detachAllVolumes": true, "detachPrimaryBootVolume": true'
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Detaching all volumes (including boot) from target VSI $target_vsi..." "1"
-	ins_vol_bdet 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	ins_vol_bdet 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 	# Esperar até não haver volumes anexados
 	while true
 	do
@@ -1621,7 +1689,7 @@ delete_grs() {
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Deleting auxiliary volumes on target: [${tg_del_ids}]..." "1"
 		vol_bdel 2>>"$log_file" | tee -a "$log_file" >/dev/null
 	else
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No auxiliary volumes to delete on target (tgvol_com_name=$tgvol_com_name)." "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No auxiliary volumes to delete on target with name $tgvol_com_name." "1"
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === GRS delete completed between $source_vsi and $target_vsi (VG: $vg_name). Primary VSI remains with its volumes; auxiliary side cleaned up. ===" "1"
 }

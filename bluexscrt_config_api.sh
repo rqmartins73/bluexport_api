@@ -7,14 +7,23 @@
 
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 conf_file="$HOME/bluexport_conf.json"
-log_file=$(jq -r '.log_file' "$conf_file")
-bluexscrt=$(jq -r '.bluexscrt' "$conf_file")
+flag="${1:-}"
 
-# Default config JSON (can be overridden with env var BLUEXSCRT_JSON)
-CONFIG_JSON="${BLUEXSCRT_JSON:-"$bluexscrt"}"
+# Para -createconfig ainda não podemos assumir que o conf_file existe.
+if [[ "$flag" == "-createconfig" ]]
+then
+	log_file="$HOME/bluexport.log"
+	bluexscrt=""
+	CONFIG_JSON=""
+else
+	log_file=$(jq -r '.log_file' "$conf_file")
+	bluexscrt=$(jq -r '.bluexscrt' "$conf_file")
+	# Default config JSON (can be overridden with env var BLUEXSCRT_JSON)
+	CONFIG_JSON="${BLUEXSCRT_JSON:-"$bluexscrt"}"
+fi
 
 usage() {
   cat <<EOF
@@ -130,6 +139,12 @@ get_iam_token() {
   header_accept="Accept: application/json"
 }
 
+rc_list_powervs() {
+  curl -s \
+    -H "$header_auth" \
+    -H "$header_accept" \
+    "https://resource-controller.cloud.ibm.com/v2/resource_instances?type=service_instance&resource_id=power-iaas"
+}
 
 # Current date (YYYY-MM-DD). Required for Transit Gateway API versioning.
 version=$(date +%F)
@@ -393,10 +408,411 @@ print_masked_config() {
   ' "$CONFIG_JSON"
 }
 
+ping_host() {
+  ping -c3 -W3 "$1" &>/dev/null
+}
+
+create_vsi_user_from_json() {
+  local vsi_user ssh_key_path pub_ssh_key usr_folder usr_folder_ssh auth_keys_path
+
+  vsi_user=$(jq -r '.ssh.user' "$CONFIG_JSON")
+  ssh_key_path=$(jq -r '.ssh.keyPath' "$CONFIG_JSON")
+
+  if [[ -z "$vsi_user" || "$vsi_user" == "null" ]]; then
+    echo "ERROR: .ssh.user not defined in $CONFIG_JSON" | tee -a "$log_file"
+    return 1
+  fi
+  if [[ -z "$ssh_key_path" || "$ssh_key_path" == "null" ]]; then
+    echo "ERROR: .ssh.keyPath not defined in $CONFIG_JSON" | tee -a "$log_file"
+    return 1
+  fi
+  if [[ ! -f "$ssh_key_path.pub" ]]; then
+    echo "ERROR: public key $ssh_key_path.pub not found." | tee -a "$log_file"
+    return 1
+  fi
+
+  pub_ssh_key=$(cat "$ssh_key_path.pub")
+  usr_folder="/home/${vsi_user^^}"
+  usr_folder_ssh="$usr_folder/.ssh"
+  auth_keys_path="$usr_folder_ssh/authorized_keys"
+
+  mapfile -t systems < <(jq -c '.systems[]?' "$CONFIG_JSON")
+  if (( ${#systems[@]} == 0 )); then
+    echo "### No systems[] defined in $CONFIG_JSON; nothing to do." | tee -a "$log_file"
+    return 0
+  fi
+
+  echo ""
+  echo "### Preparing user '$vsi_user' on IBM i LPARs defined in $CONFIG_JSON ..."
+  for sys in "${systems[@]}"; do
+    local name ip user_exists
+    name=$(jq -r '.name' <<<"$sys")
+    ip=$(jq -r '.ip'   <<<"$sys")
+
+    if [[ -z "$ip" || "$ip" == "null" ]]; then
+      echo " - Skipping $name (no IP stored)." | tee -a "$log_file"
+      continue
+    fi
+
+    echo ""
+    echo "## LPAR $name with IP $ip"
+
+    if ! ping_host "$ip"; then
+      echo "   LPAR $name ($ip) not reachable (ping failed). Skipping." | tee -a "$log_file"
+      continue
+    fi
+
+    read -p "Do you want to create/prepare user '$vsi_user' on $name ($ip)? (Y/N) " ans
+    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+      echo "   Skipping $name by user choice."
+      continue
+    fi
+
+    echo "To create the user in $name you must provide an existing IBM i user with authority to create users and SSH in..."
+    read -p "Admin user name on $name: " admin_user
+    if [[ -z "$admin_user" ]]; then
+      echo "   Empty admin user; skipping $name."
+      continue
+    fi
+
+    read -p "If you have an SSH key for $admin_user, enter full path (or leave blank for password auth): " admin_key
+    local sshkey_opt=""
+    if [[ -n "$admin_key" ]]; then
+      sshkey_opt="-i $admin_key"
+    fi
+
+    echo "Testing SSH connection to $name ($ip) as $admin_user ..."
+    if ! ssh $sshkey_opt -o ConnectTimeout=5 -o ConnectionAttempts=1 "$admin_user@$ip" 'exit 0'; then
+      echo "   FAILED: SSH test failed for $admin_user@$ip. Check credentials." | tee -a "$log_file"
+      continue
+    fi
+
+    echo "Checking if user $vsi_user exists on $name ..."
+    if ssh $sshkey_opt "$admin_user@$ip" "system 'DSPUSRPRF USRPRF($vsi_user) OUTPUT(*PRINT)'" >/dev/null 2>&1; then
+      user_exists=1
+      echo "   User $vsi_user already exists."
+    else
+      user_exists=0
+      echo "   User $vsi_user does not exist."
+    fi
+
+    if (( user_exists == 0 )); then
+      read -p "Create user profile $vsi_user on $name? (Y/N) " crt
+      if [[ "$crt" =~ ^[Yy]$ ]]; then
+        echo "Creating IBM i user profile $vsi_user on $name ..."
+        ssh $sshkey_opt "$admin_user@$ip" "system 'CRTUSRPRF USRPRF($vsi_user) PASSWORD(*NONE) USRCLS(*USER) INLMNU(*SIGNOFF) SPCAUT(*ALLOBJ *JOBCTL)'"
+      else
+        echo "   Skipping user creation on $name."
+      fi
+    fi
+
+    read -p "Create/refresh SSH environment for $vsi_user on $name (home/.ssh/authorized_keys)? (Y/N) " env_ans
+    if [[ ! "$env_ans" =~ ^[Yy]$ ]]; then
+      echo "   Skipping SSH environment for $name."
+      continue
+    fi
+
+    echo "Preparing SSH environment for $vsi_user on $name ..."
+    ssh $sshkey_opt "$admin_user@$ip" "
+      mkdir -p '$usr_folder' '$usr_folder_ssh' &&
+      chmod 755 '$usr_folder' &&
+      chmod 700 '$usr_folder_ssh' &&
+      echo '$pub_ssh_key' >> '$auth_keys_path' &&
+      chmod 600 '$auth_keys_path' &&
+      chown -R $vsi_user '$usr_folder'
+    " || {
+      echo "   FAILED to prepare SSH environment on $name." | tee -a "$log_file"
+      continue
+    }
+
+    echo "Testing SSH login as $vsi_user@$ip ..."
+    if ssh -i "$ssh_key_path" -o ConnectTimeout=5 -o ConnectionAttempts=1 "$vsi_user@$ip" 'exit 0'; then
+      echo "   SUCCESS: SSH login as $vsi_user@$ip worked."
+    else
+      echo "   WARNING: SSH login as $vsi_user@$ip failed; check SSH configuration." | tee -a "$log_file"
+    fi
+  done
+
+  echo ""
+  echo "### create_vsi_user_from_json finished."
+}
+
+discover_workspaces_via_powervs() {
+  echo "### Discovering PowerVS workspaces via PowerVS API (all known regions)..."
+
+  local workspaces_json="{}"
+  local found=0
+
+  # Associative array para evitar processar o mesmo workspace ID mais do que uma vez
+  declare -A seen_ids=()
+
+  # Lista de variáveis base_* já definidas no script
+  local ALL_BASE_VARS=(
+    base_syd04 base_syd05
+    base_sao1 base_sao4 base_sao5
+    base_mon01 base_tor01
+    base_eu_de_1 base_eu_de_2
+    base_lon04 base_lon06
+    base_che
+    base_tok04 base_osa21
+    base_mad02 base_mad04
+    base_us_east base_wdc06 base_wdc07
+    base_us_south base_dal10 base_dal12 base_dal14
+  )
+
+  for var in "${ALL_BASE_VARS[@]}"; do
+    local url="${!var:-}"
+    [[ -z "$url" ]] && continue
+
+    # Faz o GET /v1/workspaces neste endpoint
+    local resp
+    resp=$(curl -sX GET "$url/v1/workspaces" -H "$header_auth" -H "$header_json")
+
+    # Se não houver array .workspaces, ignora este endpoint
+    if ! printf '%s\n' "$resp" | jq -e '.workspaces[]?' >/dev/null 2>&1; then
+      continue
+    fi
+
+    # Percorre os workspaces devolvidos
+    while IFS= read -r ws; do
+      local name region crn wsid short
+
+      # Campos reais com base no JSON que enviaste
+      name=$(jq -r '.name // "UNKNOWN"' <<<"$ws")
+      region=$(jq -r '.location.region // ""' <<<"$ws")
+      crn=$(jq -r '.details.crn // ""' <<<"$ws")
+      wsid=$(jq -r '.id // ""' <<<"$ws")
+
+      # Se não tiver ID, ignora
+      [[ -z "$wsid" ]] && continue
+
+      # Se já vimos este ID antes, não voltamos a mostrar
+      if [[ -n "${seen_ids[$wsid]:-}" ]]; then
+        continue
+      fi
+      seen_ids["$wsid"]=1
+
+      echo ""
+      echo "Workspace found:"
+      echo "  Name  : $name"
+      echo "  Region: $region"
+      echo "  CRN   : $crn"
+      echo "  ID    : $wsid"
+
+      # Pede shortname tipo WSMAD2 / WSFRA1 / WSFRA2 / WSMAD4
+      while :; do
+        # Escreve o prompt explicitamente para o terminal
+        printf "Enter short name for this workspace (e.g. WSMAD2): " > /dev/tty
+
+        # Lê SEMPRE do teclado (/dev/tty), nunca do stdin do while < <(...)
+        if ! read -r short < /dev/tty; then
+          echo "" > /dev/tty
+          echo "### No input received for workspace '$name'; aborting discovery." > /dev/tty
+          return 1
+        fi
+
+        if [[ -n "$short" ]]; then
+          break
+        fi
+
+        echo "Short name cannot be empty." > /dev/tty
+      done
+
+      # Atualiza o JSON de workspaces em memória
+      workspaces_json=$(printf '%s\n' "$workspaces_json" | jq \
+        --arg key "$short" --arg crn "$crn" --arg id "$wsid" --arg nm "$name" \
+        '. + {($key): {crn:$crn, id:$id, name:$nm}}')
+
+      found=1
+    done < <(printf '%s\n' "$resp" | jq -c '.workspaces[]?')
+  done
+
+  if (( found == 0 )); then
+    echo "### No PowerVS workspaces found using PowerVS API endpoints." | tee -a "$log_file"
+    return 1
+  fi
+
+  # Escreve a secção .workspaces no CONFIG_JSON
+  local tmp_cfg="${CONFIG_JSON}.tmp"
+  jq --argjson ws "$workspaces_json" '.workspaces = $ws' "$CONFIG_JSON" > "$tmp_cfg" && mv "$tmp_cfg" "$CONFIG_JSON"
+  echo "### Workspaces section populated in $CONFIG_JSON" | tee -a "$log_file"
+
+  return 0
+}
+
+
+run_createconfig() {
+  echo ""
+  echo "### bluexscrt_config.api - Initial JSON configuration (-createconfig)"
+  echo ""
+
+  local default_json_path="$HOME/bluexscrt_bcce.json"
+  local json_path apikey_input resource_group cos_region acckey seckey bucket vsi_user ssh_key_path default_ssh
+
+  read -p "Full path for bluexscrt JSON config [$default_json_path]: " json_path
+  if [[ -z "$json_path" ]]; then
+    json_path="$default_json_path"
+  fi
+
+  # --- Credenciais IBM Cloud / COS / SSH ---
+  while [[ -z "${apikey_input:-}" ]]; do
+    read -s -p "IBM Cloud API key: " apikey_input
+    echo ""
+  done
+
+  read -p "IBM Cloud Resource Group name (e.g. powervs): " resource_group
+
+  while [[ -z "${acckey:-}" ]]; do
+    read -s -p "COS Access Key: " acckey
+    echo ""
+  done
+
+  while [[ -z "${seckey:-}" ]]; do
+    read -s -p "COS Secret Key: " seckey
+    echo ""
+  done
+
+  read -p "COS Bucket Name: " bucket
+  read -p "COS Region (e.g. eu-es): " cos_region
+
+  while [[ -z "${vsi_user:-}" ]]; do
+    read -p "VSI SSH user (IBM i user profile) [bluexport]: " vsi_user
+    if [[ -z "$vsi_user" ]]; then
+      vsi_user="bluexport"
+    fi
+  done
+
+  default_ssh="$HOME/.ssh/${vsi_user}_rsa"
+  read -p "SSH private key full path [$default_ssh]: " ssh_key_path
+  if [[ -z "$ssh_key_path" ]]; then
+    ssh_key_path="$default_ssh"
+  fi
+
+  if [[ ! -f "$ssh_key_path" ]]; then
+    echo "SSH key $ssh_key_path does not exist."
+    read -p "Do you want to create it now with ssh-keygen (Y/N)? " ans
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+      mkdir -p "$(dirname "$ssh_key_path")"
+      ssh-keygen -N "" -t rsa -f "$ssh_key_path"
+    else
+      echo "WARNING: SSH key does not exist yet. You must create it before using SSH features."
+    fi
+  fi
+
+  echo ""
+  echo "### Summary:"
+  echo "  JSON config: $json_path"
+  echo "  Resource Group: $resource_group"
+  echo "  COS Bucket: $bucket"
+  echo "  COS Region: $cos_region"
+  echo "  VSI SSH user: $vsi_user"
+  echo "  SSH key: $ssh_key_path"
+  echo ""
+  read -p "Is this information correct (Y/N)? " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "Aborting -createconfig by user choice."
+    exit 1
+  fi
+
+  # 1) Criar o JSON base (sem workspaces / systems)
+  cat > "$json_path" <<EOF
+{
+  "apikey": "$apikey_input",
+  "access": {
+    "accessKey": "$acckey",
+    "secretKey": "$seckey",
+    "bucketName": "$bucket",
+    "region": "$cos_region"
+  },
+  "ssh": {
+    "user": "$vsi_user",
+    "keyPath": "$ssh_key_path"
+  },
+  "resourceGroup": "$resource_group",
+  "workspaces": {},
+  "systems": []
+}
+EOF
+  chmod 600 "$json_path"
+  echo "### Created bluexscrt JSON at $json_path"
+
+  # 2) Criar/atualizar bluexport_conf.json
+  if [[ ! -f "$conf_file" ]]; then
+    cat > "$conf_file" <<EOF
+{
+  "bluexscrt": "$json_path",
+  "log_file": "$HOME/bluexport.log",
+  "job_log": "$HOME/bluex_job.log",
+  "job_test_log": "$HOME/bluex_job_test.log",
+  "job_id": "$HOME/bluex_job_id.log",
+  "job_log_short": "$HOME/bluex_job",
+  "job_monitor": "$HOME/bluex_job_monitor.tmp",
+  "operid_file": "$HOME/operid_file.log",
+  "vsi_list_id_tmp": "$HOME/bluex_vsi_list_id.tmp",
+  "vsi_list_tmp": "$HOME/bluex_vsi_list.tmp",
+  "volumes_file": "$HOME/bluex_volumes_file.tmp",
+  "vol_ch_tier": "$HOME/bluex_vol_ch_tier.tmp",
+  "vol_failed_tst": "$HOME/bluex_vol_failed_tst.tmp",
+  "iasp_names_file": "$HOME/iasp_names.tmp",
+  "env_file": "$HOME/.env_bluexport",
+  "snap_retention": 2
+}
+EOF
+    echo "### Created $conf_file"
+  else
+    read -p "bluexport_conf.json already exists. Update its bluexscrt path to $json_path? (Y/N) " upd
+    if [[ "$upd" =~ ^[Yy]$ ]]; then
+      tmp="${conf_file}.tmp"
+      jq --arg path "$json_path" '.bluexscrt = $path' "$conf_file" > "$tmp" && mv "$tmp" "$conf_file"
+      echo "### Updated bluexscrt path in $conf_file"
+    fi
+  fi
+
+  # 3) Atualizar variáveis globais para o resto da run
+  log_file=$(jq -r '.log_file' "$conf_file")
+  bluexscrt="$json_path"
+  CONFIG_JSON="$json_path"
+
+  # 4) Obter IAM token (para discovery via API)
+  iam_token=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Accept: application/json" \
+    -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${apikey_input}" | jq -r '.access_token')
+
+  if [[ -z "$iam_token" || "$iam_token" == "null" ]]; then
+    echo "ERROR: Failed to obtain IAM token during -createconfig" | tee -a "$log_file"
+    exit 1
+  fi
+
+  header_auth="Authorization: Bearer $iam_token"
+  header_json="Content-Type: application/json"
+  header_accept="Accept: application/json"
+
+  # 5) Descobrir e preencher workspaces via PowerVS API
+  if discover_workspaces_via_powervs; then
+    echo "### Workspace discovery completed and saved into $CONFIG_JSON."
+
+    # 6) Preencher systems[] usando a mesma lógica de -updlpars
+    run_updlpars_api
+
+  else
+    echo "### WARNING: Workspace discovery failed or returned no workspaces. systems[] will not be updated automatically." | tee -a "$log_file"
+  fi
+
+  # 7) Criar utilizador nas LPARs (opcional, mas AGORA já há systems[])
+  read -p "Do you want to create the VSI user '$vsi_user' on the IBM i LPARs and copy the SSH key now? (Y/N) " crt
+  if [[ "$crt" =~ ^[Yy]$ ]]; then
+    create_vsi_user_from_json
+  fi
+
+  echo "### -createconfig finished."
+}
+
+
 ############################
 run_updlpars_api() {
   get_iam_token
-  echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs ===" "1"
+  echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs (IBM i only) ===" "1"
 
   # Load current systems[] from JSON (to detect existing vs new)
   existing_systems_json=$(jq '.systems // []' "$CONFIG_JSON")
@@ -418,17 +834,28 @@ run_updlpars_api() {
     # Chama o API de lista de instâncias
     resp=$(ins_ls 2>>"$log_file")
 
-    # Se resposta vazia ou sem pvmInstances, ignora
-    if [[ -z "$resp" || "$resp" == "null" ]] || \
-       ! printf '%s\n' "$resp" | jq -e '.pvmInstances? // empty' >/dev/null 2>&1; then
-      echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> No pvmInstances found in '$ws' (skipping)" "1"
+    # Se resposta vazia, ignora logo
+    if [[ -z "$resp" || "$resp" == "null" ]]; then
+      echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Empty response from ins_ls in '$ws' (skipping)" "1"
       continue
     fi
 
-    # IMPORTANTE: usar process substitution, NÃO pipe, para o while correr no shell principal
+    # Verificar se há pvmInstances IBM i neste workspace
+    if ! printf '%s\n' "$resp" | jq -e '.pvmInstances[]? | select(.operatingSystem.type == "ibmi")' >/dev/null 2>&1; then
+      echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> No IBM i pvmInstances found in '$ws' (skipping)" "1"
+      continue
+    fi
+
+    # IMPORTANTE: só iterar sobre IBM i
     while IFS= read -r inst; do
-      name=$(jq -r '.serverName' <<<"$inst")
-      pvmid=$(jq -r '.pvmInstanceID' <<<"$inst")
+      # Nome e ID: suportar tanto serverName/pvmInstanceID como name/id
+      name=$(jq -r '.serverName // .name // "UNKNOWN"' <<<"$inst")
+      pvmid=$(jq -r '.pvmInstanceID // .id // ""'      <<<"$inst")
+
+      if [[ -z "$pvmid" || "$pvmid" == "null" ]]; then
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Skipping instance '$name' in '$ws' (no pvmInstanceID/id)." "1"
+        continue
+      fi
 
       # Verificar se este nome já existe em .systems (case-insensitive)
       existing=$(printf '%s\n' "$existing_systems_json" | jq -c --arg name "$name" '
@@ -436,11 +863,10 @@ run_updlpars_api() {
       ' | head -n 1)
 
       if [[ -n "$existing" ]]; then
-        # LPAR já existia no JSON: manter ip e lpar antigos, só actualizar pvmInstanceID
-        old_ip=$(jq -r '.ip // ""'    <<<"$existing")
-        old_lpar=$(jq -r '.lpar // ""' <<<"$existing")
+        # LPAR já existia no JSON: manter ip antigo, só actualizar pvmInstanceID/workspace
+        old_ip=$(jq -r '.ip // ""' <<<"$existing")
 
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Existing LPAR '$name' in workspace '$ws' -> keeping IP '$old_ip', updating pvmInstanceID." "1"
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Existing IBM i LPAR '$name' in workspace '$ws' -> keeping IP '$old_ip', updating pvmInstanceID." "1"
 
         system_obj=$(jq -n \
           --arg name "$name" \
@@ -451,10 +877,13 @@ run_updlpars_api() {
 
       else
         # LPAR novo: decidir IP (com escolha se houver mais do que um)
+        # Suportar tanto .networks[*].ipAddress/ipAddresses como .networkPorts[*].privateIP
         mapfile -t ip_array < <(jq -r '
           [
-            (.networks[]? | .ipAddress?),
-            (.networks[]? | .ipAddresses[]?)
+            (.networks[]?      | .ipAddress?),
+            (.networks[]?      | .ipAddresses[]?),
+            (.networkPorts[]?  | .privateIP?),
+            (.networkPorts[]?  | .ipAddress?)
           ]
           | map(select(. != null))
           | unique[]
@@ -464,33 +893,32 @@ run_updlpars_api() {
         ip_count=${#ip_array[@]}
 
         if (( ip_count == 0 )); then
-          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New LPAR '$name' in workspace '$ws' has no IP addresses reported by API (storing empty IP)." "1"
+          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New IBM i LPAR '$name' in workspace '$ws' has no IP addresses reported by API (storing empty IP)." "1"
 
         elif (( ip_count == 1 )); then
           chosen_ip="${ip_array[0]}"
-          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New LPAR '$name' in workspace '$ws' -> single IP detected: $chosen_ip" "1"
+          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New IBM i LPAR '$name' in workspace '$ws' -> single IP detected: $chosen_ip" "1"
 
         else
-          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New LPAR '$name' in workspace '$ws' has multiple IPs:" "1"
+          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New IBM i LPAR '$name' in workspace '$ws' has multiple IPs:" "1"
           idx=1
           for ip in "${ip_array[@]}"; do
             echo "  $idx) $ip"
             ((idx++))
           done
 
-	# Loop until we get a valid choice
+          # Loop until we get a valid choice
           while :; do
-            # Always read from the terminal, not from redirected stdin
+            # Ler SEMPRE do terminal, não do stdin redirecionado do while
             printf "### Choose the IP to store in JSON [1-%d] (default 1): " "$ip_count" > /dev/tty
 
             if ! read -r choice < /dev/tty; then
-              # If we get EOF (Ctrl+D or no TTY), default to 1
               choice=1
               echo > /dev/tty
               echo "### No input received, defaulting to option 1." > /dev/tty
             fi
 
-            # Default = 1 if user just presses Enter
+            # Default = 1 se só carregarem Enter
             if [[ -z "$choice" ]]; then
               choice=1
             fi
@@ -501,11 +929,11 @@ run_updlpars_api() {
 
             echo "Invalid choice. Please enter a number between 1 and ${ip_count}." > /dev/tty
           done
+
           chosen_ip="${ip_array[$((choice-1))]}"
-          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Selected IP '$chosen_ip' for LPAR '$name'." "1"
+          echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Selected IP '$chosen_ip' for IBM i LPAR '$name'." "1"
         fi
 
-        # LPAR novo -> lpar label vazio por agora
         system_obj=$(jq -n \
           --arg name "$name" \
           --arg ip "$chosen_ip" \
@@ -517,12 +945,12 @@ run_updlpars_api() {
       # Acrescenta este objecto JSON (numa linha) ao acumulador
       all_systems+="$system_obj"$'\n'
 
-    done < <(printf '%s\n' "$resp" | jq -c '.pvmInstances[]?')
+    done < <(printf '%s\n' "$resp" | jq -c '.pvmInstances[]? | select(.operatingSystem.type == "ibmi")')
   done
 
   # Se não conseguimos nada do API, não mexemos no JSON
   if [[ -z "$all_systems" ]]; then
-    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: No systems retrieved from any workspace; keeping existing systems[] as-is." "1"
+    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: No IBM i systems retrieved from any workspace; keeping existing systems[] as-is." "1"
   else
     # Converte as linhas em array JSON e sobrescreve systems[]
     systems_json=$(printf '%s\n' "$all_systems" | jq -s '.')
@@ -530,7 +958,7 @@ run_updlpars_api() {
     jq --argjson systems "$systems_json" '.systems = $systems' "$CONFIG_JSON" > "$tmp_file" && \
       mv "$tmp_file" "$CONFIG_JSON"
 
-    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Systems updated from IBM Cloud (new LPARs added, obsolete removed)." "1"
+    echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Systems updated from IBM Cloud (IBM i only: new LPARs added, obsolete removed)." "1"
   fi
 
   echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Final (masked) config snapshot:" "1"
@@ -575,7 +1003,7 @@ jq_inplace() {
   mv "$tmp_file" "$CONFIG_JSON"
 }
 
-flag="${1:-}"
+#flag="${1:-}"
 
 if [[ $# -eq 0 ]]; then
   usage
@@ -619,6 +1047,10 @@ case "$flag" in
   -v)
     # Version as JSON
     jq -n --arg version "$VERSION" '{tool:"bluexscrt_config.api", version:$version}'
+    ;;
+
+  -createconfig)
+    run_createconfig
     ;;
 
   -dellpar)
