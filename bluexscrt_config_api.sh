@@ -177,6 +177,7 @@ base_dal14="https://us-south.power-iaas.cloud.ibm.com"
 default_base_url=$base_mad02 # change to your prefered
 #### END: API Environment ###
 
+#### START:FUNCTION - get_base_url_for_workspace ####
 # ===== Derive base_url from workspace CRN =====
 get_base_url_for_workspace() {
   local ws_key="$1"   # ex: WSFRA1, WSMAD2
@@ -206,6 +207,7 @@ get_base_url_for_workspace() {
   echo "$url"
   return 0
 }
+#### START:FUNCTION - get_base_url_for_workspace ####
 
 #### START:FUNCTION - API Commands ####
 ##  Workspace management aliases
@@ -399,6 +401,7 @@ snap_ls() {
 }
 #### END:FUNCTION - API Commands ####
 
+#### START:FUNCTION - print_masked_config ####
 print_masked_config() {
 
   jq '
@@ -407,11 +410,15 @@ print_masked_config() {
     .access.secretKey |= ( if . != null then ( .[0:4] + "****" + .[-4:] ) else . end )
   ' "$CONFIG_JSON"
 }
+#### END:FUNCTION - print_masked_config ####
 
+#### START:FUNCTION - Ping ####
 ping_host() {
   ping -c3 -W3 "$1" &>/dev/null
 }
+#### END:FUNCTION - Ping ####
 
+#### START:FUNCTION - create_vsi_user_from_json ####
 create_vsi_user_from_json() {
   local vsi_user ssh_key_path pub_ssh_key usr_folder usr_folder_ssh auth_keys_path
 
@@ -536,7 +543,9 @@ create_vsi_user_from_json() {
   echo ""
   echo "### create_vsi_user_from_json finished."
 }
+#### END:FUNCTION - create_vsi_user_from_json ####
 
+#### START:FUNCTION - discover_workspaces_via_powervs ####
 discover_workspaces_via_powervs() {
   echo "### Discovering PowerVS workspaces via PowerVS API (all known regions)..."
 
@@ -639,8 +648,9 @@ discover_workspaces_via_powervs() {
 
   return 0
 }
+#### END:FUNCTION - discover_workspaces_via_powervs ####
 
-
+#### START:FUNCTION - run_createconfig ####
 run_createconfig() {
   echo ""
   echo "### bluexscrt_config.api - Initial JSON configuration (-createconfig)"
@@ -807,9 +817,9 @@ EOF
 
   echo "### -createconfig finished."
 }
+#### END:FUNCTION - run_createconfig ####
 
-
-############################
+#### START:FUNCTION - run_updlpars_api ####
 run_updlpars_api() {
   get_iam_token
   echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs (IBM i only) ===" "1"
@@ -840,20 +850,41 @@ run_updlpars_api() {
       continue
     fi
 
-    # Verificar se há pvmInstances IBM i neste workspace
-    if ! printf '%s\n' "$resp" | jq -e '.pvmInstances[]? | select(.operatingSystem.type == "ibmi")' >/dev/null 2>&1; then
-      echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> No IBM i pvmInstances found in '$ws' (skipping)" "1"
-      continue
-    fi
+    local ws_ibmi_found=0
 
-    # IMPORTANTE: só iterar sobre IBM i
+    # Iterar sobre TODAS as pvmInstances; filtramos IBM i em bash/jq
     while IFS= read -r inst; do
+      # Decide se é IBM i com base em vários sinais (suporta esquemas antigos e novos)
+      os_flag=$(jq -r '
+        if ((.osType? // "" | ascii_downcase) == "ibmi") then
+          "yes"
+        elif ((.operatingSystem? | type == "string")
+              and ((.operatingSystem | ascii_downcase) | test("ibmi|v7r[0-9]m[0-9]"; "i"))) then
+          "yes"
+        elif ((.operatingSystem.type? // "" | ascii_downcase) == "ibmi") then
+          "yes"
+        elif .configuration.softwareLicenses.ibmiCSS? == true then
+          "yes"
+        elif .softwareLicenses.ibmiCSS? == true then
+          "yes"
+        else
+          "no"
+        end
+      ' <<<"$inst")
+
+      if [[ "$os_flag" != "yes" ]]; then
+        # não é IBM i, ignoramos
+        continue
+      fi
+
+      ws_ibmi_found=1
+
       # Nome e ID: suportar tanto serverName/pvmInstanceID como name/id
       name=$(jq -r '.serverName // .name // "UNKNOWN"' <<<"$inst")
       pvmid=$(jq -r '.pvmInstanceID // .id // ""'      <<<"$inst")
 
       if [[ -z "$pvmid" || "$pvmid" == "null" ]]; then
-        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Skipping instance '$name' in '$ws' (no pvmInstanceID/id)." "1"
+        echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Skipping IBM i instance '$name' in '$ws' (no pvmInstanceID/id)." "1"
         continue
       fi
 
@@ -877,13 +908,19 @@ run_updlpars_api() {
 
       else
         # LPAR novo: decidir IP (com escolha se houver mais do que um)
-        # Suportar tanto .networks[*].ipAddress/ipAddresses como .networkPorts[*].privateIP
+        # Suportar:
+        #  - addresses[].ipAddress/ip
+        #  - networks[].ipAddress/ip/ipAddresses[]
+        #  - networkPorts[].privateIP/ipAddress
         mapfile -t ip_array < <(jq -r '
           [
-            (.networks[]?      | .ipAddress?),
-            (.networks[]?      | .ipAddresses[]?),
-            (.networkPorts[]?  | .privateIP?),
-            (.networkPorts[]?  | .ipAddress?)
+            (.addresses[]?      | .ipAddress?),
+            (.addresses[]?      | .ip?),
+            (.networks[]?       | .ipAddress?),
+            (.networks[]?       | .ip?),
+            (.networks[]?       | .ipAddresses[]?),
+            (.networkPorts[]?   | .privateIP?),
+            (.networkPorts[]?   | .ipAddress?)
           ]
           | map(select(. != null))
           | unique[]
@@ -909,7 +946,6 @@ run_updlpars_api() {
 
           # Loop until we get a valid choice
           while :; do
-            # Ler SEMPRE do terminal, não do stdin redirecionado do while
             printf "### Choose the IP to store in JSON [1-%d] (default 1): " "$ip_count" > /dev/tty
 
             if ! read -r choice < /dev/tty; then
@@ -918,7 +954,6 @@ run_updlpars_api() {
               echo "### No input received, defaulting to option 1." > /dev/tty
             fi
 
-            # Default = 1 se só carregarem Enter
             if [[ -z "$choice" ]]; then
               choice=1
             fi
@@ -945,7 +980,11 @@ run_updlpars_api() {
       # Acrescenta este objecto JSON (numa linha) ao acumulador
       all_systems+="$system_obj"$'\n'
 
-    done < <(printf '%s\n' "$resp" | jq -c '.pvmInstances[]? | select(.operatingSystem.type == "ibmi")')
+    done < <(printf '%s\n' "$resp" | jq -c '.pvmInstances[]?')
+
+    if (( ws_ibmi_found == 0 )); then
+      echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> No IBM i instances matched in '$ws' (based on osType/operatingSystem/softwareLicenses)." "1"
+    fi
   done
 
   # Se não conseguimos nada do API, não mexemos no JSON
@@ -965,9 +1004,9 @@ run_updlpars_api() {
   print_masked_config
   echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -updlpars finished." "1"
 }
+#### END:FUNCTION - run_updlpars_api ####
 
-
-###### Devolve 0 se o pvmInstanceID ainda existe no workspace, 1 caso contrário
+#### START:FUNCTION - vsi_exists_in_cloud ####
 vsi_exists_in_cloud() {
     local ws="$1"           # exemplo: WSMAD2
     local pvm_id="$2"
@@ -992,8 +1031,9 @@ vsi_exists_in_cloud() {
         return 1    # não existe
     fi
 }
+#### END:FUNCTION - vsi_exists_in_cloud ####
 
-
+#### START:FUNCTION - jq_inplace ####
 # Safe jq wrapper that writes back to CONFIG_JSON
 jq_inplace() {
   local filter="$1"
@@ -1002,15 +1042,15 @@ jq_inplace() {
   jq "$filter" "$@" "$CONFIG_JSON" > "$tmp_file"
   mv "$tmp_file" "$CONFIG_JSON"
 }
+#### END:FUNCTION - jq_inplace ####
 
-#flag="${1:-}"
 
 if [[ $# -eq 0 ]]; then
   usage
   exit 1
 fi
 
-# Set base_url, CLOUD_INSTANCE_ID e CRN para um workspace curto (ex: WSMAD2)
+#### START:FUNCTION - set_ws_context ####
 # Set base_url, CLOUD_INSTANCE_ID e CRN para um workspace curto (ex: WSMAD2)
 set_ws_context() {
     local ws="$1"
@@ -1042,6 +1082,7 @@ set_ws_context() {
     CRN="$crn"
     return 0
 }
+#### END:FUNCTION - set_ws_context ####
 
 case "$flag" in
   -v)

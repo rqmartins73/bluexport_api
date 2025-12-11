@@ -33,8 +33,8 @@
 # Change volume tier:           ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
 #
 # === GRS (Global Replication Services) ===
-# Create GRS Volume Group and onboard auxiliary volumes:
-#   ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
+# Create GRS Volume Group and onboard auxiliary volumes:  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
+# Delete GRS Volume Group and auxiliary volumes:	  ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 #
 #  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON.
 #  VG_NAME:                        Name for the Volume Group to create on the source workspace.
@@ -51,9 +51,7 @@
 #
 # Note: Recurrence "hourly" and "daily" only permits captures to image-catalog.
 #
-# Ricardo Martins - Blue Chip Portugal - 2023-2025"
-#
-# Ricardo Martins - Blue Chip Portugal - 2023-2025
+# Ricardo Martins - Blue Chip Portugal - 2025-2025
 ###########################################################################################
 
        #####  START:CODE  #####
@@ -295,7 +293,7 @@ help() {
 	echoscreen ""
 	echoscreen "Note: Recurrence \"hourly\" and \"daily\" only permits captures to image-catalog."
 	echoscreen ""
-	echoscreen "Ricardo Martins - Blue Chip Portugal - 2023-2025"
+	echoscreen "Ricardo Martins - Blue Chip Portugal - 2025-2025"
 	echoscreen ""
 }
 #### END:FUNCTION - Help  ####
@@ -331,7 +329,7 @@ ins_vol_ls() {
 }
 
 ins_vol_bdet() {
-	curl -X DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+	curl -sX DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
 ins_ls() {
@@ -368,11 +366,11 @@ vol_att_multi() {
 }
 
 vol_del() {
-	curl -X DELETE "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volumes/$VOL_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
+	curl -sX DELETE "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volumes/$VOL_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
 
 vol_bdel() {
-	curl -X DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+	curl -sX DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
 vol_rcr() {
@@ -393,7 +391,7 @@ vol_cl_ls() {
 }
 
 vol_cl_del() {
-	curl -X DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/volumes-clone/$VOL_CLONE_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
+	curl -sX DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/volumes-clone/$VOL_CLONE_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
 
 vol_cl_st() {
@@ -443,11 +441,11 @@ vg_act() {
 }
 
 vg_del() {
-	curl -X DELETE "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups/$VOLUME_GROUP_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
+	curl -sX DELETE "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups/$VOLUME_GROUP_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
 
 vg_upd() {
-	curl -X PUT "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups/$VOLUME_GROUP_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+	curl -sX PUT "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups/$VOLUME_GROUP_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
 
@@ -532,24 +530,12 @@ chk_vol_rep() {
 	do
 		VOL_ID=$i
 		rep_enabled=$(vol_get | jq -r '.replicationEnabled' 2>>"$log_file")
-
-#		cg_id=$(vol_get | jq -r '.consistencyGroupID? // empty')
-#		state=$(vol_get | jq -r '.status // "unknown"')
-#		if [[ -n "$cg_id" ]]
-#		then
-#			abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume $VOL_ID is part of a consistency group ($cg_id). Clean up previous GRS/CG before enabling replication."
-#		fi
-#		if [[ "$state" != "available" && "$state" != "in-use" ]]
-#		then
-#			abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume $VOL_ID is in state $state. Must be available or in-use to enable replication."
-#		fi
-
 		if [[ "$rep_enabled" == "false" ]]
 		then
 			flag=1
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume ID: $i replicationEnabled=false. Enabling replication..." "1"
 			ACTIONS='"replicationEnabled": true'
-			vol_act 2>>"$log_file" | tee -a "$log_file" >/dev/null
+			vol_act 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 		fi
 	done
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Replication check done." "1"
@@ -910,7 +896,6 @@ get_iASP_name() {
 check_locally_VSI_exists() {
 	# Clear job log
 	: > "$job_log"
-
 	# Check if VSI exists in JSON
 	if jq -e --arg vsi "$vsi" 'any(.systems[]; (.name == $vsi ))' "$bluexscrt" > /dev/null
 	then
@@ -965,8 +950,6 @@ flush_asps() {
 			then
 				abort "$(date +%Y-%m-%d_%H:%M:%S) - ERRO: ligação SSH falhou ou deu timeout, abortando..."
 			fi
-
-
 			if [[ -n "$iasp_names" ]]
 			then
 				for iasp_name in $iasp_names
@@ -991,7 +974,6 @@ flush_asps() {
 do_snap_create() {
 	flush_asps
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Snapshot $snap_name of Instance $vsi with volumes $volumes_to_echo" "1"
-
 	# Construir lista de volumeIDs (se tiveres indicado volumes; se não, o serviço decide)
 	local json_ids=""
 	if [[ -n "$volumes_to_snap" ]]
@@ -1003,29 +985,24 @@ do_snap_create() {
 		then
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list instance volumes via API. Check log above this line..."
 		fi
-
 		# volumes_to_snap é comma-separated de nomes ou IDs
 		IFS=',' read -r -a snap_vols_array <<< "$volumes_to_snap"
-
 		for vtoken in "${snap_vols_array[@]}"
 		do
 			local vtrim
 			vtrim=$(echo "$vtoken" | xargs)
 			[[ -z "$vtrim" ]] && continue
-
 			# Match por volumeID OU por name
 			local vol_id
 			vol_id=$(echo "$vols_json" | jq -r --arg t "$vtrim" '
 				.volumes[]? | select(.volumeID == $t or .name == $t) | .volumeID
 			' 2>>"$log_file" | head -n1)
-
 			if [[ -z "$vol_id" || "$vol_id" == "null" ]]
 			then
 				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume '$vtrim' not found on VSI $vsi. Use exact Volume Name or Volume ID."
 			fi
 			json_ids="$json_ids\"$vol_id\","
 		done
-
 		# remover última vírgula
 		json_ids="${json_ids%,}"
 		if [[ -z "$json_ids" ]]
@@ -1033,22 +1010,17 @@ do_snap_create() {
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No valid volumes resolved from '$volumes_to_snap'."
 		fi
 	fi
-
 	# Construir payload JSON (ACTIONS) só com name, description, volumeIDs
 	ACTIONS="\"name\":\"$snap_name\""
-
 	if [[ -n "$snap_description" ]]
 	then
 		ACTIONS="$ACTIONS,\"description\":\"$snap_description\""
 	fi
-
 	if [[ -n "$json_ids" ]]
 	then
 		ACTIONS="$ACTIONS,\"volumeIDs\":[${json_ids}]"
 	fi
-
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Calling snapshots API (snap_cr) with payload: {$ACTIONS}" "1"
-
 	# Chamada API para criar Snapshot
 	local resp
 	resp=$(snap_cr 2>>"$log_file")
@@ -1066,7 +1038,6 @@ do_snap_create() {
 	fi
 
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Snapshot $snap_name to reach 100%..." "1"
-
 	# Tentar obter o snapshotID a partir da resposta; se não vier, vamos buscá-lo à lista
 	local snap_id
 	snap_id=$(echo "$resp" | jq -r '.snapshotID // .id // empty' 2>/dev/null)
@@ -1076,12 +1047,10 @@ do_snap_create() {
 		snaps_json=$(snap_ls 2>>"$log_file")
 		snap_id=$(echo "$snaps_json" | jq -r --arg name "$snap_name" '.snapshots[]? | select(.name == $name) | .snapshotID' 2>>"$log_file" | head -n1)
 	fi
-
 	if [[ -z "$snap_id" || "$snap_id" == "null" ]]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve snapshot ID for $snap_name. Check IBM Cloud portal / API."
 	fi
-
 	# Loop de monitorização do percentComplete
 	local snap_percent=0
 	local snap_percent_before=0
@@ -1095,13 +1064,10 @@ do_snap_create() {
 			echo "$status_json" >>"$log_file"
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading snapshot status from API."
 		fi
-
 		snap_percent=$(echo "$status_json" | jq -r --arg id "$snap_id" '
 			.snapshots[]? | select(.snapshotID == $id) | .percentComplete // 0
 		' 2>>"$log_file")
-
 		[[ "$snap_percent" =~ ^[0-9]+$ ]] || snap_percent=0
-
 		if [ "$snap_percent" -ne "$snap_percent_before" ]
 		then
 			if [ "$snap_percent" -ge 100 ]
@@ -1120,7 +1086,6 @@ do_snap_create() {
 ####  START:FUNCTION - Do the Snapshot Update  ####
 do_snap_update() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Snapshot $snap_name Update $new_name_echo $new_description_echo" "1"
-
 	# Construir JSON ACTIONS com os campos a atualizar
 	local actions=""
 	if [[ -n "$snap_new_name" ]]; then
@@ -1133,24 +1098,19 @@ do_snap_update() {
 			actions="\"description\":\"$snap_new_description\""
 		fi
 	fi
-
 	if [[ -z "$actions" ]]; then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR - No fields to update for snapshot $snap_name (ACTIONS empty)."
 	fi
-
 	ACTIONS="$actions"
-
 	if [[ -z "$SNAP_ID" ]]; then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR - SNAP_ID not set before do_snap_update."
 	fi
-
 	local resp
 	resp=$(snap_upd 2>>"$log_file")
 	if [ $? -ne 0 ] || [[ -z "$resp" ]]; then
 		echo "$resp" >>"$log_file"
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error calling snapshot update API. Check log above this line..."
 	fi
-
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name updated $new_name_echo $new_description_echo - Done!" "1"
 }
 ####  END:FUNCTION - Do the Snapshot Update  ####
@@ -1468,7 +1428,7 @@ create_grs() {
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - No auxiliary volumes found in remote-copy relationships for $vg_name after waiting. Aborting."
 	fi
-	auxvolnames=$(echo "$auxvol_names" | tr ' ' ',')
+	auxvolnames=$(echo $auxvol_names | tr ' ' ',')
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Auxiliary volumes on target storage: $auxvol_names" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Found $aux_count auxiliary volumes for VG $vg_name." "1"
 	# 2.7 – Boot volume aux name (apenas logging)
@@ -1480,9 +1440,8 @@ create_grs() {
 	fi
 	# 2.8 – Detalhes do VG e RCRs (apenas para log)
 	echo "$vg_details" | jq -r '"State: \(.state) - Number of Volumes: \(.numOfvols)"' | tee -a "$log_file"
-	vg_get 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	vg_get 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 	vg_rcr 2>>"$log_file" | jq -r '.remoteCopyRelationships[]? | "Progress: \(.progress) -- RCR: \(.name) -- Master: \(.masterVolumeName)"' | tee -a "$log_file"
-
 	cgname=$(vg_ls 2>>"$log_file" | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .consistencyGroupName')
 	if [[ -z "$cgname" || "$cgname" == "null" ]]
 	then
@@ -1498,24 +1457,42 @@ create_grs() {
 	PVM_ID="$target_PVM_ID"
 	# 2.10 – Onboarding dos auxiliary volumes no TARGET
 	ondesc="onboard_aux_vols_$vol_com_name"
-	auxvolnames_api=$(echo "$auxvolnames" | sed 's/,/"},{"auxVolumeName": "/g')
+	# Construir JSON array de auxiliaryVolumes sem quebras de linha
+	aux_json=""
+	for name in $auxvol_names
+	do
+		# cada entrada: {"auxVolumeName":"..."},
+		aux_json="$aux_json{\"auxVolumeName\":\"$name\"},"
+	done
+	# remover última vírgula
+	aux_json="${aux_json%,}"
 	ACTIONS=$(cat <<EOF
 		"Volumes": [
 		{
 		"auxiliaryVolumes": [
-			{
-			"auxVolumeName": "$auxvolnames_api"
-			}
-			],
+			$aux_json
+		],
 		"sourceCRN": "$source_ws_crn"
 		}
 		],
 		"description": "$ondesc"
 EOF
 )
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting auxiliary volume onboarding on target workspace for VSI $target_vsi..." "1"
-	on_cr 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting auxiliary volume onboarding on target workspace for VSI $target_vsi." "1"
+	# Chamada ao onboarding e validação de erro
+	resp_on=$(on_cr 2>>"$log_file")
+	echo "$resp_on" >>"$log_file"
+	# Se a API devolver um objeto com campo .code (ex.: 400), abortamos
+	if echo "$resp_on" | jq -e '.code? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$resp_on" | jq -r '.message // .error // "Unknown error"' 2>/dev/null)
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error creating volume onboarding: $errmsg"
+	fi
 	VOLUME_ONBOARDING_ID=$(on_ls | jq -r --arg desc "$ondesc" '[.onboardings[]? | select(.description == $desc)][-1].id' 2>>"$log_file")
+	if [[ -z "$VOLUME_ONBOARDING_ID" || "$VOLUME_ONBOARDING_ID" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find onboarding ID for description $ondesc."
+	fi
 	if [[ -z "$VOLUME_ONBOARDING_ID" || "$VOLUME_ONBOARDING_ID" == "null" ]]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find onboarding ID for description $ondesc."
@@ -1549,7 +1526,6 @@ delete_grs() {
 	VOLUME_GROUP_ID=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '
 		.volumeGroups[]? | select(.name == $vg) | .id
 	' 2>>"$log_file")
-
 	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]; then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Group $vg_name not found in source workspace. Aborting GRS delete."
 	fi
@@ -1572,10 +1548,9 @@ delete_grs() {
 			json_ids="$json_ids\"$vid\","
 		done
 		json_ids="${json_ids%,}"
-
 		ACTIONS="\"removeVolumes\":[${json_ids}]"
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Removing source volumes from VG $vg_name: [${json_ids}]..." "1"
-		vg_upd 2>>"$log_file" | tee -a "$log_file" >/dev/null
+		vg_upd 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 		# 1.2 Esperar o VG ficar em estado empty
 		while true
 		do
@@ -1591,7 +1566,7 @@ delete_grs() {
 	fi
 	# 1.3 Apagar o VG no source
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Deleting source Volume Group $vg_name..." "1"
-	vg_del 2>>"$log_file" | tee -a "$log_file" >/dev/null
+	vg_del 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 	# 1.4 Desativar replication nos volumes de origem (sem os apagar)
 	if [[ -n "$src_vol_ids" ]]; then
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Disabling replication on source volumes with prefix $vol_com_name..." "1"
@@ -1599,7 +1574,7 @@ delete_grs() {
 		do
 			VOL_ID="$vid"
 			ACTIONS='"replicationEnabled": false'
-			vol_act 2>>"$log_file" | tee -a "$log_file" >/dev/null
+			vol_act 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 		done
 		# Esperar até todos ficarem replicationEnabled=false
 		while true
@@ -1629,7 +1604,6 @@ delete_grs() {
 	VOLUME_GROUP_ID=$(echo "$vg_json" | jq -r --arg cg "$cgname" '
 		.volumeGroups[]? | select(.name | startswith($cg)) | .id
 	' 2>>"$log_file")
-
 	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]; then
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group for consistencyGroupName $cgname not found. Skipping VG delete on target." "1"
 	else
@@ -1654,7 +1628,7 @@ delete_grs() {
 			tg_json_ids="${tg_json_ids%,}"
 			ACTIONS="\"removeVolumes\":[${tg_json_ids}]"
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Removing target volumes from VG (CG: $cgname): [${tg_json_ids}]..." "1"
-			vg_upd 2>>"$log_file" | tee -a "$log_file" >/dev/null
+			vg_upd 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 		fi
 	fi
 	####################################
@@ -1678,6 +1652,21 @@ delete_grs() {
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VSI $target_vsi still has attached volumes. Waiting 30 seconds..." "1"
 		sleep 30
 	done
+	# SAFETY CHECK – ensure aux volumes are NOT replicationEnabled
+	unsafe_aux=""
+	for vid in $tg_vol_ids
+	do
+		VOL_ID="$vid"
+		rep_enabled=$(vol_get 2>>"$log_file" | jq -r '.replicationEnabled // "false"')
+		if [[ "$rep_enabled" == "true" ]]
+		then
+			unsafe_aux="$unsafe_aux $vid"
+		fi
+	done
+	if [[ -n "$unsafe_aux" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Some target (aux) volumes still have replicationEnabled=true: $unsafe_aux. Aborting GRS delete to avoid impacting primary volumes."
+	fi
 	# 3.2 Apagar auxiliary volumes no target (os mesmos IDs apanhados antes)
 	if [[ -n "$tg_vol_ids" ]]; then
 		local tg_del_ids=""
@@ -1687,7 +1676,7 @@ delete_grs() {
 		tg_del_ids="${tg_del_ids%,}"
 		ACTIONS="\"volumeIDs\":[${tg_del_ids}]"
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Deleting auxiliary volumes on target: [${tg_del_ids}]..." "1"
-		vol_bdel 2>>"$log_file" | tee -a "$log_file" >/dev/null
+		vol_bdel 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 	else
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No auxiliary volumes to delete on target with name $tgvol_com_name." "1"
 	fi
@@ -1701,13 +1690,11 @@ delete_grs() {
 timestamp=$(date +%F" "%T" "%Z)
 echo "==== START ======= $timestamp =========" | tee -a $log_file
 echo "Flags Used: $@" | tee -a $log_file
-
 if [ $# -eq 0 ]
 then
 	help
 	abort "`date +%Y-%m-%d_%H:%M:%S` - No arguments supplied!!"
 fi
-
 
 case $1 in
    -h | --help | -help)
@@ -1960,12 +1947,10 @@ case $1 in
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 LPAR_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|[Comma separated Volumes name list to snap]"
 	fi
-
 	vsi="$2"
 	vsi_id_bluexscrt
 	test=0
 	snap_name="$3"
-
 	# Verificar se já existe snapshot com este nome PARA ESTA VSI via API
 	snaps_json=$(snap_ls 2>>"$log_file")
 
@@ -1981,7 +1966,6 @@ case $1 in
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Already exists one Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID), please choose a different name or use flag -snapupd to change the name."
 	fi
-
 	# Argumento DESCRIPTION: 0 ou frase entre aspas
 	description_arg="$4"
 	if [ -n "$description_arg" ] && [ "$description_arg" -eq "$description_arg" ] 2>/dev/null
@@ -1995,7 +1979,6 @@ case $1 in
 	else
 		snap_description="$description_arg"
 	fi
-
 	# Argumento VOLUMES: 0 ou lista comma separated de nomes/IDs
 	volumes_arg="$5"
 	if [ -n "$volumes_arg" ] && [ "$volumes_arg" -eq "$volumes_arg" ] 2>/dev/null
@@ -2011,7 +1994,6 @@ case $1 in
 		volumes_to_snap="$volumes_arg"
 		volumes_to_echo="$volumes_arg"
 	fi
-
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot $snap_name of VSI $vsi with volumes: $volumes_to_echo !" "1"
 	check_locally_VSI_exists
 	do_snap_create
@@ -2545,7 +2527,7 @@ case $1 in
 EOF
 )
 					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Deleting cloned volumes associated with $vclone_name..." "1"
-					vol_bdel 2>>"$log_file" | tee -a "$log_file" >/dev/null
+					vol_bdel 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 					ret=$?
 					if [ $ret -ne 0 ]
 					then
@@ -2557,7 +2539,7 @@ EOF
 		fi
 		# Agora apagar o Volume Clone request
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Trying to Delete Volume Clone with name $vclone_name" "1"
-		vol_cl_del 2>>"$log_file" | tee -a "$log_file" >/dev/null
+		vol_cl_del 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 		ret=$?
 		if [ $ret -ne 0 ]
 		then
@@ -2681,48 +2663,6 @@ EOF
 	delete_grs
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished GRS delete for VG $vg_name between $source_vsi and $target_vsi ==="
     ;;
-
-   -deletegrs)
-	# Syntax: bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
-	if [ $# -lt 5 ]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
-	fi
-	if [ $# -gt 5 ]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
-	fi
-		test=0
-	flagj=1   # não queremos SSH / iASP discovery aqui
-		source_vsi=$2
-	target_vsi=$3
-	vg_name=$4
-	vol_com_name=$5       # prefixo volumes SOURCE
-	tgvol_com_name=$6     # prefixo volumes TARGET
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Validating source VSI $source_vsi and target VSI $target_vsi in config and IBM Cloud..." "1"
-	# SOURCE VSI – obter contexto
-	vsi=$source_vsi
-	vsi_id_bluexscrt
-	check_locally_VSI_exists
-	source_ws_crn="$shortnamecrn"
-	source_CLOUD_INSTANCE_ID="$CLOUD_INSTANCE_ID"
-	source_base_url="$base_url"
-	source_PVM_ID="$PVM_ID"
-	source_vsi_id="$vsi_id"
-	# TARGET VSI – obter contexto
-	vsi=$target_vsi
-	vsi_id_bluexscrt
-	check_locally_VSI_exists
-	target_ws_crn="$shortnamecrn"
-	target_CLOUD_INSTANCE_ID="$CLOUD_INSTANCE_ID"
-	target_base_url="$base_url"
-	target_PVM_ID="$PVM_ID"
-	target_vsi_id="$vsi_id"
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Both VSIs validated. Proceeding with GRS delete..." "1"
-	delete_grs
-	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished GRS delete for VG $vg_name between $source_vsi and $target_vsi ==="
-    ;;
-
 
    -v | --version)
     if [ $# -gt 1 ]
