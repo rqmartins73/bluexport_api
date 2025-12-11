@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 # bluexscrt_config.api
-# Non-interactive JSON-based helper for bluexscrt configuration
-# Ricardo Martins - Blue Chip Portugal © 2024-2025
+#
+# Ricardo Martins - Blue Chip Portugal © 2025-2025
 #################################################################
 
 set -euo pipefail
@@ -28,28 +28,47 @@ fi
 usage() {
   cat <<EOF
 
-### Usage: $(basename "$0") [option] [args]
+bluexscrt_config.api v$VERSION
+
+Usage:
+  $(basename "$0") [option] [args]
 
 Options:
   -v
-      Show version in JSON.
+      Show tool version as JSON.
+
+  -createconfig
+      Run an interactive wizard to:
+        - create the initial bluexscrt JSON (IBM Cloud API key, COS, SSH user/key)
+        - create or update bluexport_conf.json
+        - discover PowerVS workspaces via API and populate .workspaces
+        - discover IBM i LPARs and populate .systems
+        - optionally create the SSH user on the IBM i LPARs and copy the key
 
   -dellpar NAME
-      Delete an LPAR (system) from the JSON config.
+      Delete an LPAR (system) named NAME from .systems[] in the JSON config
+      (match is case-insensitive on the "name" field).
 
-  -addlpar NAME IP PVM_ID WORKSPACE_SHORT LPAR_LABEL
-      Add or update an LPAR (system) in the JSON config.
+  -addlpar NAME IP PVM_ID WORKSPACE_SHORT
+      Add or update a single LPAR (system) entry in .systems[]:
+        NAME            Logical system name (e.g. ibmi75m2)
+        IP              IP address to use (SSH / bluexport)
+        PVM_ID          PowerVS pvmInstanceID of the LPAR
+        WORKSPACE_SHORT Workspace key as defined under .workspaces (e.g. WSMAD2)
 
   -updlpars
-      Update pvmInstanceID for existing systems using 'ibmcloud resources'.
-      (Same logic as old bluexscrt_config.sh, but writing into JSON.)
+      Discover IBM i LPARs in all configured workspaces (via PowerVS APIs) and:
+        - add new IBM i systems to .systems[]
+        - remove systems that no longer exist
+        - refresh pvmInstanceID and workspace for existing entries
+      At the end, prints a masked snapshot of the current JSON config.
 
 Examples:
   $(basename "$0") -v
+  $(basename "$0") -createconfig
   $(basename "$0") -dellpar ibmi75m2
   $(basename "$0") -addlpar ibmi75m2 172.26.2.5 7ed4ea03-... WSMAD2
   $(basename "$0") -updlpars
-
 EOF
 }
 
