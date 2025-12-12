@@ -27,7 +27,8 @@
 # Delete image:                 ./bluexport_api.sh -imgdel IMG_NAME"
 #
 # === Cloud Object Storage (COS) ===
-# List buckets for all COS instances (from bluexscrt): ./bluexport_api.sh -bucketslsall
+# List buckets for all COS instances (from bluexscrt): 	./bluexport_api.sh -bucketslsall
+# List objects from a COS bucket:     			./bluexport_api.sh -bucketlsobjs
 #
 # === Volume Clones ===
 # Create volume clone:          ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
@@ -314,6 +315,7 @@ help() {
 	echoscreen ""
 	echoscreen "=== === Cloud Object Storage (COS) === ==="
 	echoscreen "List buckets for all COS instances:	./bluexport_api.sh -bucketslsall"
+	echoscreen "List objects from a COS bucket:	./bluexport_api.sh -bucketlsobjs"
 	echoscreen ""
 	echoscreen "=== === Volume Clones === ==="
 	echoscreen "Create volume clone:		./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
@@ -3330,6 +3332,160 @@ EOF
 	done <<< "$cos_keys"
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all COS buckets for all COS instances ==="
      ;;
+
+   -bucketlsobjs)
+	# Lista objetos de um bucket COS escolhido interativamente
+	if [ $# -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh -bucketlsobjs"
+	fi
+	test=0
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting interactive COS bucket objects listing ===" "1"
+	# 1) Obter COS instances do JSON
+	cos_keys=$(jq -r '.cos_instances | keys[]?' "$bluexscrt" 2>>"$log_file")
+	if [[ -z "$cos_keys" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - No cos_instances section or no COS instances defined in $bluexscrt. Nothing to list."
+	fi
+	# Guardar nomes em array para escolha
+	cos_array=()
+	while IFS= read -r cos_name
+	do
+		[[ -z "$cos_name" ]] && continue
+		cos_array+=("$cos_name")
+	done <<< "$cos_keys"
+	cos_count=${#cos_array[@]}
+	if [ "$cos_count" -eq 0 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - No COS instances found in $bluexscrt. Nothing to list."
+	fi
+	echoscreen "" "1"
+	echoscreen "Available COS instances (from cos_instances in $bluexscrt):" "1"
+	idx=1
+	for cname in "${cos_array[@]}"
+	do
+		echoscreen "[$idx] $cname" "1"
+		idx=$((idx+1))
+	done
+	echoscreen "" "1"
+	# 2) Escolher COS instance
+	while true
+	do
+		printf "Select COS instance index [1-%d]: " "$cos_count" > /dev/tty
+		if ! read -r cos_choice < /dev/tty; then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..." "1"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Aborted by user (no selection)."
+		fi
+		if ! [[ "$cos_choice" =~ ^[0-9]+$ ]]; then
+			echo "Invalid input. Please enter a number between 1 and $cos_count." > /dev/tty
+			continue
+		fi
+		if (( cos_choice < 1 || cos_choice > cos_count )); then
+			echo "Choice out of range. Please select between 1 and $cos_count." > /dev/tty
+			continue
+		fi
+		break
+	done
+	chosen_cos="${cos_array[$((cos_choice-1))]}"
+	# Ler GUID e CRN da COS instance escolhida
+	SERVICE_INSTANCE_ID=$(jq -r --arg ci "$chosen_cos" '.cos_instances[$ci].guid // ""' "$bluexscrt" 2>>"$log_file")
+	cos_crn=$(jq -r --arg ci "$chosen_cos" '.cos_instances[$ci].crn  // ""' "$bluexscrt" 2>>"$log_file")
+	if [[ -z "$SERVICE_INSTANCE_ID" || "$SERVICE_INSTANCE_ID" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - COS instance \"$chosen_cos\" has no GUID in $bluexscrt. Cannot list buckets."
+	fi
+	REGION="$region"  # por agora usamos a mesma region definida em .access
+	echoscreen "" "1"
+	echoscreen "================================================================================" "1"
+	echoscreen "Selected COS INSTANCE: $chosen_cos" "1"
+	echoscreen "GUID:                  $SERVICE_INSTANCE_ID" "1"
+	echoscreen "CRN:                   $cos_crn" "1"
+	echoscreen "REGION (S3 endpoint):  $REGION" "1"
+	echoscreen "================================================================================" "1"
+	# 3) Listar buckets dessa COS instance
+	buckets_xml=$(cos_ls_buckets 2>>"$log_file")
+	echo "$buckets_xml" >>"$log_file"
+	if [[ -z "$buckets_xml" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing buckets for COS instance \"$chosen_cos\"."
+	fi
+	# Extrair lista de bucket names (IBM i-safe)
+	bxml="$buckets_xml"
+	bucket_names=()
+	while [[ "$bxml" == *"<Bucket>"*"</Bucket>"* ]]
+	do
+		bchunk="${bxml#*<Bucket>}"
+		bchunk="${bchunk%%</Bucket>*}"
+		bxml="${bxml#*</Bucket>}"
+		bname=$(printf '%s\n' "$bchunk" | sed 's/^.*<Name>//; s/<\/Name>.*$//')
+		if [[ -n "$bname" ]]
+		then
+			bucket_names+=("$bname")
+		fi
+	done
+	bucket_count=${#bucket_names[@]}
+	if [ "$bucket_count" -eq 0 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - No buckets found for COS instance \"$chosen_cos\"."
+	fi
+	echoscreen "" "1"
+	echoscreen "Buckets in COS instance \"$chosen_cos\":" "1"
+	i=1
+	for bname in "${bucket_names[@]}"
+	do
+		echoscreen "[$i] $bname" "1"
+		i=$((i+1))
+	done
+	echoscreen "" "1"
+	# 4) Escolher bucket
+	while true
+	do
+		printf "Select bucket index [1-%d]: " "$bucket_count" > /dev/tty
+		if ! read -r bucket_choice < /dev/tty; then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..." "1"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Aborted by user (no bucket selection)."
+		fi
+		if ! [[ "$bucket_choice" =~ ^[0-9]+$ ]]; then
+			echo "Invalid input. Please enter a number between 1 and $bucket_count." > /dev/tty
+			continue
+		fi
+		if (( bucket_choice < 1 || bucket_choice > bucket_count )); then
+			echo "Choice out of range. Please select between 1 and $bucket_count." > /dev/tty
+			continue
+		fi
+		break
+	done
+	chosen_bucket="${bucket_names[$((bucket_choice-1))]}"
+	echoscreen "" "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Listing objects from bucket \"$chosen_bucket\" in region $REGION..." "1"
+	# 5) Listar objetos do bucket escolhido usando list_object()
+	REGION="$region"
+	BUCKET="$chosen_bucket"
+	objects_xml=$(list_object 2>>"$log_file")
+	echo "$objects_xml" >>"$log_file"
+	if [[ -z "$objects_xml" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing objects in bucket \"$chosen_bucket\"."
+	fi
+	# Extrair <Key>... de forma simples e IBM i-safe
+	obj_keys=$(printf '%s\n' "$objects_xml" | sed 's/></>\n</g' | grep '<Key>' | sed 's/^.*<Key>//; s/<\/Key>.*$//')
+	if [[ -z "$obj_keys" ]]
+	then
+		echoscreen "No objects found in bucket \"$chosen_bucket\"." "1"
+	else
+		echoscreen "" "1"
+		echoscreen "Objects in bucket \"$chosen_bucket\":" "1"
+		counter=1
+		while IFS= read -r k
+		do
+			[[ -z "$k" ]] && continue
+			echoscreen "[$counter] $k" "1"
+			counter=$((counter+1))
+		done <<< "$obj_keys"
+	fi
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing objects for bucket \"$chosen_bucket\" ==="
+     ;;
+
 
     *)
 	if [ -t 1 ]
