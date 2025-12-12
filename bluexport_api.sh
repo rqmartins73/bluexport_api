@@ -3317,16 +3317,37 @@ EOF
 			continue
 		fi
 
-		# Parsing do XML mesmo quando vem tudo numa só linha:
-		# extrai <Name> e <CreationDate> de cada <Bucket> usando match em loop
-		echo "$buckets_xml" | awk '
-			{
+		# Parsing do XML mesmo quando vem tudo numa só linha (IBM i-safe):
+		# 1) parte em blocos por <Bucket>
+		# 2) em cada bloco, extrai <Name> e <CreationDate> com match() + RSTART/RLENGTH
+		echo "$buckets_xml" \
+		| sed 's/<Bucket>/\n<Bucket>/g' \
+		| awk '
+			/<Bucket>/ {
 				line = $0
-				while (match(line, /<Bucket>[^<]*<Name>([^<]+)<\/Name>[^<]*<CreationDate>([^<]+)<\/CreationDate>[^<]*<\/Bucket>/, m)) {
-					printf "Bucket Name:      %s\n", m[1]
-					printf "Creation Date:    %s\n", m[2]
+				name = ""
+				date = ""
+
+				# Extrair <Name>...</Name>
+				if (match(line, /<Name>[^<]*<\/Name>/)) {
+					tmp = substr(line, RSTART, RLENGTH)
+					gsub(/<Name>|<\/Name>/, "", tmp)
+					name = tmp
+				}
+
+				# Extrair <CreationDate>...</CreationDate>
+				if (match(line, /<CreationDate>[^<]*<\/CreationDate>/)) {
+					tmp = substr(line, RSTART, RLENGTH)
+					gsub(/<CreationDate>|<\/CreationDate>/, "", tmp)
+					date = tmp
+				}
+
+				if (name != "") {
+					printf "Bucket Name:      %s\n", name
+					if (date != "") {
+						printf "Creation Date:    %s\n", date
+					}
 					printf "------------------------------------------------------------\n"
-					line = substr(line, RSTART + RLENGTH)
 				}
 			}
 		' | tee -a "$log_file"
@@ -3342,7 +3363,7 @@ EOF
 	then
 		help
 	fi
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -a or -x Missing or invalid Flag!"
+	abort "`date +%Y-%m-%d_%H:%M:%S` - Missing or invalid Flag!"
     ;;
 esac
 ####  END: Iniciate Log and Validate Arguments  ####
