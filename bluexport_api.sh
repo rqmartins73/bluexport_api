@@ -3317,41 +3317,25 @@ EOF
 			continue
 		fi
 
-		# Parsing do XML mesmo quando vem tudo numa só linha (IBM i-safe):
-		#  - percorre a linha toda, extraindo cada <Bucket>...</Bucket>
-		#  - em cada bloco extrai <Name> e <CreationDate>
-		echo "$buckets_xml" | awk '
-			{
-				line = $0
-				while (match(line, /<Bucket>[^<]*<Name>[^<]*<\/Name>[^<]*<CreationDate>[^<]*<\/CreationDate>[^<]*<\/Bucket>/)) {
-					block = substr(line, RSTART, RLENGTH)
-					name = ""
-					date = ""
-
-					# Extrair Name
-					if (match(block, /<Name>[^<]*<\/Name>/)) {
-						tmp = substr(block, RSTART, RLENGTH)
-						gsub(/<Name>|<\/Name>/, "", tmp)
-						name = tmp
-					}
-
-					# Extrair CreationDate
-					if (match(block, /<CreationDate>[^<]*<\/CreationDate>/)) {
-						tmp = substr(block, RSTART, RLENGTH)
-						gsub(/<CreationDate>|<\/CreationDate>/, "", tmp)
-						date = tmp
-					}
-
-					if (name != "") {
-						printf "Bucket Name:      %s\n", name
-						if (date != "") {
-							printf "Creation Date:    %s\n", date
-						}
-						printf "------------------------------------------------------------\n"
-					}
-
-					# Avançar para depois deste <Bucket> para procurar o próximo
-					line = substr(line, RSTART + RLENGTH)
+		# Parsing do XML (IBM i-safe):
+		#  - parte entre tags
+		#  - associa cada <Name> ao <CreationDate> imediatamente seguinte
+		echo "$buckets_xml" \
+		| sed 's/></>\n</g' \
+		| awk '
+			/<Name>/ {
+				tmp = $0
+				gsub(/.*<Name>|<\/Name>.*/, "", tmp)
+				last_name = tmp
+			}
+			/<CreationDate>/ {
+				tmp = $0
+				gsub(/.*<CreationDate>|<\/CreationDate>.*/, "", tmp)
+				if (last_name != "") {
+					printf "Bucket Name:      %s\n", last_name
+					printf "Creation Date:    %s\n", tmp
+					printf "------------------------------------------------------------\n"
+					last_name = ""
 				}
 			}
 		' | tee -a "$log_file"
