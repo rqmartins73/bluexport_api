@@ -9,7 +9,7 @@ set -euo pipefail
 
 VERSION="1.1.0"
 
-conf_file="$HOME/bluexport_conf.json"
+conf_file="$HOME/bluexport_api_conf.json"
 flag="${1:-}"
 
 # Para -createconfig ainda não podemos assumir que o conf_file existe.
@@ -1119,7 +1119,6 @@ case "$flag" in
       echo "Usage: $(basename "$0") -dellpar NAME" >&2
       exit 1
     fi
-#    ensure_config_exists
     name="$2"
 
     # Remove system with matching name (case-insensitive)

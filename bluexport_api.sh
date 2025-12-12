@@ -76,7 +76,29 @@
 
 Version=1.1
 
-conf_file="$HOME/bluexport_conf.json"
+conf_file="$HOME/bluexport_api_conf.json"
+
+if [[ $1 == "-v" ]] || [[ $1 == "--version" ]]
+then
+	if [ $# -gt 1 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -v | --version"
+	fi
+echo
+jq -n --arg version "$Version" '{tool:"bluexport_api.sh", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2025"}'
+echo "`date +%Y-%m-%d_%H:%M:%S`"
+echo
+exit 0
+fi
+
+if [ ! -f $conf_file ]
+then
+	echo
+	echo "Flags Used: $@"
+	echo "`date +%Y-%m-%d_%H:%M:%S` - Config file $bluexscrt Missing!! Aborting!..."
+	echo
+	exit 0
+fi
 
 log_file=$(jq -r '.log_file' "$conf_file")
 bluexscrt=$(jq -r '.bluexscrt' "$conf_file")
@@ -96,7 +118,7 @@ echoscreen() {
 }
 #### END:FUNCTION - Echo to log file and screen  ####
 
-if [[ $1 != "-chscrt" ]] && [[ $1 != "-viewscrt" ]] && [[ $1 != "-v" ]] && [[ $1 != "--version" ]] && [[ $1 != "-h" ]] && [[ $1 != "--help" ]] && [[ $1 != "-help" ]] && [[ $1 != "" ]]
+if [[ $1 != "-chscrt" ]] && [[ $1 != "-viewscrt" ]] && [[ $1 != "-h" ]] && [[ $1 != "--help" ]] && [[ $1 != "-help" ]] && [[ $1 != "" ]]
 then
 	####  START: Check if Config File exists  ####
 	if [ ! -f $bluexscrt ]
@@ -105,12 +127,14 @@ then
 		timestamp=$(date +%F" "%T" "%Z)
 		echo "==== START ======= $timestamp =========" >> $log_file
 		echo "Flags Used: $@" >> $log_file
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Config file $bluexscrt Missing!! Aborting!..." "1"
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Secrets file $bluexscrt Missing!! Aborting!..." "1"
 		echo "==== END ========= $timestamp =========" >> $log_file
 		echoscreen ""
 		exit 0
 	fi
 ####  END: Check if Config File exists  ####
+
+
 
 ####  START: Constants Definition  #####
 capture_time=`date +%Y-%m-%d_%H%M`
@@ -1917,7 +1941,7 @@ do_vsi_oper() {
 
 #### START:FUNCTION - VSI Task Operation (do_vsi_task) ####
 # TASK valid values:
-#   dston, retrydump, consoleservice, iopreset, remotedstoff,
+#   dston, retrydump, consoleservice, iopreset, remotedstoff,w
 #   remotedston, iopdump, dumprestart
 do_vsi_task() {
 	local vsi="$1"
@@ -2299,19 +2323,63 @@ case $1 in
     ;;
 
 
-  -chscrt)
-	if [ $# -lt 2 ]
+   -chscrt)
+	# Modo 1: foi passado um caminho diretamente: -chscrt /path/bluexscrt_xxx.json
+	if [ $# -ge 2 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 bluexscrt_file_name - Use the full path ex: /home/user/bluexscrt_new"
+		if [ $# -gt 2 ]
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -chscrt bluexscrt_file_name  (use full path, e.g. /home/user/bluexscrt_new.json)"
+		fi
+		new_scrt="$2"
+		if [ ! -f "$new_scrt" ]
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Secret file $new_scrt does not exist. Aborting..."
+		fi
+		jq --arg new "$new_scrt" '.bluexscrt = $new' "$conf_file" > "$conf_file.tmp" && mv "$conf_file.tmp" "$conf_file"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Secret file changed to $new_scrt !"
 	fi
-	if [ $# -gt 2 ]
+	# Modo 2: sem argumentos → lista e pergunta qual usar
+	scrt_dir=$(dirname "$bluexscrt")
+	echoscreen ""
+	echoscreen "### Available secret files in $scrt_dir (pattern: bluexscrt*.json):"
+	shopt -s nullglob
+	scrt_files=("$scrt_dir"/bluexscrt*.json)
+	if [ ${#scrt_files[@]} -eq 0 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 bluexscrt_file_name - Use the full path ex: /home/user/bluexscrt_new"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - No secret files found (pattern: bluexscrt*.json)."
 	fi
-	new_scrt=$2
+	index=1
+	current_index=0
+	for f in "${scrt_files[@]}"
+	do
+		if [[ "$f" == "$bluexscrt" ]]
+		then
+			marker="(in use)"
+			current_index=$index
+		else
+			marker=""
+		fi
+		# ⚙️ Aqui é onde sai exatamente como queres:
+		printf "[%s] %s %s\n" "$index" "$f" "$marker"
+		index=$((index + 1))
+	done
+	echo ""
+	printf "### Select the secret file to use [1-%d]: " "${#scrt_files[@]}"
+	read choice
+	# Validar escolha
+	if ! [[ "$choice" =~ ^[0-9]+$ ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid selection (not a number)."
+	fi
+	if (( choice < 1 || choice > ${#scrt_files[@]} ))
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid selection (out of range)."
+	fi
+	new_scrt="${scrt_files[$((choice-1))]}"
 	jq --arg new "$new_scrt" '.bluexscrt = $new' "$conf_file" > "$conf_file.tmp" && mv "$conf_file.tmp" "$conf_file"
 	abort "`date +%Y-%m-%d_%H:%M:%S` - Secret file changed to $new_scrt !"
-    ;;
+     ;;
 
   -viewscrt)
     if [ $# -gt 1 ]
@@ -3119,16 +3187,6 @@ EOF
 	vsi="$2"
 	do_vsi_srcmon "$vsi"
      ;;
-
-   -v | --version)
-    if [ $# -gt 1 ]
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -v | --version"
-	fi
-	echoscreen ""
-	jq -n --arg version "$Version" '{tool:"bluexport_api.sh", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2025"}'
-	abort "`date +%Y-%m-%d_%H:%M:%S`"
-    ;;
 
     *)
 	if [ -t 1 ]
