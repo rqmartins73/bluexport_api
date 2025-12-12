@@ -18,11 +18,13 @@
 # Create snapshot:              ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]
 # Update snapshot:              ./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]
 # Delete snapshot:              ./bluexport_api.sh -snapdel  SNAPSHOT_NAME
+# Restore snapshot:             ./bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME
 # List all snapshots (all WS):  ./bluexport_api.sh -snaplsall
 #
 # === Captured Images ===
 # List all captured images
 #  in all Workspaces:           ./bluexport_api.sh -imglsall
+# Delete image:                 ./bluexport_api.sh -imgdel IMG_NAME"
 #
 # === Volume Clones ===
 # Create volume clone:          ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
@@ -41,10 +43,26 @@
 #  SOURCE_VOLUMES_NAME:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS).
 #  TARGET_VOLUMES_NAME:            Common name/prefix for target VSI volumes (used mainly for documentation/logging).
 #
+# === VSI Operations ==="
+# IPL VSI:                       ./bluexport_api.sh -vsistart VSI_NAME"
+#      Start a Virtual Server Instance. VSI must be in SHUTOFF status."
+#
+# VSI Operations:                ./bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE"
+#      Set IBM i boot/operating mode for a VSI."
+#      BOOT_MODE: a | b | c | d"
+#      OPERATING_MODE: normal | manual"
+#
+# VSI Tasks:                     ./bluexport_api.sh -vsitask VSI_NAME TASK"
+#      Run an IBM i operation task on a VSI."
+#      TASK: dston | retrydump | consoleservice | iopreset | remotedstoff |"
+#            remotedston | iopdump | dumprestart"
+#
+# Monitor VSI SRC:               ./bluexport_api.sh -vsisrcmon VSI_NAME"
+#      Monitor VSI SRC until it reaches ACTIVE/00000000 or SHUTOFF."
 # === Examples ===
 # Capture all volumes:          ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily
 # Capture excluding ASP2_:      ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly
-#Capture excluding ASP2_ & iASPname:
+# Capture excluding ASP2_ & iASPname:
 #                               ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly
 #
 # Test mode (no capture):       ./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single
@@ -56,7 +74,7 @@
 
        #####  START:CODE  #####
 
-Version=1.0
+Version=1.1
 
 conf_file="$HOME/bluexport_conf.json"
 
@@ -239,57 +257,76 @@ default_base_url=$base_mad02 # change to your prefered
 #### START:FUNCTION - Help  ####
 help() {
 	echoscreen ""
-	echoscreen "Capture IBM Cloud POWERVS IBM i VSI and Export to COS and/or Image Catalog, manage Snapshots, Volume Clones and GRS Volume Groups."
+	echoscreen "Tool to Capture IBM Cloud PowerVS IBM i VSI and Export to COS and/or Image Catalog. Manage Snapshots, Volume Clones and GRS."
 	echoscreen "Version: $Version"
 	echoscreen ""
-	echoscreen "=== General ==="
-	echoscreen "Changing secret file:          ./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)"
-	echoscreen "View secret file in use:      ./bluexport_api.sh -viewscrt"
+	echoscreen "=== === General === ==="
+	echoscreen "Changing secret file:		./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)"
+	echoscreen "View secret file in use:		./bluexport_api.sh -viewscrt"
 	echoscreen ""
-	echoscreen "Show help:                    ./bluexport_api.sh -h | --help | -help"
-	echoscreen "Show version:                 ./bluexport_api.sh -v | --version"
+	echoscreen "Show help:				./bluexport_api.sh -h | --help | -help"
+	echoscreen "Show version:			./bluexport_api.sh -v | --version"
 	echoscreen ""
-	echoscreen "=== Capture & Export ==="
-	echoscreen "Usage for all volumes:        ./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
-	echoscreen "Usage for excluding volumes:  ./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
-	echoscreen "Usage for monitoring job:     ./bluexport_api.sh -j VSI_NAME IMAGE_NAME"
+	echoscreen "=== === Capture & Export === ==="
+	echoscreen "Usage for all volumes:		./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+	echoscreen "Usage for excluding volumes:	./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+	echoscreen "Usage for monitoring job:		./bluexport_api.sh -j VSI_NAME IMAGE_NAME"
 	echoscreen ""
-	echoscreen "=== Snapshots ==="
-	echoscreen "Create snapshot:              ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]"
-	echoscreen "Update snapshot:              ./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]"
-	echoscreen "Delete snapshot:              ./bluexport_api.sh -snapdel  SNAPSHOT_NAME"
-	echoscreen "List all snapshots (all WS):  ./bluexport_api.sh -snaplsall"
+	echoscreen "=== === Snapshots === ==="
+	echoscreen "Create snapshot:			./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]"
+	echoscreen "Update snapshot:			./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]"
+	echoscreen "Delete snapshot:			./bluexport_api.sh -snapdel  SNAPSHOT_NAME"
+	echoscreen "Restore snapshot:			./bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME"
+	echoscreen "List all snapshots (all WS):	./bluexport_api.sh -snaplsall"
 	echoscreen ""
-	echoscreen "=== Captured Images ==="
+	echoscreen "=== === Captured Images === ==="
 	echoscreen "List all captured images"
-	echoscreen " in all Workspaces:           ./bluexport_api.sh -imglsall"
+	echoscreen " in all Workspaces:			./bluexport_api.sh -imglsall"
+	echoscreen "Delete image:			./bluexport_api.sh -imgdel IMG_NAME"
 	echoscreen ""
-	echoscreen "=== Volume Clones ==="
-	echoscreen "Create volume clone:          ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
-	echoscreen "Delete volume clone:          ./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME"
-	echoscreen "List volume clones (all WS):  ./bluexport_api.sh -vclonelsall"
+	echoscreen "=== === Volume Clones === ==="
+	echoscreen "Create volume clone:		./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
+	echoscreen "Delete volume clone:		./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME"
+	echoscreen "List volume clones (all WS):	./bluexport_api.sh -vclonelsall"
 	echoscreen ""
-	echoscreen "=== Volume Tier ==="
-	echoscreen "Change volume tier:           ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
+	echoscreen "=== === Volume Tier === ==="
+	echoscreen "Change volume tier:			./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
 	echoscreen ""
-	echoscreen "=== GRS (Global Replication Services) ==="
+	echoscreen "=== === GRS (Global Replication Services) === ==="
 	echoscreen "Create GRS Volume Group and onboard auxiliary volumes:"
-	echoscreen "  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+	echoscreen "					./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	echoscreen "Delete GRS Volume Group and auxiliary volumes:"
-	echoscreen "  ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+	echoscreen "					./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	echoscreen ""
 	echoscreen "  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON."
 	echoscreen "  VG_NAME:                        Name for the Volume Group to create on the source workspace."
 	echoscreen "  SOURCE_VOLUMES_NAME:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS)."
 	echoscreen "  TARGET_VOLUMES_NAME:            Common name/prefix for target VSI volumes (used mainly for documentation/logging)."
 	echoscreen ""
-	echoscreen "=== Examples ==="
-	echoscreen "Capture all volumes:          ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
-	echoscreen "Capture excluding ASP2_:      ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly"
-	echoscreen "Capture excluding ASP2_ & iASPname:"
-	echoscreen '                               ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly'
+	echoscreen "=== === VSI Operations === ==="
+	echoscreen "IPL VSI:				./bluexport_api.sh -vsistart VSI_NAME"
+	echoscreen "      Start a Virtual Server Instance. VSI must be in SHUTOFF status."
 	echoscreen ""
-	echoscreen "Test mode (no capture):       ./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single"
+	echoscreen "VSI Operations:			./bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE"
+	echoscreen "      Set IBM i boot/operating mode for a VSI."
+	echoscreen "      BOOT_MODE: a | b | c | d"
+	echoscreen "      OPERATING_MODE: normal | manual"
+	echoscreen ""
+	echoscreen "VSI Tasks:				./bluexport_api.sh -vsitask VSI_NAME TASK"
+	echoscreen "      Run an IBM i operation task on a VSI."
+	echoscreen "      TASK: dston | retrydump | consoleservice | iopreset | remotedstoff |"
+	echoscreen "            remotedston | iopdump | dumprestart"
+	echoscreen ""
+	echoscreen "Monitor VSI SRC:			./bluexport_api.sh -vsisrcmon VSI_NAME"
+	echoscreen "      Monitor VSI SRC until it reaches ACTIVE/00000000 or SHUTOFF."
+	echoscreen ""
+	echoscreen "=== === Examples === ==="
+	echoscreen "Capture all volumes:		./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
+	echoscreen "Capture excluding ASP2_:		./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly"
+	echoscreen "Capture excluding ASP2_ & iASPname:"
+	echoscreen '					./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly'
+	echoscreen ""
+	echoscreen "Test mode (no capture):		./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single"
 	echoscreen ""
 	echoscreen "Note: Recurrence \"hourly\" and \"daily\" only permits captures to image-catalog."
 	echoscreen ""
@@ -344,6 +381,9 @@ ins_cap() {
 	curl -sX POST "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/capture" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
+ins_oper() {
+	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/operations -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+}
 ## Volume management
 vol_ls() {
 	curl -sX GET "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
@@ -503,6 +543,10 @@ img_ls() {
 	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/images -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
 
+img_del() {
+	curl -sX DELETE $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/images/$IMAGE_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
+}
+
 ## Snapshots
 snap_ls() {
 	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
@@ -518,6 +562,10 @@ snap_del() {
 
 snap_upd() {
 	curl -sX PUT $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots/$SNAP_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+}
+
+snap_res() {
+	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/snapshots/$SNAP_ID/restore -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 #### END:FUNCTIONS - API Commands ####
 
@@ -1115,6 +1163,105 @@ do_snap_update() {
 }
 ####  END:FUNCTION - Do the Snapshot Update  ####
 
+####  START:FUNCTION - Do the Snapshot Restore  ####
+do_snap_restore() {
+	# 1) Confirmar estado da VSI antes de fazer restore
+	vsi_status=$(ins_get 2>>"$log_file" | jq -r '.status // empty' 2>>"$log_file")
+	if [[ -z "$vsi_status" || "$vsi_status" == "null" ]]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve VSI status for $vsi (PVM_ID $PVM_ID). Aborting snapshot restore."
+	fi
+	# Regra: SÓ fazemos restore se estiver SHUTOFF
+	if [[ "$vsi_status" != "SHUTOFF" ]]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is in status $vsi_status. Snapshot restore is only allowed when VSI is SHUTOFF."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is in status: $vsi_status. Proceeding with snapshot restore..." "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Searching Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID) in current workspace..." "1"
+	# 2) List snapshots in this workspace
+	snaps_json=$(snap_ls 2>>"$log_file")
+	if [[ -z "$snaps_json" ]]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list snapshots in current workspace. Check log file $log_file."
+	fi
+	# 3) Encontrar snapshot por NOME + PVM_ID (para evitar confusões entre VSIs)
+	SNAP_ID=$(
+		echo "$snaps_json" | jq -r \
+			--arg name "$snap_name" \
+			--arg pvm "$PVM_ID" \
+			'.snapshots // [] | .[] | select(.name == $name and .pvmInstanceID == $pvm) | .snapshotID' \
+			2>>"$log_file" | head -n1
+	)
+
+	if [[ -z "$SNAP_ID" || "$SNAP_ID" == "null" ]]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID) not found in this workspace."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name found with ID: $SNAP_ID" "1"
+	# 4) Chamar API de restore
+	# A API quer um bool em 'force', não uma string
+	ACTIONS="\"force\": true"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Calling Snapshot Restore API for VSI $vsi (PVM_ID $PVM_ID), Snapshot ID $SNAP_ID ..." "1"
+	restore_output=$(snap_res 2>>"$log_file")
+	ret=$?
+	# Guardar sempre o output no log
+	echo "$restore_output" >>"$log_file"
+	# Se o curl falhar, já é erro
+	if [ $ret -ne 0 ]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - curl error calling snapshot restore API. Check log file $log_file."
+	fi
+
+	# Confirmar que é JSON válido
+	if ! echo "$restore_output" | jq . >/dev/null 2>&1; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot restore API did not return valid JSON. Raw output logged above."
+	fi
+
+	# Verificar erros no JSON: .error/.errors/.code
+	has_error_fields="no"
+	if echo "$restore_output" | jq -e '.error? // .errors? | length > 0' >/dev/null 2>&1; then
+		has_error_fields="yes"
+	fi
+	err_code=$(echo "$restore_output" | jq -r '.code // empty' 2>>"$log_file")
+	err_msg=$(echo "$restore_output" | jq -r '.message // empty' 2>>"$log_file")
+	if [[ "$has_error_fields" == "yes" ]] || { [[ -n "$err_code" ]] && [[ "$err_code" != "0" ]] && [[ "$err_code" != "200" ]]; }; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot restore API returned an error (code=$err_code, message=\"$err_msg\"). Check log file $log_file."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot restore request accepted by API. Starting monitoring..." "1"
+	# 5) Monitorizar progresso do restore (sem timeout, até 100%)
+	local snap_status=""
+	local snap_percent=0
+	local snap_percent_before=-1
+	while true
+	do
+		snaps_json=$(snap_ls 2>>"$log_file")
+		if [[ -z "$snaps_json" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading snapshot status during restore monitoring."
+		fi
+		# Ler status e percentComplete do snapshot específico
+		snap_status=$(echo "$snaps_json" | jq -r --arg id "$SNAP_ID" '.snapshots // [] | .[] | select(.snapshotID == $id) | .status // empty' 2>>"$log_file")
+
+		snap_percent=$(echo "$snaps_json" | jq -r --arg id "$SNAP_ID" '.snapshots // [] | .[] | select(.snapshotID == $id) | .percentComplete // 0' 2>>"$log_file")
+		if [[ -z "$snap_status" || "$snap_status" == "null" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot ID $SNAP_ID not found in list while monitoring restore."
+		fi
+		[[ "$snap_percent" =~ ^[0-9]+$ ]] || snap_percent=0
+		# Só escreve no log quando há alteração de percentagem
+		if [ "$snap_percent" -ne "$snap_percent_before" ]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name restore status=$snap_status, progress=${snap_percent}%." "1"
+			snap_percent_before=$snap_percent
+		fi
+		# Condição de fim: percent >= 100
+		if [[ "$snap_percent" -ge 100 ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name restore completed (status=$snap_status, ${snap_percent}%)." "1"
+			break
+		fi
+		sleep 30
+	done
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Snapshot Restore completed successfully for Snapshot $snap_name (ID $SNAP_ID) on VSI $vsi (PVM_ID $PVM_ID). ==="
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Snapshot Restore completed successfully for Snapshot $snap_name (ID $SNAP_ID) on VSI $vsi (PVM_ID $PVM_ID). ==="
+}
+####  END:FUNCTION - Do the Snapshot Restore  ####
+
 
 ####  START:FUNCTION - Do the Snapshot Delete  ####
 do_snap_delete() {
@@ -1684,6 +1831,244 @@ delete_grs() {
 }
 #### END:FUNCTION - Delete GRS ####
 
+#### START:FUNCTION - Start VSI (do_start_vsi) ####
+do_start_vsi() {
+	local vsi="$1"
+	if [[ -z "$vsi" ]]; then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME is missing. Syntax: bluexport_api.sh -startvsi VSI_NAME"
+	fi
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting VSI $vsi ===" "1"
+	# Resolve VSI and workspace (no iASP work)
+	flagj=1
+	vsi="$vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	# Get current VSI status
+	local vsi_status
+	vsi_status=$(ins_get 2>>"$log_file" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi is in status: $vsi_status." "1"
+
+	if [[ "$vsi_status" != "SHUTOFF" ]]; then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi is not in SHUTOFF status (current: $vsi_status). Aborting start."
+	fi
+	# Start action
+	ACTIONS="\"action\": \"start\""
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Calling Instance Action API (start) for VSI $vsi (PVM_ID $PVM_ID)..." "1"
+	ins_act 2>>"$log_file" | tee -a "$log_file"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Start action requested for VSI $vsi. Monitoring until SRC=00000000 and status=ACTIVE (every 30 seconds)..." "1"
+	# Monitoring loop: wait until status=ACTIVE and SRC=00000000
+	while true
+	do
+		vsi_json=$(ins_get 2>>"$log_file")
+		if [[ -z "$vsi_json" ]]; then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING: Could not retrieve VSI status/SRC. Retrying in 30 seconds..." "1"
+			sleep 30
+			continue
+		fi
+		vsi_status=$(echo "$vsi_json" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+		# srcs is an array-of-array, like: "srcs": [[{ "src": "00000000", ... }]]
+		vsi_src=$(echo "$vsi_json" | jq -r '.srcs[0][0].src // "UNKNOWN"' 2>>"$log_file")
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Monitoring VSI $vsi - Status: $vsi_status, SRC: $vsi_src" "1"
+		if [[ "$vsi_status" == "ACTIVE" && "$vsi_src" == "00000000" ]]; then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi reached status ACTIVE with SRC 00000000. Start sequence completed. ==="
+		fi
+		sleep 30
+	done
+}
+#### END:FUNCTION - Start VSI (do_start_vsi) ####
+
+#### START:FUNCTION - VSI Operation (do_vsi_oper) ####
+# Usage:
+#   -vsioper VSI_NAME BOOT_MODE OPERATING_MODE
+#   BOOT_MODE: a|b|c|d
+#   OPERATING_MODE: normal|manual
+do_vsi_oper() {
+	local vsi="$1"
+	local boot_mode="$2"
+	local operating_mode="$3"
+
+	if [[ -z "$vsi" || -z "$boot_mode" || -z "$operating_mode" ]]; then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME, BOOT_MODE and OPERATING_MODE are mandatory. Syntax: bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE"
+	fi
+	# Validate BOOT_MODE
+	case "$boot_mode" in
+		a|b|c|d) ;;
+		*) abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid BOOT_MODE '$boot_mode'. Valid values: a, b, c, d." ;;
+	esac
+	# Validate OPERATING_MODE
+	case "$operating_mode" in
+		manual|normal) ;;
+		*) abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid OPERATING_MODE '$operating_mode'. Valid values: normal, manual." ;;
+	esac
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Setting VSI operation for $vsi ===" "1"
+	# Resolver VSI e workspace
+	flagj=1
+	vsi="$vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	# Construir JSON da operação
+	local op_fields="\"bootMode\": \"$boot_mode\", \"operatingMode\": \"$operating_mode\""
+	ACTIONS="\"operationType\": \"boot\", \"operation\": { $op_fields }"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Calling Instance Operation API (operationType=boot) for VSI $vsi (PVM_ID $PVM_ID) with: $op_fields" "1"
+	ins_oper 2>>"$log_file" | tee -a "$log_file"
+	abort "`date +%Y-%m-%d_%H:%M:%S` - === Instance operation requested for VSI $vsi."
+}
+#### END:FUNCTION - VSI Operation (do_vsi_oper) ####
+
+#### START:FUNCTION - VSI Task Operation (do_vsi_task) ####
+# TASK valid values:
+#   dston, retrydump, consoleservice, iopreset, remotedstoff,
+#   remotedston, iopdump, dumprestart
+do_vsi_task() {
+	local vsi="$1"
+	local task="$2"
+	if [[ -z "$vsi" || -z "$task" ]]; then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME and TASK are mandatory. Syntax: bluexport_api.sh -vsitask VSI_NAME TASK"
+	fi
+	case "$task" in
+		dston|retrydump|consoleservice|iopreset|remotedstoff|remotedston|iopdump|dumprestart)
+			;;
+		*)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid TASK '$task'. Valid values: dston, retrydump, consoleservice, iopreset, remotedstoff, remotedston, iopdump, dumprestart."
+			;;
+	esac
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Running VSI task '$task' on $vsi ===" "1"
+	# Resolve VSI and workspace (no iASP work)
+	flagj=1
+	vsi="$vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	ACTIONS="\"operationType\": \"job\", \"operation\": { \"task\": \"$task\" }"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Calling Instance Operation API (operationType=job, task=$task) for VSI $vsi (PVM_ID $PVM_ID)..." "1"
+	ins_oper 2>>"$log_file" | tee -a "$log_file"
+	abort "`date +%Y-%m-%d_%H:%M:%S` - === Task '$task' requested for VSI $vsi."
+}
+#### END:FUNCTION - VSI Task Operation (do_vsi_task) ####
+
+#### START:FUNCTION - VSI SRC Monitor (do_vsi_srcmon) ####
+# Monitors VSI SRC / Status until:
+#   - status == ACTIVE and SRC == 00000000
+#   - OR status == SHUTOFF
+do_vsi_srcmon() {
+	local vsi="$1"
+
+	if [[ -z "$vsi" ]]; then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME is missing. Syntax: bluexport_api.sh -vsisrcmon VSI_NAME"
+	fi
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Monitoring SRC for VSI $vsi ===" "1"
+
+	# Resolve VSI and workspace
+	flagj=1
+	vsi="$vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+
+	while true
+	do
+		vsi_json=$(ins_get 2>>"$log_file")
+		if [[ -z "$vsi_json" ]]; then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING: Could not retrieve VSI status/SRC. Retrying in 30 seconds..." "1"
+			sleep 30
+			continue
+		fi
+
+		vsi_status=$(echo "$vsi_json" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+		vsi_src=$(echo "$vsi_json" | jq -r '.srcs[0][0].src // "UNKNOWN"' 2>>"$log_file")
+
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi - Status: $vsi_status, SRC: $vsi_src" "1"
+
+		# Condição 1: ACTIVE + SRC limpo
+		if [[ "$vsi_status" == "ACTIVE" && "$vsi_src" == "00000000" ]]; then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi reached status ACTIVE with SRC 00000000. SRC monitoring completed. ==="
+		fi
+
+		# Condição 2: SHUTOFF
+		if [[ "$vsi_status" == "SHUTOFF" ]]; then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi reached status SHUTOFF. SRC monitoring stopped. ==="
+		fi
+
+		sleep 30
+	done
+}
+#### END:FUNCTION - VSI SRC Monitor (do_vsi_srcmon) ####
+
+#### START:FUNCTION - Delete Image (do_img_delete) ####
+do_img_delete() {
+	local img_name="$1"
+	if [[ -z "$img_name" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - IMG_NAME is missing. Syntax: bluexport_api.sh -imgdel IMG_NAME"
+	fi
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Image Delete for $img_name in all Workspaces ===" "1"
+	# Vamos construir os arrays de workspaces e o mapa curto->nome completo
+	IFS=':' read -r -a wsnames_array <<< "$wsnames"
+	read -r -a allws_array <<< "$allws"
+	declare -A wsmap
+	local i
+	for i in "${!allws_array[@]}"
+	do
+		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+	done
+	local IMAGE_ID=""
+	local found_ws=""
+	local found_ws_name=""
+	# Percorrer todas as workspaces definidas
+	for ws in "${allws_array[@]}"
+	do
+		CRN=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$bluexscrt")
+		full_ws_name="${wsmap[$ws]}"
+		if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping." "1"
+			continue
+		fi
+		# Extrair a região do CRN (ex: mad02, eu-de-1, etc.) e mapear para base_url
+		region_api=$(echo "$CRN" | sed -n 's/.*power-iaas:\([^:]*\):.*/\1/p' | tr '-' '_')
+		if [[ -z "$region_api" ]]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Could not parse region from CRN $CRN for workspace $full_ws_name, skipping." "1"
+			continue
+		fi
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking for Image $img_name in Workspace $full_ws_name..." "1"
+		local imgs_json
+		imgs_json=$(img_ls 2>>"$log_file")
+		if [[ -z "$imgs_json" ]]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Could not retrieve image list via API in workspace $full_ws_name, skipping." "1"
+			continue
+		fi
+		IMAGE_ID=$(echo "$imgs_json" | jq -r --arg name "$img_name" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file" | head -n1)
+		if [[ -n "$IMAGE_ID" && "$IMAGE_ID" != "null" ]]
+		then
+			found_ws="$ws"
+			found_ws_name="$full_ws_name"
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image $img_name found in Workspace $found_ws_name with ID: $IMAGE_ID" "1"
+			break
+		fi
+	done
+	if [[ -z "$IMAGE_ID" || "$IMAGE_ID" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image with name $img_name not found in any Workspace."
+	fi
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Calling Image Delete API for $img_name (ID $IMAGE_ID) in Workspace $found_ws_name..." "1"
+	# Chamar API de delete na workspace onde foi encontrada
+	del_output=$(img_del 2>>"$log_file")
+	ret=$?
+	echo "$del_output" >> "$log_file"
+	# Verificar exit code e possível payload de erro
+	if [ $ret -ne 0 ] || echo "$del_output" | jq -e '.code? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$del_output" | jq -r '.message // .error // "Unknown error"' 2>/dev/null)
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error calling image delete API for $img_name: $errmsg"
+	fi
+	abort "`date +%Y-%m-%d_%H:%M:%S` - === Image $img_name (ID $IMAGE_ID) deleted successfully from Workspace $found_ws_name. ==="
+}
+#### END:FUNCTION - Delete Image (do_img_delete) ####
+
        ####  END - FUNCTIONS  ####
 
 ####  START: Iniciate Log and Validate Arguments  ####
@@ -2179,6 +2564,28 @@ case $1 in
 	done
     ;;
 
+  -snapres)
+	# Syntax: bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME
+	if [ $# -lt 3 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
+	fi
+	if [ $# -gt 3 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
+	fi
+	test=0
+	flagj=1
+	vsi=$2
+	snap_name="$3"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Snapshot Restore for VSI $vsi and Snapshot $snap_name ===" "1"
+	# Buscar contexto do VSI (workspace, CRN, CLOUD_INSTANCE_ID, PVM_ID, base_url)
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	# Estamos agora na workspace correta, com PVM_ID e base_url ajustados
+	do_snap_restore
+	;;
+
   -snaplsall)
 	# Too many arguments?
 	if [ $# -gt 1 ]
@@ -2320,6 +2727,15 @@ case $1 in
 		echoscreen "" "1"
 	done
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all Captured Images in all Workpsaces"
+    ;;
+
+   -imgdel)
+	if [ $# -ne 2 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgdel IMG_NAME"
+	fi
+	img_name="$2"
+	do_img_delete "$img_name"
     ;;
 
   -vclonelsall)
@@ -2663,6 +3079,46 @@ EOF
 	delete_grs
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished GRS delete for VG $vg_name between $source_vsi and $target_vsi ==="
     ;;
+
+   -vsistart)
+	if [ $# -ne 2 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -startvsi VSI_NAME"
+	fi
+	vsi="$2"
+	do_start_vsi "$vsi"
+     ;;
+
+   -vsioper)
+	# Syntax: -vsioper VSI_NAME BOOT_MODE OPERATING_MODE
+	if [ $# -ne 4 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE. BOOT_MODE: a | b | c | d  -  OPERATING_MODE: normal | manual"
+	fi
+	vsi="$2"
+	boot_mode="$3"
+	operating_mode="$4"
+	do_vsi_oper "$vsi" "$boot_mode" "$operating_mode"
+     ;;
+
+   -vsitask)
+	if [ $# -ne 3 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsitask VSI_NAME TASK. TASK: dston (21) | retrydump (34) | consoleservice | iopreset (67) | remotedstoff (65) | remotedston (66) | iopdump (70) | dumprestart (22)"
+	fi
+	vsi="$2"
+	task="$3"
+	do_vsi_task "$vsi" "$task"
+     ;;
+
+   -vsisrcmon)
+	if [ $# -ne 2 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsisrcmon VSI_NAME"
+	fi
+	vsi="$2"
+	do_vsi_srcmon "$vsi"
+     ;;
 
    -v | --version)
     if [ $# -gt 1 ]
