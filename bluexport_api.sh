@@ -3318,27 +3318,27 @@ EOF
 		fi
 
 		# Parsing do XML (IBM i-safe):
-		#  - parte entre tags
-		#  - associa cada <Name> ao <CreationDate> imediatamente seguinte
+		#  - insere \n antes de cada <Bucket>
+		#  - percorre cada linha com <Bucket> e extrai Name + CreationDate
 		echo "$buckets_xml" \
-		| sed 's/></>\n</g' \
-		| awk '
-			/<Name>/ {
-				tmp = $0
-				gsub(/.*<Name>|<\/Name>.*/, "", tmp)
-				last_name = tmp
-			}
-			/<CreationDate>/ {
-				tmp = $0
-				gsub(/.*<CreationDate>|<\/CreationDate>.*/, "", tmp)
-				if (last_name != "") {
-					printf "Bucket Name:      %s\n", last_name
-					printf "Creation Date:    %s\n", tmp
-					printf "------------------------------------------------------------\n"
-					last_name = ""
-				}
-			}
-		' | tee -a "$log_file"
+		| sed 's/<Bucket>/\n<Bucket>/g' \
+		| grep '<Bucket>' \
+		| while IFS= read -r bucketline
+		do
+			# Extrair o <Name>...</Name>
+			name=$(echo "$bucketline" | sed 's/^.*<Name>//; s/<\/Name>.*$//')
+			# Extrair o <CreationDate>...</CreationDate>
+			date=$(echo "$bucketline" | sed 's/^.*<CreationDate>//; s/<\/CreationDate>.*$//')
+
+			if [ -n "$name" ]
+			then
+				printf "Bucket Name:      %s\n" "$name"
+				if [ -n "$date" ]; then
+					printf "Creation Date:    %s\n" "$date"
+				fi
+				printf "------------------------------------------------------------\n"
+			fi
+		done | tee -a "$log_file"
 
 		echoscreen "" "1"
 	done <<< "$cos_keys"
