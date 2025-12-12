@@ -316,6 +316,7 @@ help() {
 	echoscreen "=== === Cloud Object Storage (COS) === ==="
 	echoscreen "List buckets for all COS instances:	./bluexport_api.sh -bucketslsall"
 	echoscreen "List objects from a COS bucket:	./bluexport_api.sh -bucketlsobjs"
+	echoscreen "Delete  -bucketdelobj      # Apaga um objeto de um bucket COS escolhido interativamente" ""
 	echoscreen ""
 	echoscreen "=== === Volume Clones === ==="
 	echoscreen "Create volume clone:		./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
@@ -3333,7 +3334,7 @@ EOF
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all COS buckets for all COS instances ==="
      ;;
 
-   -bucketlsobjs)
+  -bucketlsobjs)
 	# Lista objetos de um bucket COS escolhido interativamente
 	if [ $# -gt 1 ]
 	then
@@ -3494,6 +3495,210 @@ EOF
 	fi
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing objects for bucket \"$chosen_bucket\" ==="
      ;;
+
+   -bucketdelobj)
+	# Delete a single object from a COS bucket (interactive)
+	if [ $# -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh -bucketdelobj"
+	fi
+	test=0
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting interactive COS bucket object delete ===" "1"
+	# 1) Obter COS instances do JSON
+	cos_keys=$(jq -r '.cos_instances | keys[]?' "$bluexscrt" 2>>"$log_file")
+	if [[ -z "$cos_keys" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - No cos_instances section or no COS instances defined in $bluexscrt. Nothing to list."
+	fi
+	# Construir array com nomes de COS instances
+	cos_array=()
+	while IFS= read -r cos
+	do
+		[[ -z "$cos" ]] && continue
+		cos_array+=("$cos")
+	done <<< "$cos_keys"
+	cos_count=${#cos_array[@]}
+	if [ "$cos_count" -eq 0 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - No COS instances found in $bluexscrt. Nothing to list."
+	fi
+	echoscreen "" "1"
+	echoscreen "Available COS instances (from cos_instances in $bluexscrt):" "1"
+	idx=1
+	for cname in "${cos_array[@]}"
+	do
+		echoscreen "[$idx] $cname" "1"
+		idx=$((idx+1))
+	done
+	echoscreen "" "1"
+	# 2) Escolher COS instance (IBM i-safe: ler sempre de /dev/tty)
+	while true
+	do
+		printf "Select COS instance index [1-%d]: " "$cos_count" > /dev/tty
+		if ! read -r cos_choice < /dev/tty; then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..."
+		fi
+		if ! echo "$cos_choice" | grep -Eq '^[0-9]+$'; then
+			echo "Invalid input. Please enter a number between 1 and $cos_count." > /dev/tty
+			continue
+		fi
+		if (( cos_choice < 1 || cos_choice > cos_count )); then
+			echo "Choice out of range. Please select between 1 and $cos_count." > /dev/tty
+			continue
+		fi
+		break
+	done
+	chosen_cos="${cos_array[$((cos_choice-1))]}"
+	# Ler GUID e CRN da COS instance escolhida
+	SERVICE_INSTANCE_ID=$(jq -r --arg ci "$chosen_cos" '.cos_instances[$ci].guid // ""' "$bluexscrt" 2>>"$log_file")
+	cos_crn=$(jq -r --arg ci "$chosen_cos" '.cos_instances[$ci].crn  // ""' "$bluexscrt" 2>>"$log_file")
+	if [[ -z "$SERVICE_INSTANCE_ID" || "$SERVICE_INSTANCE_ID" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - COS instance \"$chosen_cos\" has no GUID in $bluexscrt. Cannot list buckets."
+	fi
+	REGION="$region"	# mesma lógica do -bucketlsobjs
+	echoscreen "" "1"
+	echoscreen "================================================================================" "1"
+	echoscreen "Selected COS INSTANCE: $chosen_cos" "1"
+	echoscreen "GUID:                  $SERVICE_INSTANCE_ID" "1"
+	echoscreen "CRN:                   $cos_crn" "1"
+	echoscreen "REGION (S3 endpoint):  $REGION" "1"
+	echoscreen "================================================================================" "1"
+	# 3) Listar buckets dessa COS instance
+	buckets_xml=$(cos_ls_buckets 2>>"$log_file")
+	echo "$buckets_xml" >>"$log_file"
+	if [[ -z "$buckets_xml" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing buckets for COS instance \"$chosen_cos\"."
+	fi
+	# Extrair nomes dos buckets (mesmo parsing IBM i-safe usado no -bucketslsall)
+	bucket_names=()
+	bxml="$buckets_xml"
+	while [[ "$bxml" == *"<Bucket>"*"</Bucket>"* ]]
+	do
+		bchunk="${bxml#*<Bucket>}"
+		bchunk="${bchunk%%</Bucket>*}"
+		bxml="${bxml#*</Bucket>}"
+		bname=$(printf '%s\n' "$bchunk" | sed 's/^.*<Name>//; s/<\/Name>.*$//')
+		if [[ -n "$bname" ]]
+		then
+			bucket_names+=("$bname")
+		fi
+	done
+	bucket_count=${#bucket_names[@]}
+	if [ "$bucket_count" -eq 0 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - No buckets found for COS instance \"$chosen_cos\"."
+	fi
+	echoscreen "" "1"
+	echoscreen "Buckets in COS instance \"$chosen_cos\":" "1"
+	i=1
+	for bname in "${bucket_names[@]}"
+	do
+		echoscreen "[$i] $bname" "1"
+		i=$((i+1))
+	done
+	echoscreen "" "1"
+	# 4) Escolher bucket
+	while true
+	do
+		printf "Select bucket index [1-%d]: " "$bucket_count" > /dev/tty
+		if ! read -r bucket_choice < /dev/tty; then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..."
+		fi
+		if ! echo "$bucket_choice" | grep -Eq '^[0-9]+$'; then
+			echo "Invalid input. Please enter a number between 1 and $bucket_count." > /dev/tty
+			continue
+		fi
+		if (( bucket_choice < 1 || bucket_choice > bucket_count )); then
+			echo "Choice out of range. Please select between 1 and $bucket_count." > /dev/tty
+			continue
+		fi
+		break
+	done
+	chosen_bucket="${bucket_names[$((bucket_choice-1))]}"
+	echoscreen "" "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Listing objects from bucket \"$chosen_bucket\" in region $REGION..." "1"
+	# 5) Listar objetos do bucket escolhido (mesmo parsing do -bucketlsobjs, mas guardando em array)
+	REGION="$region"
+	BUCKET="$chosen_bucket"
+	objects_xml=$(list_object 2>>"$log_file")
+	echo "$objects_xml" >>"$log_file"
+	if [[ -z "$objects_xml" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing objects in bucket \"$chosen_bucket\"."
+	fi
+	data="$objects_xml"
+	obj_array=()
+	while [[ "$data" == *"<Key>"*"</Key>"* ]]
+	do
+		tmp="${data#*<Key>}"
+		key="${tmp%%</Key>*}"
+		data="${tmp#*</Key>}"
+		if [[ -n "$key" ]]
+		then
+			obj_array+=("$key")
+		fi
+	done
+	obj_count=${#obj_array[@]}
+	if [ "$obj_count" -eq 0 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - No objects found in bucket \"$chosen_bucket\". Nothing to delete."
+	fi
+	echoscreen "" "1"
+	echoscreen "Objects in bucket \"$chosen_bucket\":" "1"
+	j=1
+	for obj in "${obj_array[@]}"
+	do
+		echoscreen "[$j] $obj" "1"
+		j=$((j+1))
+	done
+	echoscreen "" "1"
+	# 6) Escolher objeto a apagar
+	while true
+	do
+		printf "Select object index to DELETE [1-%d]: " "$obj_count" > /dev/tty
+		if ! read -r obj_choice < /dev/tty; then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..."
+		fi
+		if ! echo "$obj_choice" | grep -Eq '^[0-9]+$'; then
+			echo "Invalid input. Please enter a number between 1 and $obj_count." > /dev/tty
+			continue
+		fi
+		if (( obj_choice < 1 || obj_choice > obj_count )); then
+			echo "Choice out of range. Please select between 1 and $obj_count." > /dev/tty
+			continue
+		fi
+		break
+	done
+	chosen_key="${obj_array[$((obj_choice-1))]}"
+	echoscreen "" "1"
+	echoscreen "You selected object to delete:" "1"
+	echoscreen "  COS instance : $chosen_cos" "1"
+	echoscreen "  Bucket       : $chosen_bucket" "1"
+	echoscreen "  Object key   : $chosen_key" "1"
+	echoscreen "" "1"
+	# Confirmação antes de apagar
+	printf "Are you sure you want to DELETE this object? (Y/N): " > /dev/tty
+	if ! read -r confirm_del < /dev/tty; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - No confirmation received. Aborting delete."
+	fi
+	case "$confirm_del" in
+		Y|y|YES|yes)
+			;;
+		*)
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Deletion cancelled by user."
+			;;
+	esac
+	# 7) Chamar object_delete() com BUCKET/KEY/REGION definidos
+	BUCKET="$chosen_bucket"
+	KEY="$chosen_key"
+	REGION="$region"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Deleting object \"$KEY\" from bucket \"$BUCKET\" in region $REGION..." "1"
+	object_delete 2>>"$log_file" | tee -a "$log_file"
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished deleting object \"$KEY\" from bucket \"$BUCKET\" ==="
+     ;;
+
 
     *)
 	if [ -t 1 ]
