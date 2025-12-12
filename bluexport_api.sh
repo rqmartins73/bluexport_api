@@ -3318,36 +3318,40 @@ EOF
 		fi
 
 		# Parsing do XML mesmo quando vem tudo numa só linha (IBM i-safe):
-		# 1) parte em blocos por <Bucket>
-		# 2) em cada bloco, extrai <Name> e <CreationDate> com match() + RSTART/RLENGTH
-		echo "$buckets_xml" \
-		| sed 's/<Bucket>/\n<Bucket>/g' \
-		| awk '
-			/<Bucket>/ {
+		#  - percorre a linha toda, extraindo cada <Bucket>...</Bucket>
+		#  - em cada bloco extrai <Name> e <CreationDate>
+		echo "$buckets_xml" | awk '
+			{
 				line = $0
-				name = ""
-				date = ""
+				while (match(line, /<Bucket>[^<]*<Name>[^<]*<\/Name>[^<]*<CreationDate>[^<]*<\/CreationDate>[^<]*<\/Bucket>/)) {
+					block = substr(line, RSTART, RLENGTH)
+					name = ""
+					date = ""
 
-				# Extrair <Name>...</Name>
-				if (match(line, /<Name>[^<]*<\/Name>/)) {
-					tmp = substr(line, RSTART, RLENGTH)
-					gsub(/<Name>|<\/Name>/, "", tmp)
-					name = tmp
-				}
-
-				# Extrair <CreationDate>...</CreationDate>
-				if (match(line, /<CreationDate>[^<]*<\/CreationDate>/)) {
-					tmp = substr(line, RSTART, RLENGTH)
-					gsub(/<CreationDate>|<\/CreationDate>/, "", tmp)
-					date = tmp
-				}
-
-				if (name != "") {
-					printf "Bucket Name:      %s\n", name
-					if (date != "") {
-						printf "Creation Date:    %s\n", date
+					# Extrair Name
+					if (match(block, /<Name>[^<]*<\/Name>/)) {
+						tmp = substr(block, RSTART, RLENGTH)
+						gsub(/<Name>|<\/Name>/, "", tmp)
+						name = tmp
 					}
-					printf "------------------------------------------------------------\n"
+
+					# Extrair CreationDate
+					if (match(block, /<CreationDate>[^<]*<\/CreationDate>/)) {
+						tmp = substr(block, RSTART, RLENGTH)
+						gsub(/<CreationDate>|<\/CreationDate>/, "", tmp)
+						date = tmp
+					}
+
+					if (name != "") {
+						printf "Bucket Name:      %s\n", name
+						if (date != "") {
+							printf "Creation Date:    %s\n", date
+						}
+						printf "------------------------------------------------------------\n"
+					}
+
+					# Avançar para depois deste <Bucket> para procurar o próximo
+					line = substr(line, RSTART + RLENGTH)
 				}
 			}
 		' | tee -a "$log_file"
