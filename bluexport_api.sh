@@ -3467,25 +3467,33 @@ EOF
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing objects in bucket \"$chosen_bucket\"."
 	fi
-	# Extrair <Key>... de forma simples e IBM i-safe
-	obj_keys=$(printf '%s\n' "$objects_xml" | sed 's/></>\n</g' | grep '<Key>' | sed 's/^.*<Key>//; s/<\/Key>.*$//')
-	if [[ -z "$obj_keys" ]]
+	# Extrair todas as chaves <Key>...</Key> em modo IBM i-safe (sem confiar em \n)
+	data="$objects_xml"
+	counter=1
+	found_obj=0
+	while [[ "$data" == *"<Key>"*"</Key>"* ]]
+	do
+		tmp="${data#*<Key>}"       # corta tudo até ao primeiro <Key>
+		key="${tmp%%</Key>*}"     # fica só até antes do </Key>
+		data="${tmp#*</Key>}"     # avança o cursor para depois desse </Key>
+		if [[ -n "$key" ]]
+		then
+			if [[ "$found_obj" -eq 0 ]]
+			then
+				echoscreen "" "1"
+				echoscreen "Objects in bucket \"$chosen_bucket\":" "1"
+			fi
+			found_obj=1
+			echoscreen "[$counter] $key" "1"
+			counter=$((counter+1))
+		fi
+	done
+	if [[ "$found_obj" -eq 0 ]]
 	then
 		echoscreen "No objects found in bucket \"$chosen_bucket\"." "1"
-	else
-		echoscreen "" "1"
-		echoscreen "Objects in bucket \"$chosen_bucket\":" "1"
-		counter=1
-		while IFS= read -r k
-		do
-			[[ -z "$k" ]] && continue
-			echoscreen "[$counter] $k" "1"
-			counter=$((counter+1))
-		done <<< "$obj_keys"
 	fi
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing objects for bucket \"$chosen_bucket\" ==="
      ;;
-
 
     *)
 	if [ -t 1 ]
