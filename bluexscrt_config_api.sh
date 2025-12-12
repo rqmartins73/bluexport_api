@@ -1036,8 +1036,15 @@ run_updlpars_api() {
 					fi
 
 					while true; do
-						# Ler sempre do terminal real (IBM i incluído)
-						read -r -p "Select IP index [1-$ip_count] (ENTER for default ${default_choice:-1}): " choice
+						# Prompt vai sempre para o terminal real
+						printf "Select IP index [1-%d] (ENTER for default %s): " \
+							"$ip_count" "${default_choice:-1}" > /dev/tty
+
+						# Ler SEMPRE do /dev/tty, nunca do stdin do while < <(...)
+						if ! read -r choice < /dev/tty; then
+							# Se por algum motivo não houver input (EOF, etc.) assumimos default
+							choice="${default_choice:-1}"
+						fi
 
 						# Se o utilizador só carregar ENTER:
 						if [[ -z "$choice" ]]; then
@@ -1051,13 +1058,13 @@ run_updlpars_api() {
 
 						# Validar se é numérico
 						if ! [[ "$choice" =~ ^[0-9]+$ ]]; then
-							echoscreen "Invalid input. Please enter a number between 1 and $ip_count, or press ENTER for default." "1"
+							echo "Invalid input. Please enter a number between 1 and $ip_count, or press ENTER for default." > /dev/tty
 							continue
 						fi
 
 						# Validar range
 						if (( choice < 1 || choice > ip_count )); then
-							echoscreen "Choice out of range. Please select between 1 and $ip_count." "1"
+							echo "Choice out of range. Please select between 1 and $ip_count." > /dev/tty
 							continue
 						fi
 
