@@ -3126,7 +3126,7 @@ EOF
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -v | --version"
 	fi
 	echoscreen ""
-	jq -n --arg version "$Version" '{tool:"bluexport_api.sh", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", years:"2025-2025"}'
+	jq -n --arg version "$Version" '{tool:"bluexport_api.sh", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2025"}'
 	abort "`date +%Y-%m-%d_%H:%M:%S`"
     ;;
 
