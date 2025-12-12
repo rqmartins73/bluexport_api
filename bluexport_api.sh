@@ -85,7 +85,8 @@ if [[ $1 == "-v" ]] || [[ $1 == "--version" ]]
 then
 	if [ $# -gt 1 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -v | --version"
+		echo "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -v | --version"
+		exit 0
 	fi
 echo
 jq -n --arg version "$Version" '{tool:"bluexport_api.sh", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2025"}'

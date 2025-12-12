@@ -10,6 +10,20 @@ set -euo pipefail
 VERSION="1.1.0"
 
 conf_file="$HOME/bluexport_api_conf.json"
+if [[ $1 == "-v" ]] || [[ $1 == "--version" ]]
+then
+	if [ $# -gt 1 ]
+	then
+	echo "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -v | --version"
+	exit 0
+	fi
+echo
+jq -n --arg version "$VERSION" '{tool:"bluexscrt_config.api", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2025"}'
+echo "`date +%Y-%m-%d_%H:%M:%S`"
+echo
+exit 0
+fi
+
 flag="${1:-}"
 
 # Para -createconfig ainda não podemos assumir que o conf_file existe.
@@ -1022,17 +1036,26 @@ run_updlpars_api() {
 					fi
 
 					while true; do
-						read -r -p "Select IP index [1-$ip_count] (ENTER for default ${default_choice:-none}): " choice
+						# Ler sempre do terminal real (IBM i incluído)
+						read -r -p "Select IP index [1-$ip_count] (ENTER for default ${default_choice:-1}): " choice
 
-						if [[ -z "$choice" && -n "$default_choice" ]]; then
-							choice="$default_choice"
+						# Se o utilizador só carregar ENTER:
+						if [[ -z "$choice" ]]; then
+							if [[ -n "$default_choice" ]]; then
+								choice="$default_choice"
+							else
+								# Sem default configurado → assume índice 1
+								choice=1
+							fi
 						fi
 
+						# Validar se é numérico
 						if ! [[ "$choice" =~ ^[0-9]+$ ]]; then
 							echoscreen "Invalid input. Please enter a number between 1 and $ip_count, or press ENTER for default." "1"
 							continue
 						fi
 
+						# Validar range
 						if (( choice < 1 || choice > ip_count )); then
 							echoscreen "Choice out of range. Please select between 1 and $ip_count." "1"
 							continue
@@ -1161,11 +1184,6 @@ set_ws_context() {
 #### END:FUNCTION - set_ws_context ####
 
 case "$flag" in
-  -v)
-    # Version as JSON
-    jq -n --arg version "$VERSION" '{tool:"bluexscrt_config.api", version:$version}'
-    ;;
-
   -createconfig)
     run_createconfig
     ;;
