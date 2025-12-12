@@ -26,6 +26,9 @@
 #  in all Workspaces:           ./bluexport_api.sh -imglsall
 # Delete image:                 ./bluexport_api.sh -imgdel IMG_NAME"
 #
+# === Cloud Object Storage (COS) ===
+# List buckets for all COS instances (from bluexscrt): ./bluexport_api.sh -bucketslsall
+#
 # === Volume Clones ===
 # Create volume clone:          ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
 # Delete volume clone:          ./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME
@@ -74,7 +77,7 @@
 
        #####  START:CODE  #####
 
-Version=1.1
+Version=1.2
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -307,6 +310,9 @@ help() {
 	echoscreen "List all captured images"
 	echoscreen " in all Workspaces:			./bluexport_api.sh -imglsall"
 	echoscreen "Delete image:			./bluexport_api.sh -imgdel IMG_NAME"
+	echoscreen ""
+	echoscreen "=== === Cloud Object Storage (COS) === ==="
+	echoscreen "List buckets for all COS instances:	./bluexport_api.sh -bucketslsall"
 	echoscreen ""
 	echoscreen "=== === Volume Clones === ==="
 	echoscreen "Create volume clone:		./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
@@ -591,6 +597,23 @@ snap_upd() {
 snap_res() {
 	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/snapshots/$SNAP_ID/restore -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
+
+## COS
+list_object() {
+	curl -sX GET https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET?list-type=2 -H "$header_auth" 
+}
+
+object_delete() {
+	curl -sX DELETE https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$KEY -H "$header_auth"
+}
+
+cos_ins_ls() {
+	curl -sX GET https://resource-controller.cloud.ibm.com/v2/resource_instances?type=service_instance -H "$header_auth" -H "$header_accept"
+}
+
+cos_ls_buckets() {
+	curl -sX GET https://s3.$REGION.cloud-object-storage.appdomain.cloud/ -H "$header_auth" -H "ibm-service-instance-id: $SERVICE_INSTANCE_ID"
+}
 #### END:FUNCTIONS - API Commands ####
 
 #### START:FUNCTIONS - GRS Code Helpers ####
@@ -717,29 +740,73 @@ chk_on_status() {
 }
 #### END:FUNCTIONS - GRS Code Helpers ####
 
-#### START:FUNCTION - Check if image-catalog and Cloud Object has images from last time and deleted it ####
+#### START:FUNCTION - Check if image-catalog and Cloud Object has images from last time and delete them (API) ####
 delete_previous_img() {
-##########!!!!!!!!!!	img_id_old=$(/usr/local/bin/ibmcloud pi img ls | grep -wi $vsi | grep $old_img | awk {'print $1'})
-###########!!!!!!!!!!	img_name_old=$(/usr/local/bin/ibmcloud pi img ls | grep -wi $vsi | grep $old_img | awk {'print $2'})
-##########!!!!!!!!!	objstg_img=$(/usr/local/bin/ibmcloud cos list-objects-v2 --bucket $bucket | grep -wi $vsi | grep $old_img | awk {'print $1'})
-##############!!!!!	today_img=$(/usr/local/bin/ibmcloud cos list-objects-v2 --bucket $bucket | grep -wi $vsi | grep $capture_date | awk {'print $1'})
-	if [ ! $img_id_old ]
+	REGION="$region"
+	BUCKET="$bucket"
+	# --- Image Catalog (PowerVS Images) via img_ls() ---
+	# Look for an image whose name contains both $vsi and $old_img
+	local img_json
+	img_json=$(img_ls 2>>"$log_file")
+	img_id_old=$(echo "$img_json" | jq -r \
+		--arg vsi "$vsi" \
+		--arg old "$old_img" '
+		.images[]?
+		| select((.name | contains($vsi)) and (.name | contains($old)))
+		| .imageID
+	' 2>>"$log_file" | head -n1)
+	img_name_old=$(echo "$img_json" | jq -r \
+		--arg vsi "$vsi" \
+		--arg old "$old_img" '
+		.images[]?
+		| select((.name | contains($vsi)) and (.name | contains($old)))
+		| .name
+	' 2>>"$log_file" | head -n1)
+	# --- COS (Object Storage) via list_object() ---
+	# list_object() returns XML (S3 ListBucketResult). We parse <Key>...</Key> lines.
+	local list_xml
+	list_xml=$(list_object 2>>"$log_file")
+	# Previous export object (old_img)
+	objstg_img=$(echo "$list_xml" | \
+		awk -v vsi="$vsi" -v old="$old_img" '
+			match($0, /<Key>([^<]+)<\/Key>/, m) {
+				key = m[1]
+				if (index(key, vsi) > 0 && index(key, old) > 0) {
+					print key
+				}
+			}
+		' | head -n1)
+	# Today export object (capture_date)
+	today_img=$(echo "$list_xml" | \
+		awk -v vsi="$vsi" -v today="$capture_date" '
+			match($0, /<Key>([^<]+)<\/Key>/, m) {
+				key = m[1]
+				if (index(key, vsi) > 0 && index(key, today) > 0) {
+					print key
+				}
+			}
+		' | head -n1)
+	# --- Delete from Image Catalog (if found) ---
+	if [[ -z "$img_id_old" ]]
 	then
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - There is no Image from $old_img - Nothing to delete in image catalog." "1"
 	else
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Deleting from image catalog image name $img_name_old - image ID $img_id_old - from day $old_img... ==" "1"
-#############!!!!!!!!!!		sh -c '/usr/local/bin/ibmcloud pi img del '$img_id_old 2>> $log_file | tee -a $log_file
+		IMAGE_ID="$img_id_old"
+		img_del 2>>"$log_file" | tee -a "$log_file"
 	fi
-	if [ ! $objstg_img ]
+	# --- Delete from Object Storage (if safe) ---
+	if [[ -z "$objstg_img" ]]
 	then
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - No image from previous export to delete in Object Storage." "1"
 	else
-		if [ ! $today_img ]
+		if [[ -z "$today_img" ]]
 		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Something went wrong... Today's image is not in Bucket $bucket. Keeping ( Not deleted ) image name $objstg_img from day $old_img... ==" "1"
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Something went wrong... Today's image is not in Bucket $bucket. Keeping (Not deleted) image name $objstg_img from day $old_img... ==" "1"
 		else
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Deleting from Bucket $bucket, image name $objstg_img from day $old_img... ==" "1"
-##########!!!!!!!!!!!!			sh -c '/usr/local/bin/ibmcloud cos object-delete --bucket '$bucket' --key '$objstg_img' --force' 2>> $log_file | tee -a $log_file
+			KEY="$objstg_img"
+			object_delete 2>>"$log_file" | tee -a "$log_file"
 		fi
 	fi
 }
@@ -3186,6 +3253,87 @@ EOF
 	fi
 	vsi="$2"
 	do_vsi_srcmon "$vsi"
+     ;;
+
+   -bucketslsall)
+	# Lista todos os buckets por COS instance definido em .cos_instances no bluexscrt
+	if [ $# -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
+	fi
+
+	test=0
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all COS buckets for all COS instances defined in $bluexscrt ===" "1"
+
+	# Ir buscar as chaves dos cos_instances (nomes lógicos completos, incluindo espaços)
+	cos_keys=$(jq -r '.cos_instances | keys[]?' "$bluexscrt" 2>>"$log_file")
+
+	if [[ -z "$cos_keys" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - No cos_instances section or no COS instances defined in $bluexscrt. Nothing to list."
+	fi
+
+	# Iterar linha a linha para não partir nomes com espaços
+	while IFS= read -r cos
+	do
+		[[ -z "$cos" ]] && continue
+
+		SERVICE_INSTANCE_ID=$(jq -r --arg ci "$cos" '.cos_instances[$ci].guid // ""' "$bluexscrt" 2>>"$log_file")
+		cos_crn=$(jq -r --arg ci "$cos" '.cos_instances[$ci].crn  // ""' "$bluexscrt" 2>>"$log_file")
+
+		if [[ -z "$SERVICE_INSTANCE_ID" || "$SERVICE_INSTANCE_ID" == "null" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - COS instance \"$cos\" has no GUID in $bluexscrt. Skipping." "1"
+			continue
+		fi
+
+		# Região do endpoint S3: para já usa a region global do .access
+		REGION="$region"
+
+		echoscreen "" "1"
+		echoscreen "================================================================================" "1"
+		echoscreen "COS INSTANCE:            $cos" "1"
+		echoscreen "GUID:                    $SERVICE_INSTANCE_ID" "1"
+		echoscreen "CRN:                     $cos_crn" "1"
+		echoscreen "REGION (S3 endpoint):    $REGION" "1"
+		echoscreen "================================================================================" "1"
+
+		# Chamada à API S3 para listar buckets deste COS instance
+		buckets_xml=$(cos_ls_buckets 2>>"$log_file")
+		# Guarda sempre a resposta crua no log para debug
+		echo "$buckets_xml" >>"$log_file"
+
+		if [[ -z "$buckets_xml" ]]
+		then
+			echoscreen "        No Buckets Found or empty response" "1"
+			continue
+		fi
+
+		# Se nem sequer há <Bucket>, não vale a pena tentar parse
+		if ! echo "$buckets_xml" | grep -q "<Bucket>"
+		then
+			echoscreen "        Response received but no <Bucket> tags found (see log for raw XML)." "1"
+			continue
+		fi
+
+		# Parsing do XML mesmo quando vem tudo numa só linha:
+		# extrai <Name> e <CreationDate> de cada <Bucket> usando match em loop
+		echo "$buckets_xml" | awk '
+			{
+				line = $0
+				while (match(line, /<Bucket>[^<]*<Name>([^<]+)<\/Name>[^<]*<CreationDate>([^<]+)<\/CreationDate>[^<]*<\/Bucket>/, m)) {
+					printf "Bucket Name:      %s\n", m[1]
+					printf "Creation Date:    %s\n", m[2]
+					printf "------------------------------------------------------------\n"
+					line = substr(line, RSTART + RLENGTH)
+				}
+			}
+		' | tee -a "$log_file"
+
+		echoscreen "" "1"
+	done <<< "$cos_keys"
+
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all COS buckets for all COS instances ==="
      ;;
 
     *)
