@@ -29,6 +29,7 @@
 # === Cloud Object Storage (COS) ===
 # List buckets for all COS instances (from bluexscrt): 	./bluexport_api.sh -bucketslsall
 # List objects from a COS bucket:     			./bluexport_api.sh -bucketlsobjs
+# Delete object from a COS bucket:    			./bluexport_api.sh -bucketdelobj
 #
 # === Volume Clones ===
 # Create volume clone:          ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
@@ -316,7 +317,7 @@ help() {
 	echoscreen "=== === Cloud Object Storage (COS) === ==="
 	echoscreen "List buckets for all COS instances:	./bluexport_api.sh -bucketslsall"
 	echoscreen "List objects from a COS bucket:	./bluexport_api.sh -bucketlsobjs"
-	echoscreen "Delete  -bucketdelobj      # Apaga um objeto de um bucket COS escolhido interativamente" ""
+	echoscreen "Delete object from a COS bucket:    ./bluexport_api.sh -bucketdelobj"
 	echoscreen ""
 	echoscreen "=== === Volume Clones === ==="
 	echoscreen "Create volume clone:		./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
