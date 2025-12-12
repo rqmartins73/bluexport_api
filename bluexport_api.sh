@@ -3256,95 +3256,98 @@ EOF
 	do_vsi_srcmon "$vsi"
      ;;
 
-   -bucketslsall)
-	# Lista todos os buckets por COS instance definido em .cos_instances no bluexscrt
-	if [ $# -gt 1 ]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
-	fi
-
-	test=0
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all COS buckets for all COS instances defined in $bluexscrt ===" "1"
-
-	# Ir buscar as chaves dos cos_instances (nomes lógicos completos, incluindo espaços)
-	cos_keys=$(jq -r '.cos_instances | keys[]?' "$bluexscrt" 2>>"$log_file")
-
-	if [[ -z "$cos_keys" ]]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - No cos_instances section or no COS instances defined in $bluexscrt. Nothing to list."
-	fi
-
-	# Iterar linha a linha para não partir nomes com espaços
-	while IFS= read -r cos
-	do
-		[[ -z "$cos" ]] && continue
-
-		SERVICE_INSTANCE_ID=$(jq -r --arg ci "$cos" '.cos_instances[$ci].guid // ""' "$bluexscrt" 2>>"$log_file")
-		cos_crn=$(jq -r --arg ci "$cos" '.cos_instances[$ci].crn  // ""' "$bluexscrt" 2>>"$log_file")
-
-		if [[ -z "$SERVICE_INSTANCE_ID" || "$SERVICE_INSTANCE_ID" == "null" ]]
+	-bucketslsall)
+		# Lista todos os buckets por COS instance definido em .cos_instances no bluexscrt
+		if [ $# -gt 1 ]
 		then
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - COS instance \"$cos\" has no GUID in $bluexscrt. Skipping." "1"
-			continue
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
 		fi
 
-		# Região do endpoint S3: para já usa a region global do .access
-		REGION="$region"
+		test=0
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all COS buckets for all COS instances defined in $bluexscrt ===" "1"
 
-		echoscreen "" "1"
-		echoscreen "================================================================================" "1"
-		echoscreen "COS INSTANCE:            $cos" "1"
-		echoscreen "GUID:                    $SERVICE_INSTANCE_ID" "1"
-		echoscreen "CRN:                     $cos_crn" "1"
-		echoscreen "REGION (S3 endpoint):    $REGION" "1"
-		echoscreen "================================================================================" "1"
+		# Ir buscar as chaves dos cos_instances (nomes lógicos completos, incluindo espaços)
+		cos_keys=$(jq -r '.cos_instances | keys[]?' "$bluexscrt" 2>>"$log_file")
 
-		# Chamada à API S3 para listar buckets deste COS instance
-		buckets_xml=$(cos_ls_buckets 2>>"$log_file")
-		# Guarda sempre a resposta crua no log para debug
-		echo "$buckets_xml" >>"$log_file"
-
-		if [[ -z "$buckets_xml" ]]
+		if [[ -z "$cos_keys" ]]
 		then
-			echoscreen "        No Buckets Found or empty response" "1"
-			continue
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - No cos_instances section or no COS instances defined in $bluexscrt. Nothing to list."
 		fi
 
-		# Se nem sequer há <Bucket>, não vale a pena tentar parse
-		if ! echo "$buckets_xml" | grep -q "<Bucket>"
-		then
-			echoscreen "        Response received but no <Bucket> tags found (see log for raw XML)." "1"
-			continue
-		fi
-
-		# Parsing do XML (IBM i-safe):
-		#  - insere \n antes de cada <Bucket>
-		#  - percorre cada linha com <Bucket> e extrai Name + CreationDate
-		echo "$buckets_xml" \
-		| sed 's/<Bucket>/\n<Bucket>/g' \
-		| grep '<Bucket>' \
-		| while IFS= read -r bucketline
+		# Iterar linha a linha para não partir nomes com espaços
+		while IFS= read -r cos
 		do
-			# Extrair o <Name>...</Name>
-			name=$(echo "$bucketline" | sed 's/^.*<Name>//; s/<\/Name>.*$//')
-			# Extrair o <CreationDate>...</CreationDate>
-			date=$(echo "$bucketline" | sed 's/^.*<CreationDate>//; s/<\/CreationDate>.*$//')
+			[[ -z "$cos" ]] && continue
 
-			if [ -n "$name" ]
+			SERVICE_INSTANCE_ID=$(jq -r --arg ci "$cos" '.cos_instances[$ci].guid // ""' "$bluexscrt" 2>>"$log_file")
+			cos_crn=$(jq -r --arg ci "$cos" '.cos_instances[$ci].crn  // ""' "$bluexscrt" 2>>"$log_file")
+
+			if [[ -z "$SERVICE_INSTANCE_ID" || "$SERVICE_INSTANCE_ID" == "null" ]]
 			then
-				printf "Bucket Name:      %s\n" "$name"
-				if [ -n "$date" ]; then
-					printf "Creation Date:    %s\n" "$date"
-				fi
-				printf "------------------------------------------------------------\n"
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - COS instance \"$cos\" has no GUID in $bluexscrt. Skipping." "1"
+				continue
 			fi
-		done | tee -a "$log_file"
 
-		echoscreen "" "1"
-	done <<< "$cos_keys"
+			# Região do endpoint S3: usa a region do .access
+			REGION="$region"
 
-	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all COS buckets for all COS instances ==="
-     ;;
+			echoscreen "" "1"
+			echoscreen "================================================================================" "1"
+			echoscreen "COS INSTANCE: $cos" "1"
+			echoscreen "GUID:        $SERVICE_INSTANCE_ID" "1"
+			echoscreen "CRN:         $cos_crn" "1"
+			echoscreen "REGION:      $REGION" "1"
+			echoscreen "================================================================================" "1"
+
+			# Chamada à API S3 para listar buckets deste COS instance
+			buckets_xml=$(cos_ls_buckets 2>>"$log_file")
+
+			# Guardar XML bruto no log para debug
+			echo "$buckets_xml" >>"$log_file"
+
+			if [[ -z "$buckets_xml" ]]
+			then
+				echoscreen "No Buckets Found or empty response" "1"
+				continue
+			fi
+
+			# Parsing do XML em puro bash + sed (IBM i-safe):
+			# Percorre cada bloco <Bucket>...</Bucket> dentro da string completa
+			bxml="$buckets_xml"
+			found_bucket=0
+			while [[ "$bxml" == *"<Bucket>"*"</Bucket>"* ]]
+			do
+				# Extrair 1 bloco <Bucket>...</Bucket>
+				bchunk="${bxml#*<Bucket>}"
+				bchunk="${bchunk%%</Bucket>*}"
+
+				# Avançar o cursor para a frente deste <Bucket> para o próximo ciclo
+				bxml="${bxml#*</Bucket>}"
+
+				# Extrair Name
+				name=$(printf '%s\n' "$bchunk" | sed 's/^.*<Name>//; s/<\/Name>.*$//')
+				# Extrair CreationDate
+				date=$(printf '%s\n' "$bchunk" | sed 's/^.*<CreationDate>//; s/<\/CreationDate>.*$//')
+
+				if [[ -n "$name" ]]
+				then
+					found_bucket=1
+					echoscreen "Bucket Name:      $name" "1"
+					[[ -n "$date" ]] && echoscreen "Creation Date:    $date" "1"
+					echoscreen "------------------------------------------------------------" "1"
+				fi
+			done
+
+			if [[ "$found_bucket" -eq 0 ]]
+			then
+				echoscreen "No <Bucket> entries found in XML response for COS instance \"$cos\"." "1"
+			fi
+
+			echoscreen "" "1"
+		done <<< "$cos_keys"
+
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all COS buckets for all COS instances ==="
+		;;
 
     *)
 	if [ -t 1 ]
