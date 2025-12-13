@@ -76,10 +76,13 @@
 #
 # Ricardo Martins - Blue Chip Portugal - 2025-2025
 ###########################################################################################
+# Ensure required tools are in PATH (IBM i + Linux safe)
+PATH="/QOpenSys/pkgs/bin:/QOpenSys/usr/bin:/usr/bin:${PATH}"
+export PATH
 
        #####  START:CODE  #####
 
-Version=1.2
+Version=1.3
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -113,13 +116,16 @@ end_log_file='==== END ========= $timestamp ========='
 
 #### START:FUNCTION - Echo to log file and screen  ####
 echoscreen() {
-	if [ -t 1 ]
-	then
-		echo $1
+	msg="$1"
+	flag="$2"
+
+	# Interactive (TTY) OR forced (IBM i batch)
+	if [ -t 1 ] || [[ "${ECHOSCREEN_FORCE_STDOUT:-0}" == "1" ]]; then
+		printf '%s\n' "$msg"
 	fi
-	if [[ $2 == "1" ]]
-	then
-		echo $1 >> $log_file
+
+	if [[ "$flag" == "1" ]]; then
+		printf '%s\n' "$msg" >> "$log_file"
 	fi
 }
 #### END:FUNCTION - Echo to log file and screen  ####
@@ -1533,17 +1539,39 @@ do_volume_clone() {
 
 ####  START:FUNCTION  Check if VSI ID exists in bluexscrt file  ####
 vsi_id_bluexscrt() {
-	vsi_ip=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .ip' "$bluexscrt")
-	vsi_id=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .pvmInstanceID' "$bluexscrt")
+	# Match VSI name in bluexscrt.json ignoring case (IBM i sends upper-case)
+	vsi_ip=$(
+		jq -r --arg name "$vsi" '
+			.systems[]
+			| select((.name | ascii_downcase) == ($name | ascii_downcase))
+			| .ip
+		' "$bluexscrt"
+	)
+
+	vsi_id=$(
+		jq -r --arg name "$vsi" '
+			.systems[]
+			| select((.name | ascii_downcase) == ($name | ascii_downcase))
+			| .pvmInstanceID
+		' "$bluexscrt"
+	)
 	PVM_ID="$vsi_id"
+
 	if [[ -z "$vsi_id" || "$vsi_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI ID missing or VSI Name '$vsi' not found in $bluexscrt. Please add it to the JSON..."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI ID missing or VSI Name '$vsi' not found in $bluexscrt. Please add it to the JSON or check the name."
 	fi
-	# Retrieve workspace key, example: "WSMAD2"
-	vsi_ws=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .workspace' "$bluexscrt")
-	# Retrieve workspace ID using the workspace key
-	vsi_ws_id=$(jq -r --arg ws "$vsi_ws" '.workspaces[$ws].id' "$bluexscrt")
+#	vsi_ip=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .ip' "$bluexscrt")
+#	vsi_id=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .pvmInstanceID' "$bluexscrt")
+#	PVM_ID="$vsi_id"
+#	if [[ -z "$vsi_id" || "$vsi_id" == "null" ]]
+#	then
+#		abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI ID missing or VSI Name '$vsi' not found in $bluexscrt. Please add it to the JSON..."
+#	fi
+#	# Retrieve workspace key, example: "WSMAD2"
+#	vsi_ws=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .workspace' "$bluexscrt")
+#	# Retrieve workspace ID using the workspace key
+#	vsi_ws_id=$(jq -r --arg ws "$vsi_ws" '.workspaces[$ws].id' "$bluexscrt")
 }
 ####  END:FUNCTION  Check if VSI ID exists in bluexscrt file  ####
 
