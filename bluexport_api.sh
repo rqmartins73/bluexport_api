@@ -947,7 +947,7 @@ get_iASP_name() {
 	shutoff=0
 	if [ $test -eq 0 ]
 	then
-		vsi_ip=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .ip' "$bluexscrt")
+		vsi_ip=$(jq -r --arg name "$vsi" '.systems[] | select((.name | ascii_downcase) == ($name | ascii_downcase)) | .ip' "$bluexscrt")
 		if [[ -z "$vsi_ip" || "$vsi_ip" == "null" ]]
 		then
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi not found in JSON systems[] section. Aborting..."
@@ -1046,30 +1046,39 @@ get_iASP_name() {
 check_locally_VSI_exists() {
 	# Clear job log
 	: > "$job_log"
-	# Check if VSI exists in JSON
-	if jq -e --arg vsi "$vsi" 'any(.systems[]; (.name == $vsi ))' "$bluexscrt" > /dev/null
+	# Case-insensitive check if VSI exists in JSON
+	if jq -e --arg vsi "$vsi" 'any(.systems[]; (.name | ascii_downcase) == ($vsi | ascii_downcase))' "$bluexscrt" > /dev/null
 	then
-		# Get workspace short name (e.g., WSMAD2) for this VSI
-		vsiwsshort=$(jq -r --arg vsi "$vsi" '.systems[] | select(.name == $vsi) | .workspace' "$bluexscrt")
+		# Get workspace short name (e.g., WSMAD2) for this VSI (case-insensitive)
+		vsiwsshort=$(
+			jq -r --arg vsi "$vsi" '
+				.systems[]
+				| select((.name | ascii_downcase) == ($vsi | ascii_downcase))
+				| .workspace
+			' "$bluexscrt"
+		)
+
 		# Get workspace CRN for that short name
 		shortnamecrn=$(jq -r --arg ws "$vsiwsshort" '.workspaces[$ws].crn' "$bluexscrt")
+
 		# Call function that lists VSIs in that workspace (writes to $vsi_list_tmp)
 		dc_vsi_list "$shortnamecrn"
-		# Get the cloud VSI name from the list file
+
+		# Get the cloud VSI name from the list file (grep -wi já é case-insensitive)
 		vsi_cloud_name=$(grep -wi "$vsi" "$vsi_list_tmp" | awk '{print $1}')
+
 		# Get full workspace name directly from JSON
 		full_ws_name=$(jq -r --arg ws "$vsiwsshort" '.workspaces[$ws].name' "$bluexscrt")
+
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi_cloud_name was found in $full_ws_name..." "1"
+
 		if [ "$flagj" -eq 0 ]
 		then
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI to Capture: $vsi_cloud_name" "1"
 			get_iASP_name
-		fi
-	else
+		fi	else
 		echoscreen ""
-		echoscreen "   ### VSI $vsi not found in any of the workspaces available in $bluexscrt!"
-		echoscreen ""
-		exit 0
+		abort "   ### VSI $vsi not found in any of the workspaces available in $bluexscrt!"
 	fi
 }
 ####  END:FUNCTION - Check if VSI exists in secret file and Get VSI IP and iASP NAME if exists  ####
@@ -1540,21 +1549,8 @@ do_volume_clone() {
 ####  START:FUNCTION  Check if VSI ID exists in bluexscrt file  ####
 vsi_id_bluexscrt() {
 	# Match VSI name in bluexscrt.json ignoring case (IBM i sends upper-case)
-	vsi_ip=$(
-		jq -r --arg name "$vsi" '
-			.systems[]
-			| select((.name | ascii_downcase) == ($name | ascii_downcase))
-			| .ip
-		' "$bluexscrt"
-	)
-
-	vsi_id=$(
-		jq -r --arg name "$vsi" '
-			.systems[]
-			| select((.name | ascii_downcase) == ($name | ascii_downcase))
-			| .pvmInstanceID
-		' "$bluexscrt"
-	)
+	vsi_ip=$(jq -r --arg name "$vsi" '.systems[] | select((.name | ascii_downcase) == ($name | ascii_downcase)) | .ip' "$bluexscrt")
+	vsi_id=$(jq -r --arg name "$vsi" '.systems[] | select((.name | ascii_downcase) == ($name | ascii_downcase)) | .pvmInstanceID' "$bluexscrt")
 	PVM_ID="$vsi_id"
 
 	if [[ -z "$vsi_id" || "$vsi_id" == "null" ]]
