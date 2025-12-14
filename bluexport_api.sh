@@ -75,7 +75,7 @@
 # Note: Recurrence "hourly" and "daily" only permits captures to image-catalog.
 #
 # Ricardo Martins - Blue Chip Portugal - 2025-2025
-###########################################################################################
+##########################################################################################
 # Ensure required tools are in PATH (IBM i + Linux safe)
 PATH="/QOpenSys/pkgs/bin:/QOpenSys/usr/bin:/usr/bin:${PATH}"
 export PATH
