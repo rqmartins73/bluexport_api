@@ -1050,28 +1050,16 @@ check_locally_VSI_exists() {
 	if jq -e --arg vsi "$vsi" 'any(.systems[]; (.name | ascii_downcase) == ($vsi | ascii_downcase))' "$bluexscrt" > /dev/null
 	then
 		# Get workspace short name (e.g., WSMAD2) for this VSI (case-insensitive)
-		vsiwsshort=$(
-			jq -r --arg vsi "$vsi" '
-				.systems[]
-				| select((.name | ascii_downcase) == ($vsi | ascii_downcase))
-				| .workspace
-			' "$bluexscrt"
-		)
-
+		vsiwsshort=$(jq -r --arg vsi "$vsi" '.systems[]	| select((.name | ascii_downcase) == ($vsi | ascii_downcase)) | .workspace' "$bluexscrt")
 		# Get workspace CRN for that short name
 		shortnamecrn=$(jq -r --arg ws "$vsiwsshort" '.workspaces[$ws].crn' "$bluexscrt")
-
 		# Call function that lists VSIs in that workspace (writes to $vsi_list_tmp)
 		dc_vsi_list "$shortnamecrn"
-
 		# Get the cloud VSI name from the list file (grep -wi já é case-insensitive)
 		vsi_cloud_name=$(grep -wi "$vsi" "$vsi_list_tmp" | awk '{print $1}')
-
 		# Get full workspace name directly from JSON
 		full_ws_name=$(jq -r --arg ws "$vsiwsshort" '.workspaces[$ws].name' "$bluexscrt")
-
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi_cloud_name was found in $full_ws_name..." "1"
-
 		if [ "$flagj" -eq 0 ]
 		then
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI to Capture: $vsi_cloud_name" "1"

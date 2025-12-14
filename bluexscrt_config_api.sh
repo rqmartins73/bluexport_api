@@ -7,7 +7,14 @@
 
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2"
+
+is_ibmi=0
+if uname 2>/dev/null | grep -qi 'OS400'
+then
+	is_ibmi=1
+fi
+
 
 conf_file="$HOME/bluexport_api_conf.json"
 if [[ $1 == "-v" ]] || [[ $1 == "--version" ]]
@@ -713,18 +720,37 @@ run_createconfig() {
 		json_path="$default_json_path"
 	fi
 	# --- Credenciais IBM Cloud / COS / SSH ---
-	while [[ -z "${apikey_input:-}" ]]; do
-		read -s -p "IBM Cloud API key: " apikey_input
-		echo ""
+	while [[ -z "${apikey_input:-}" ]]
+	do
+		if (( is_ibmi ))
+		then
+			# IBM i: sem -s, para evitar problemas com read -s em PASE
+			read -p "IBM Cloud API key: " apikey_input
+		else
+			read -s -p "IBM Cloud API key: " apikey_input
+			echo ""
+		fi
 	done
 	read -p "IBM Cloud Resource Group name (e.g. powervs): " resource_group
-	while [[ -z "${acckey:-}" ]]; do
-		read -s -p "COS Access Key: " acckey
-		echo ""
+	while [[ -z "${acckey:-}" ]]
+	do
+		if (( is_ibmi ))
+		then
+			read -p "COS Access Key: " acckey
+		else
+			read -s -p "COS Access Key: " acckey
+			echo ""
+		fi
 	done
-	while [[ -z "${seckey:-}" ]]; do
-		read -s -p "COS Secret Key: " seckey
-		echo ""
+	while [[ -z "${seckey:-}" ]]
+	do
+		if (( is_ibmi ))
+		then
+			read -p "COS Secret Key: " seckey
+		else
+			read -s -p "COS Secret Key: " seckey
+			echo ""
+		fi
 	done
 	read -p "COS Bucket Name: " bucket
 	read -p "COS Region (e.g. eu-es): " cos_region
