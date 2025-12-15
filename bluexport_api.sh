@@ -111,23 +111,39 @@ fi
 
 log_file=$(jq -r '.log_file' "$conf_file")
 bluexscrt=$(jq -r '.bluexscrt' "$conf_file")
-env_file=$(jq -r '.env_file' "$conf_file")
 end_log_file='==== END ========= $timestamp ========='
 
 #### START:FUNCTION - Echo to log file and screen  ####
 echoscreen() {
-	msg="$1"
-	flag="$2"
+    msg="$1"
+    flag="$2"
 
-	# Interactive (TTY) OR forced (IBM i batch)
-	if [ -t 1 ] || [[ "${ECHOSCREEN_FORCE_STDOUT:-0}" == "1" ]]; then
-		printf '%s\n' "$msg"
-	fi
+    # Quebra linhas a cada 132 colunas
+    wrapped=$(printf '%s\n' "$msg" | fold -w 132 -s)
 
-	if [[ "$flag" == "1" ]]; then
-		printf '%s\n' "$msg" >> "$log_file"
-	fi
+    # Interactive (TTY) OR forced (IBM i batch)
+    if [ -t 1 ] || [[ "${ECHOSCREEN_FORCE_STDOUT:-0}" == "1" ]]; then
+        printf '%s\n' "$wrapped"
+    fi
+
+    if [[ "$flag" == "1" ]]; then
+        printf '%s\n' "$wrapped" >> "$log_file"
+    fi
 }
+
+#echoscreen() {
+#	msg="$1"
+#	flag="$2"
+#
+#	# Interactive (TTY) OR forced (IBM i batch)
+#	if [ -t 1 ] || [[ "${ECHOSCREEN_FORCE_STDOUT:-0}" == "1" ]]; then
+#		printf '%s\n' "$msg"
+#	fi
+#
+#	if [[ "$flag" == "1" ]]; then
+#		printf '%s\n' "$msg" >> "$log_file"
+#	fi
+#}
 #### END:FUNCTION - Echo to log file and screen  ####
 
 if [[ $1 != "-chscrt" ]] && [[ $1 != "-viewscrt" ]] && [[ $1 != "-h" ]] && [[ $1 != "--help" ]] && [[ $1 != "-help" ]] && [[ $1 != "" ]]
