@@ -119,7 +119,7 @@ echoscreen() {
     flag="$2"
 
     # Quebra linhas a cada 132 colunas
-    wrapped=$(printf '%s\n' "$msg" | fold -w 132 -s)
+    wrapped=$(printf '%s\n' "$msg" | fold -w 377 -s)
 
     # Interactive (TTY) OR forced (IBM i batch)
     if [ -t 1 ] || [[ "${ECHOSCREEN_FORCE_STDOUT:-0}" == "1" ]]; then
