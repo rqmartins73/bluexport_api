@@ -1422,6 +1422,7 @@ do_volume_clone_execute() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_execute."
 	fi
 	VOL_CLONE_ID="$vclone_id"
+	ACTIONS="\"name\":\"$base_name\",\"rollbackPrepare\": $rollback"
 	# Chamada API para execute
 	local resp_ex
 	resp_ex=$(vol_cl_ex 2>>"$log_file")
