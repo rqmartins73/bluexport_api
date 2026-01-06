@@ -33,7 +33,7 @@
 #
 # === Volume Clones ===
 # Create volume clone:          ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
-# Delete volume clone:          ./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME
+# Delete volume clone:          ./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME 0|delete_volumes
 # List volume clones (all WS):  ./bluexport_api.sh -vclonelsall
 #
 # === Volume Tier ===
@@ -343,7 +343,7 @@ help() {
 	echoscreen ""
 	echoscreen "=== === Volume Clones === ==="
 	echoscreen "Create volume clone:		./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
-	echoscreen "Delete volume clone:		./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME"
+	echoscreen "Delete volume clone:		./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME 0|delete_volumes"
 	echoscreen "List volume clones (all WS):	./bluexport_api.sh -vclonelsall"
 	echoscreen ""
 	echoscreen "=== === Volume Tier === ==="
