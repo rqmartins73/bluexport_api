@@ -1118,7 +1118,7 @@ flush_asps() {
 				for iasp_name in $iasp_names
 				do
 					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Flushing Memory to Disk for $iasp_name ..." "1"
-					ssh -T -i "$sshkeypath" "$vsi_user@$vsi_ip" "system \"CHGASPACT ASPDEV('$iasp_name') OPTION(*FRCWRT)\"" >> "$log_file" | tee -a "$log_file"
+					ssh -T -i "$sshkeypath" "$vsi_user@$vsi_ip" "system \"CHGASPACT ASPDEV($iasp_name) OPTION(*FRCWRT)\"" >> "$log_file" | tee -a "$log_file"
 					if [[ $? -ne 0 ]]
 					then
 						abort "$(date +%Y-%m-%d_%H:%M:%S) - ERRO: ligação SSH falhou ou deu timeout, abortando..."
