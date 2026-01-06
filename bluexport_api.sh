@@ -1422,14 +1422,33 @@ do_volume_clone_execute() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_execute."
 	fi
 	VOL_CLONE_ID="$vclone_id"
-	ACTIONS="\"name\":\"$base_name\",\"rollbackPrepare\": $rollback"
+	ACTIONS="\"name\":\"$base_name\",\"rollbackPrepare\": $rollback,\"targetReplicationEnabled\": $replication, \"targetStorageTier\":\"$target_tier\""
 	# Chamada API para execute
 	local resp_ex
 	resp_ex=$(vol_cl_ex 2>>"$log_file")
-	if [ $? -ne 0 ]; then
+	rc=$?
+	# 1) curl / command failure OR empty body
+	if [[ $rc -ne 0 || -z "$resp_ex" ]]
+	then
 		echo "$resp_ex" >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error executing Volume Clone $vclone_name (API call failed)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error executing Volume Clone $vclone_name (API call failed or empty response)."
 	fi
+	# 2) response must be valid JSON (otherwise jq will blow up later)
+	if ! echo "$resp_ex" | jq . >/dev/null 2>&1
+	then
+		echo "$resp_ex" >>"$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone execute returned non-JSON response. Check log for raw payload."
+	fi
+	# 3) if API returned an error payload (e.g., {"code":400,"message":"..."}) abort immediately
+	api_code=$(echo "$resp_ex" | jq -r '.code // empty' 2>>"$log_file")
+	api_msg=$(echo "$resp_ex" | jq -r '.message // .error // empty' 2>>"$log_file")
+
+	if [[ -n "$api_code" && "$api_code" != "null" ]]
+	then
+		echo "$resp_ex" >>"$log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone execute API error (code=$api_code): $api_msg"
+	fi
+
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone $vclone_name execution to finish..." "1"
 	local vcloneex_percent=0
 	local vcloneex_percent_before=0
@@ -2981,16 +3000,16 @@ case $1 in
 	vsi="$4"
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
-	replication="$5"
-	rollback="$6"
+	replication="${5,,}"
+	rollback="${6,,}"
 	target_tier="$7"
 	volumes_to_clone_arg="$8"
 	# Validar replication / rollback
-	if [[ "$replication" != "True" && "$replication" != "False" ]]
+	if [[ "$replication" != "true" && "$replication" != "false" ]]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Replication value must be True or False...!"
 	fi
-	if [[ "$rollback" != "True" && "$rollback" != "False" ]]
+	if [[ "$rollback" != "true" && "$rollback" != "false" ]]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Rollback value must be True or False...!"
 	fi
@@ -3045,6 +3064,7 @@ case $1 in
 	abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME 0|delete_volumes"
 	fi
 	test=0
+	found=0
 	vclone_name=$2
 	delete_mode="${3:-0}"
 	# Validar o modo
@@ -3081,6 +3101,7 @@ case $1 in
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone with name $vclone_name doesn't exist in Workspace $full_ws_name, moving on to next Workspace!" "1"
 			continue
 		fi
+		found=1
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Found Volume Clone with name $vclone_name in workspace $full_ws_name" "1"
 		# Ir buscar o ID do volume clone
 		VOL_CLONE_ID=$(vol_cl_ls | jq -r --arg vclname "$vclone_name" '.volumesClone[]? | select(.name == $vclname) | .volumesCloneID')
@@ -3112,11 +3133,33 @@ case $1 in
 EOF
 )
 					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Deleting cloned volumes associated with $vclone_name..." "1"
-					vol_bdel 2>>"$log_file" | tee -a "$log_file" #>/dev/null
+					resp_bdel=$(vol_bdel 2>>"$log_file")
 					ret=$?
-					if [ $ret -ne 0 ]
+					# Log the API response (keep what you already like: screen + logfile)
+					if [[ -n "$resp_bdel" ]]
 					then
-						abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error deleting cloned volumes for $vclone_name. Check messages above this line..."
+						printf '%s\n' "$resp_bdel" | tee -a "$log_file" >/dev/null
+					fi
+					# 1) Transport-level failure (curl really failed)
+					if [[ $ret -ne 0 ]]
+					then
+						abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - vol_bdel call failed (curl rc=$ret) while deleting cloned volumes for $vclone_name."
+					fi
+					# 2) API-level failure (HTTP 400 etc, returned as JSON but curl rc=0)
+					if [[ -n "$resp_bdel" ]] && echo "$resp_bdel" | jq . >/dev/null 2>&1
+					then
+						# If the API returns fields like { "error": "...", "description": "..." } or { "code": 400, "message": "..." }
+						if echo "$resp_bdel" | jq -e '(.code? != null) or (.error? != null) or (.errors? != null)' >/dev/null 2>&1
+						then
+							errmsg=$(echo "$resp_bdel" | jq -r '.description // .message // .error // (.errors[0] // empty) // "Unknown API error"' 2>/dev/null)
+							abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error deleting cloned volumes for $vclone_name: $errmsg"
+						fi
+					else
+						# Non-JSON error body fallback
+						if echo "$resp_bdel" | grep -qi "Bad Request\|in-use\|migrating\|cannot be deleted"
+						then
+							abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error deleting cloned volumes for $vclone_name. API response indicates volumes cannot be deleted (in-use/migrating/group)."
+						fi
 					fi
 					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Cloned volumes successfully deleted for $vclone_name." "1"
 				fi
@@ -3132,6 +3175,10 @@ EOF
 		fi
 		abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully Deleted Volume Clone with name $vclone_name (mode: $delete_mode) !"
 	done
+	if [[ "$found" -eq 0 ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone '$vclone_name' does not exist in any workspace."
+	fi
     ;;
 
    -creategrs)
