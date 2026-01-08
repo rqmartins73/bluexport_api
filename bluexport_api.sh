@@ -43,6 +43,7 @@
 # Create GRS Volume Group and onboard auxiliary volumes:  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 # Delete GRS Volume Group and auxiliary volumes:	  ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 # Failover GRS Volume Group (activate target):            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]
+# Cancel GRS failover (failback to master):               ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
 #
 #  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON.
 #  VG_NAME:                        Name for the Volume Group to create on the source workspace.
@@ -83,7 +84,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.4
+Version=1.5
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -95,7 +96,7 @@ then
 		exit 0
 	fi
 echo
-jq -M -n --arg version "$Version" '{tool:"bluexport_api.sh", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2025"}'
+jq -M -n --arg version "$Version" '{tool:"bluexport_api.sh", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2026"}'
 echo "`date +%Y-%m-%d_%H:%M:%S`"
 echo
 exit 0
@@ -357,6 +358,8 @@ help() {
 	echoscreen "                            ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	echoscreen "Failover GRS Volume Group (activate target):"
 	echoscreen "                            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
+	echoscreen "Cancel GRS failover (failback to master):"
+	echoscreen "                            ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI"
 	echoscreen ""
 	echoscreen "  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON."
 	echoscreen "  VG_NAME:                        Name for the Volume Group to create on the source workspace."
@@ -2239,6 +2242,277 @@ do_grs_failover() {
 }
 #### END:FUNCTION - GRS Failover (Activate Target) ####
 
+#### START:FUNCTION - GRS Cancel Failover (Failback to Master) ####
+do_grs_cancel_failover() {
+	# Syntax: bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
+	# Expected globals:
+	#   source_vsi, vg_name, detach_mode, target_vsi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting GRS cancel failover (failback to master) for SOURCE_VSI=$source_vsi, VG_NAME=$vg_name, MODE=$detach_mode, TARGET_VSI=$target_vsi ===" "1"
+
+	############################
+	# 1) Resolve SOURCE context #
+	############################
+	vsi="$source_vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+
+	local source_ws_key="$vsiwsshort"
+	local source_ws_name
+	source_ws_name=$(jq -r --arg ws "$source_ws_key" '.workspaces[$ws].name' "$bluexscrt")
+	local source_ws_crn_local="$shortnamecrn"
+	local source_cloud_instance_id_local="$CLOUD_INSTANCE_ID"
+	local source_base_url_local="$base_url"
+	local source_pvm_id_local="$PVM_ID"
+
+	# Force SOURCE workspace context
+	base_url="$source_base_url_local"
+	CRN="$source_ws_crn_local"
+	CLOUD_INSTANCE_ID="$source_cloud_instance_id_local"
+	PVM_ID="$source_pvm_id_local"
+
+	# Find SOURCE VG and consistencyGroupName
+	local vg_json
+	vg_json=$(vg_ls 2>>"$log_file")
+	local source_vg_id
+	source_vg_id=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .id' 2>>"$log_file")
+	if [[ -z "$source_vg_id" || "$source_vg_id" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting cancel failover."
+	fi
+	local cgname
+	cgname=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .consistencyGroupName' 2>>"$log_file")
+	if [[ -z "$cgname" || "$cgname" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source workspace: $source_ws_name (id=$source_cloud_instance_id_local) - Source VG ID=$source_vg_id - consistencyGroupName=$cgname" "1"
+
+	##############################################
+	# 2) Find TARGET workspace and TARGET VG (by cgname)
+	##############################################
+	local allws_keys
+	allws_keys=$(jq -r '.workspaces | keys | join(" ")' "$bluexscrt")
+	local target_ws_key=""
+	local target_ws_name=""
+	local target_ws_crn=""
+	local target_cloud_instance_id=""
+	local target_base_url=""
+	local target_vg_id=""
+
+	for ws in $allws_keys
+	do
+		local ws_crn
+		ws_crn=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+		# Skip SOURCE workspace
+		if [[ "$ws_crn" == "$source_ws_crn_local" ]]
+		then
+			continue
+		fi
+
+		CRN="$ws_crn"
+		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+
+		# List VGs here and look for the same consistencyGroupName
+		local vg_tmp
+		vg_tmp=$(vg_ls 2>>"$log_file")
+		local found_id
+		found_id=$(echo "$vg_tmp" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file" | head -n1)
+
+		if [[ -n "$found_id" && "$found_id" != "null" ]]
+		then
+			target_ws_key="$ws"
+			target_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name' "$bluexscrt")
+			target_ws_crn="$ws_crn"
+			target_cloud_instance_id="$CLOUD_INSTANCE_ID"
+			target_base_url="$base_url"
+			target_vg_id="$found_id"
+			break
+		fi
+	done
+
+	if [[ -z "$target_vg_id" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not find target Volume Group with consistencyGroupName $cgname in any other configured workspace. Aborting cancel failover."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target workspace found: $target_ws_name (id=$target_cloud_instance_id) - Target VG ID=$target_vg_id" "1"
+
+	##############################################
+	# 3) DETACH handling (optional / safety)
+	##############################################
+	# Resolve TARGET_VSI context (must be in TARGET workspace)
+	vsi="$target_vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+
+	if [[ "$shortnamecrn" != "$target_ws_crn" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi is not in the target workspace ($target_ws_name) where the VG exists. Aborting to avoid cross-workspace mistakes."
+	fi
+
+	# Switch API context to TARGET workspace for volume checks/detach
+	base_url="$target_base_url"
+	CRN="$target_ws_crn"
+	CLOUD_INSTANCE_ID="$target_cloud_instance_id"
+
+	# PVM_ID already set by vsi_id_bluexscrt for TARGET_VSI
+	local tgt_attached_names
+	tgt_attached_names=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .name' 2>>"$log_file")
+
+	if [[ "$detach_mode" == "DETACH" ]]
+	then
+		if [[ -z "$tgt_attached_names" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No volumes currently attached to TARGET_VSI $target_vsi. Skipping detach." "1"
+		else
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Detaching all volumes (including boot) from TARGET_VSI $target_vsi before cancel failover..." "1"
+			ACTIONS='"detachAllVolumes": true, "detachPrimaryBootVolume": true'
+			resp_det=$(ins_vol_bdet 2>>"$log_file")
+			echo "$resp_det" >>"$log_file"
+			if ! echo "$resp_det" | jq . >/dev/null 2>&1
+			then
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - ins_vol_bdet did not return valid JSON when detaching volumes. Raw output logged."
+			fi
+			if echo "$resp_det" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+			then
+				errmsg=$(echo "$resp_det" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error detaching volumes from $target_vsi: $errmsg"
+			fi
+
+			# Wait until no volumes are attached
+			while true
+			do
+				local attached_now
+				attached_now=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .name' 2>>"$log_file")
+				if [[ -z "$attached_now" ]]
+				then
+					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - All volumes detached from TARGET_VSI $target_vsi." "1"
+					break
+				fi
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi still has attached volumes. Waiting 30 seconds..." "1"
+				sleep 30
+			done
+		fi
+	fi
+
+	##############################################
+	# 4) Cancel failover (failback): STOP+START on SOURCE VG (master)
+	##############################################
+	# Back to SOURCE workspace
+	base_url="$source_base_url_local"
+	CRN="$source_ws_crn_local"
+	CLOUD_INSTANCE_ID="$source_cloud_instance_id_local"
+	PVM_ID="$source_pvm_id_local"
+	VOLUME_GROUP_ID="$source_vg_id"
+
+	# Step A: stop with access=true (per IBM docs for fallback to primary / master)
+	ACTIONS='"stop":{"access":true}'
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Failback step: VG action stop.access=true on SOURCE VG $source_vg_id..." "1"
+	resp_stop=$(vg_act 2>>"$log_file")
+	echo "$resp_stop" >>"$log_file"
+	if ! echo "$resp_stop" | jq . >/dev/null 2>&1
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (stop access). Raw output logged."
+	fi
+	if echo "$resp_stop" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$resp_stop" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error stopping SOURCE VG (stop access): $errmsg"
+	fi
+
+	# Wait until SOURCE VG becomes idling (or stable) before start master
+	local max_wait=60
+	local i=0
+	while true
+	do
+		local s_state
+		s_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+		if [[ "$s_state" == "idling" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG state is now 'idling'." "1"
+			break
+		fi
+		if [[ -z "$s_state" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read SOURCE VG storage-details/state while waiting for stop."
+		fi
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - SOURCE VG did not reach state 'idling' after $max_wait minutes (last state=$s_state)."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG state is '$s_state'. Waiting 60 seconds..." "1"
+		sleep 60
+	done
+
+	# Step B: start with source=master (per IBM docs)
+	ACTIONS='"start":{"source":"master"}'
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Failback step: VG action start.source=master on SOURCE VG $source_vg_id..." "1"
+	resp_start=$(vg_act 2>>"$log_file")
+	echo "$resp_start" >>"$log_file"
+	if ! echo "$resp_start" | jq . >/dev/null 2>&1
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (start master). Raw output logged."
+	fi
+	if echo "$resp_start" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$resp_start" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting SOURCE VG as master: $errmsg"
+	fi
+
+	# Wait until replication is active again (consistent_copying expected)
+	i=0
+	while true
+	do
+		local state_now
+		state_now=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+		if [[ "$state_now" == "consistent_copying" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG state is now 'consistent_copying' (replication active)." "1"
+			break
+		fi
+		if [[ -z "$state_now" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read SOURCE VG storage-details/state while waiting for consistent_copying."
+		fi
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - SOURCE VG did not reach state 'consistent_copying' after $max_wait minutes (last state=$state_now)."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG state is '$state_now'. Waiting 60 seconds..." "1"
+		sleep 60
+	done
+
+	##############################################
+	# 5) NO_DETACH post-check: warn if still attached
+	##############################################
+	if [[ "$detach_mode" == "NO_DETACH" ]]
+	then
+		# Switch to TARGET context again and check volumes attached
+		base_url="$target_base_url"
+		CRN="$target_ws_crn"
+		CLOUD_INSTANCE_ID="$target_cloud_instance_id"
+		# Re-resolve PVM_ID for target vsi (cheap and safe)
+		vsi="$target_vsi"
+		vsi_id_bluexscrt
+		check_locally_VSI_exists
+
+		local still_attached
+		still_attached=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .name' 2>>"$log_file")
+		if [[ -n "$still_attached" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Cancel failover completed, but TARGET_VSI $target_vsi still has volumes attached: $(echo "$still_attached" | tr '\n' ' ')" "1"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - You selected NO_DETACH. Detach volumes manually if required." "1"
+		fi
+	fi
+
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === GRS cancel failover completed. SOURCE VG $vg_name is back to MASTER in workspace $source_ws_name. ==="
+}
+#### END:FUNCTION - GRS Cancel Failover (Failback to Master) ####
+
 #### START:FUNCTION - Start VSI (do_start_vsi) ####
 do_start_vsi() {
 	local vsi="$1"
@@ -3589,6 +3863,25 @@ EOF
 	fi
 	do_grs_failover
     ;;
+
+  -grscancelfailover)
+	# Syntax: bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
+	if [ $# -ne 5 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI"
+	fi
+	test=0
+	flagj=1
+	source_vsi="$2"
+	vg_name="$3"
+	detach_mode="$4"
+	target_vsi="$5"
+	if [[ "$detach_mode" != "NO_DETACH" && "$detach_mode" != "DETACH" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Invalid MODE '$detach_mode'. Use NO_DETACH or DETACH."
+	fi
+	do_grs_cancel_failover
+	;;
 
    -vsistart)
 	if [ $# -ne 2 ]
