@@ -2196,6 +2196,30 @@ do_grs_failover() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error attaching boot volume to $target_vsi: $errmsg"
 	fi
 
+	# IMPORTANT: Wait until the BOOT volume is effectively attached before attaching other volumes.
+	# PowerVS will reject additional attaches until the primary boot volume is attached/recognized.
+	local max_boot_wait=60   # attempts (60 * 10s = 10 minutes)
+	local boot_try=0
+	while true
+	do
+		local boot_seen boot_status
+		boot_seen=$(ins_vol_ls 2>>"$log_file" | jq -r --arg vid "$boot_vol_id" '.volumes[]? | select((.volumeID // .id) == $vid) | (.volumeID // .id) // empty' 2>>"$log_file" | head -n1)
+		boot_status=$(ins_vol_ls 2>>"$log_file" | jq -r --arg vid "$boot_vol_id" '.volumes[]? | select((.volumeID // .id) == $vid) | (.state // .status // .attachmentStatus // empty)' 2>>"$log_file" | head -n1)
+		if [[ -n "$boot_seen" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Boot volume is now attached/visible on $target_vsi (state/status=${boot_status:-unknown}). Proceeding with remaining volumes..." "1"
+			break
+		fi
+		boot_try=$((boot_try + 1))
+		if (( boot_try >= max_boot_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Boot volume ($boot_aux_name / $boot_vol_id) did not become attached/visible on $target_vsi after ~10 minutes. Aborting."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Boot volume still attaching on $target_vsi... waiting 10 seconds (attempt $boot_try/$max_boot_wait)" "1"
+		sleep 10
+	done
+
+
 	# Build JSON list for remaining volumes (excluding boot_aux_name)
 	local json_ids=""
 	local aux_name
