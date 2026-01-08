@@ -2164,6 +2164,7 @@ do_grs_failover() {
 	vsi="$target_vsi"
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
+	local target_pvm_id_local="$PVM_ID"
 
 	if [[ "$shortnamecrn" != "$target_ws_crn" ]]
 	then
@@ -2255,11 +2256,46 @@ do_grs_failover() {
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No additional auxiliary volumes to attach (only boot)." "1"
 	fi
 
-	# Quick validation: count attached volumes on TARGET VSI
-	local tgt_attached
-	tgt_attached=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .name' 2>>"$log_file")
+	# IMPORTANT: Volume attach requests are async. Wait until we see all expected volumes attached.
+	# Expected count is the number of aux volumes in the VG (includes boot).
+	local expected_attached
+	expected_attached="$aux_count"
+	if [[ -z "$expected_attached" || "$expected_attached" == "0" ]]
+	then
+		expected_attached=1
+	fi
+
+	local max_attach_wait=60   # attempts (60 * 10s = 10 minutes)
+	local att_try=0
 	local tgt_count
-	tgt_count=$(echo "$tgt_attached" | wc -w | awk '{print $1}')
+	while true
+	do
+		# Ensure we are still in TARGET context
+		base_url="$target_base_url"
+		CRN="$target_ws_crn"
+		CLOUD_INSTANCE_ID="$target_cloud_instance_id"
+			PVM_ID="$target_pvm_id_local"
+
+		# Count attached volumes on TARGET VSI (robust count via JSON length)
+		tgt_count=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file")
+		if [[ -z "$tgt_count" || "$tgt_count" == "null" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read attached volumes count on TARGET_VSI $target_vsi while waiting for volume attaches."
+		fi
+
+		if (( tgt_count >= expected_attached ))
+		then
+			break
+		fi
+		att_try=$((att_try + 1))
+		if (( att_try >= max_attach_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - TARGET_VSI $target_vsi did not reach $expected_attached attached volumes after ~10 minutes (last count=$tgt_count)."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volumes still attaching on $target_vsi... currently $tgt_count/$expected_attached attached. Waiting 10 seconds (attempt $att_try/$max_attach_wait)" "1"
+		sleep 10
+	done
+
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi now has $tgt_count attached volumes." "1"
 
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === GRS failover completed (ATTACH). Target activated and volumes attached to $target_vsi in workspace $target_ws_name. ==="
