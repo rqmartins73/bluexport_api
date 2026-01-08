@@ -42,6 +42,7 @@
 # === GRS (Global Replication Services) ===
 # Create GRS Volume Group and onboard auxiliary volumes:  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 # Delete GRS Volume Group and auxiliary volumes:	  ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
+# Failover GRS Volume Group (activate target):            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]
 #
 #  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON.
 #  VG_NAME:                        Name for the Volume Group to create on the source workspace.
@@ -82,7 +83,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.3
+Version=1.4
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -313,47 +314,49 @@ help() {
 	echoscreen "Version: $Version"
 	echoscreen ""
 	echoscreen "=== === General === ==="
-	echoscreen "Changing secret file:		./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)"
-	echoscreen "View secret file in use:		./bluexport_api.sh -viewscrt"
+	echoscreen "Changing secret file:       ./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)"
+	echoscreen "View secret file in use:    ./bluexport_api.sh -viewscrt"
 	echoscreen ""
-	echoscreen "Show help:				./bluexport_api.sh -h | --help | -help"
-	echoscreen "Show version:			./bluexport_api.sh -v | --version"
+	echoscreen "Show help:                  ./bluexport_api.sh -h | --help | -help"
+	echoscreen "Show version:               ./bluexport_api.sh -v | --version"
 	echoscreen ""
 	echoscreen "=== === Capture & Export === ==="
-	echoscreen "Usage for all volumes:		./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
-	echoscreen "Usage for excluding volumes:	./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
-	echoscreen "Usage for monitoring job:		./bluexport_api.sh -j VSI_NAME IMAGE_NAME"
+	echoscreen "Usage for all volumes:        ./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+	echoscreen "Usage for excluding volumes:  ./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+	echoscreen "Usage for monitoring job:     ./bluexport_api.sh -j VSI_NAME IMAGE_NAME"
 	echoscreen ""
 	echoscreen "=== === Snapshots === ==="
-	echoscreen "Create snapshot:			./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]"
-	echoscreen "Update snapshot:			./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]"
-	echoscreen "Delete snapshot:			./bluexport_api.sh -snapdel  SNAPSHOT_NAME"
-	echoscreen "Restore snapshot:			./bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME"
-	echoscreen "List all snapshots (all WS):	./bluexport_api.sh -snaplsall"
+	echoscreen "Create snapshot:            ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]"
+	echoscreen "Update snapshot:            ./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]"
+	echoscreen "Delete snapshot:            ./bluexport_api.sh -snapdel  SNAPSHOT_NAME"
+	echoscreen "Restore snapshot:           ./bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME"
+	echoscreen "List all snapshots(all WS): ./bluexport_api.sh -snaplsall"
 	echoscreen ""
 	echoscreen "=== === Captured Images === ==="
 	echoscreen "List all captured images"
-	echoscreen " in all Workspaces:			./bluexport_api.sh -imglsall"
-	echoscreen "Delete image:			./bluexport_api.sh -imgdel IMG_NAME"
+	echoscreen " in all Workspaces:         ./bluexport_api.sh -imglsall"
+	echoscreen "Delete image:               ./bluexport_api.sh -imgdel IMG_NAME"
 	echoscreen ""
 	echoscreen "=== === Cloud Object Storage (COS) === ==="
-	echoscreen "List buckets for all COS instances:	./bluexport_api.sh -bucketslsall"
-	echoscreen "List objects from a COS bucket:	./bluexport_api.sh -bucketlsobjs"
+	echoscreen "List buckets for all COS instances: ./bluexport_api.sh -bucketslsall"
+	echoscreen "List objects from a COS bucket:     ./bluexport_api.sh -bucketlsobjs"
 	echoscreen "Delete object from a COS bucket:    ./bluexport_api.sh -bucketdelobj"
 	echoscreen ""
 	echoscreen "=== === Volume Clones === ==="
-	echoscreen "Create volume clone:		./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
-	echoscreen "Delete volume clone:		./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME 0|delete_volumes"
-	echoscreen "List volume clones (all WS):	./bluexport_api.sh -vclonelsall"
+	echoscreen "Create volume clone:        ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
+	echoscreen "Delete volume clone:        ./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME 0|delete_volumes"
+	echoscreen "List volume clones(all WS): ./bluexport_api.sh -vclonelsall"
 	echoscreen ""
 	echoscreen "=== === Volume Tier === ==="
-	echoscreen "Change volume tier:			./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
+	echoscreen "Change volume tier:         ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
 	echoscreen ""
 	echoscreen "=== === GRS (Global Replication Services) === ==="
 	echoscreen "Create GRS Volume Group and onboard auxiliary volumes:"
-	echoscreen "					./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+	echoscreen "                            ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	echoscreen "Delete GRS Volume Group and auxiliary volumes:"
-	echoscreen "					./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+	echoscreen "                            ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+	echoscreen "Failover GRS Volume Group (activate target):"
+	echoscreen "                            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
 	echoscreen ""
 	echoscreen "  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON."
 	echoscreen "  VG_NAME:                        Name for the Volume Group to create on the source workspace."
@@ -361,29 +364,29 @@ help() {
 	echoscreen "  TARGET_VOLUMES_NAME:            Common name/prefix for target VSI volumes (used mainly for documentation/logging)."
 	echoscreen ""
 	echoscreen "=== === VSI Operations === ==="
-	echoscreen "IPL VSI:				./bluexport_api.sh -vsistart VSI_NAME"
+	echoscreen "IPL VSI:                    ./bluexport_api.sh -vsistart VSI_NAME"
 	echoscreen "      Start a Virtual Server Instance. VSI must be in SHUTOFF status."
 	echoscreen ""
-	echoscreen "VSI Operations:			./bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE"
+	echoscreen "VSI Operations:             ./bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE"
 	echoscreen "      Set IBM i boot/operating mode for a VSI."
 	echoscreen "      BOOT_MODE: a | b | c | d"
 	echoscreen "      OPERATING_MODE: normal | manual"
 	echoscreen ""
-	echoscreen "VSI Tasks:				./bluexport_api.sh -vsitask VSI_NAME TASK"
+	echoscreen "VSI Tasks:                  ./bluexport_api.sh -vsitask VSI_NAME TASK"
 	echoscreen "      Run an IBM i operation task on a VSI."
 	echoscreen "      TASK: dston | retrydump | consoleservice | iopreset | remotedstoff |"
 	echoscreen "            remotedston | iopdump | dumprestart"
 	echoscreen ""
-	echoscreen "Monitor VSI SRC:			./bluexport_api.sh -vsisrcmon VSI_NAME"
+	echoscreen "Monitor VSI SRC:            ./bluexport_api.sh -vsisrcmon VSI_NAME"
 	echoscreen "      Monitor VSI SRC until it reaches ACTIVE/00000000 or SHUTOFF."
 	echoscreen ""
 	echoscreen "=== === Examples === ==="
-	echoscreen "Capture all volumes:		./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
-	echoscreen "Capture excluding ASP2_:		./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly"
+	echoscreen "Capture all volumes:        ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
+	echoscreen "Capture excluding ASP2_:    ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly"
 	echoscreen "Capture excluding ASP2_ & iASPname:"
-	echoscreen '					./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly'
+	echoscreen '                            ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly'
 	echoscreen ""
-	echoscreen "Test mode (no capture):		./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single"
+	echoscreen "Test mode (no capture):     ./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single"
 	echoscreen ""
 	echoscreen "Note: Recurrence \"hourly\" and \"daily\" only permits captures to image-catalog."
 	echoscreen ""
@@ -1975,6 +1978,267 @@ delete_grs() {
 }
 #### END:FUNCTION - Delete GRS ####
 
+#### START:FUNCTION - GRS Failover (Activate Target) ####
+do_grs_failover() {
+	# Expected globals:
+	#   source_vsi, vg_name, attach_mode, target_vsi (optional)
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting GRS failover (activate target) for SOURCE_VSI=$source_vsi, VG_NAME=$vg_name, MODE=$attach_mode ===" "1"
+
+	############################
+	# 1) Resolve SOURCE context #
+	############################
+	vsi="$source_vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+
+	local source_ws_key="$vsiwsshort"
+	local source_ws_name
+	source_ws_name=$(jq -r --arg ws "$source_ws_key" '.workspaces[$ws].name' "$bluexscrt")
+	local source_ws_crn_local="$shortnamecrn"
+	local source_cloud_instance_id_local="$CLOUD_INSTANCE_ID"
+	local source_base_url_local="$base_url"
+	local source_pvm_id_local="$PVM_ID"
+
+	# Force SOURCE workspace context
+	base_url="$source_base_url_local"
+	CRN="$source_ws_crn_local"
+	CLOUD_INSTANCE_ID="$source_cloud_instance_id_local"
+	PVM_ID="$source_pvm_id_local"
+
+	# Find SOURCE VG and consistencyGroupName
+	local vg_json
+	vg_json=$(vg_ls 2>>"$log_file")
+	local source_vg_id
+	source_vg_id=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .id' 2>>"$log_file")
+	if [[ -z "$source_vg_id" || "$source_vg_id" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting failover."
+	fi
+	local cgname
+	cgname=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .consistencyGroupName' 2>>"$log_file")
+	if [[ -z "$cgname" || "$cgname" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source workspace: $source_ws_name (id=$source_cloud_instance_id_local) - Source VG ID=$source_vg_id - consistencyGroupName=$cgname" "1"
+
+	# Identify BOOT auxiliary volume name (from SOURCE VSI attached volumes list)
+	local boot_aux_name
+	boot_aux_name=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | select(.bootable == true) | .auxVolumeName // empty' 2>>"$log_file" | head -n1)
+	if [[ -z "$boot_aux_name" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not determine boot auxiliary volume name from source VSI $source_vsi. Aborting."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Boot auxiliary volume name (from source): $boot_aux_name" "1"
+
+	# Collect ALL auxiliary volume names for this VG (from SOURCE VG remote-copy relationships)
+	VOLUME_GROUP_ID="$source_vg_id"
+	local aux_names
+	aux_names=$(vg_rcr 2>>"$log_file" | jq -r '.remoteCopyRelationships[]? | select(.primaryRole=="master") | .auxVolumeName' 2>>"$log_file")
+	if [[ -z "$aux_names" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve auxiliary volumes from remote-copy relationships for source VG $vg_name. Aborting."
+	fi
+	local aux_count
+	aux_count=$(echo "$aux_names" | wc -w | awk '{print $1}')
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Found $aux_count auxiliary volume names in VG $vg_name: $(echo "$aux_names" | tr '\n' ' ')" "1"
+
+	##############################################
+	# 2) Find TARGET workspace and TARGET VG (by cgname)
+	##############################################
+	local allws_keys
+	allws_keys=$(jq -r '.workspaces | keys | join(" ")' "$bluexscrt")
+	local target_ws_key=""
+	local target_ws_name=""
+	local target_ws_crn=""
+	local target_cloud_instance_id=""
+	local target_base_url=""
+	local target_vg_id=""
+
+	for ws in $allws_keys
+	do
+		local ws_crn
+		ws_crn=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+		# Skip SOURCE workspace
+		if [[ "$ws_crn" == "$source_ws_crn_local" ]]
+		then
+			continue
+		fi
+
+		CRN="$ws_crn"
+		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+
+		# List VGs here and look for the same consistencyGroupName
+		local vg_tmp
+		vg_tmp=$(vg_ls 2>>"$log_file")
+		local found_id
+		found_id=$(echo "$vg_tmp" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file" | head -n1)
+
+		if [[ -n "$found_id" && "$found_id" != "null" ]]
+		then
+			target_ws_key="$ws"
+			target_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name' "$bluexscrt")
+			target_ws_crn="$ws_crn"
+			target_cloud_instance_id="$CLOUD_INSTANCE_ID"
+			target_base_url="$base_url"
+			target_vg_id="$found_id"
+			break
+		fi
+	done
+
+	if [[ -z "$target_vg_id" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not find target Volume Group with consistencyGroupName $cgname in any other configured workspace. Aborting failover."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target workspace found: $target_ws_name (id=$target_cloud_instance_id) - Target VG ID=$target_vg_id" "1"
+
+	##############################################
+	# 3) Activate target (stop access) on TARGET VG
+	##############################################
+	base_url="$target_base_url"
+	CRN="$target_ws_crn"
+	CLOUD_INSTANCE_ID="$target_cloud_instance_id"
+	VOLUME_GROUP_ID="$target_vg_id"
+
+	ACTIONS='"stop":{"access":true}'
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Performing failover: VG action stop.access=true on target VG $target_vg_id..." "1"
+	resp_act=$(vg_act 2>>"$log_file")
+	echo "$resp_act" >>"$log_file"
+	if ! echo "$resp_act" | jq . >/dev/null 2>&1
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON when activating target. Raw output logged."
+	fi
+	if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error activating target VG (stop access): $errmsg"
+	fi
+
+	# Wait until VG becomes idling (or a stable state)
+	local max_wait=60
+	local i=0
+	while true
+	do
+		local t_state
+		t_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+		if [[ "$t_state" == "idling" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG state is now 'idling'." "1"
+			break
+		fi
+		# If API returns empty, treat as error
+		if [[ -z "$t_state" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read target VG storage-details/state while waiting for failover."
+		fi
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Target VG did not reach state 'idling' after $max_wait minutes (last state=$t_state)."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG state is '$t_state'. Waiting 60 seconds..." "1"
+		sleep 60
+	done
+
+	##############################################
+	# 4) Optional: Attach volumes to TARGET_VSI
+	##############################################
+	if [[ "$attach_mode" == "NO_ATTACH" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - === GRS failover completed (NO_ATTACH). Target is activated in workspace $target_ws_name. ==="
+	fi
+
+	# ATTACH mode requires TARGET_VSI
+	if [[ -z "$target_vsi" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI is required when using ATTACH mode. Syntax: bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME ATTACH TARGET_VSI"
+	fi
+
+	# Resolve TARGET_VSI context (must be in the same workspace we just found)
+	vsi="$target_vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+
+	if [[ "$shortnamecrn" != "$target_ws_crn" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi is not in the target workspace where the VG was activated ($target_ws_name). Aborting attach to avoid cross-workspace mistakes."
+	fi
+
+	# Map aux volume NAMES -> volumeIDs in TARGET workspace
+	local target_vols_json
+	target_vols_json=$(vol_ls 2>>"$log_file")
+	if [[ -z "$target_vols_json" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volumes in target workspace $target_ws_name."
+	fi
+
+	local boot_vol_id
+	boot_vol_id=$(echo "$target_vols_json" | jq -r --arg n "$boot_aux_name" '.volumes[]? | select(.name == $n) | .volumeID' 2>>"$log_file" | head -n1)
+	if [[ -z "$boot_vol_id" || "$boot_vol_id" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not resolve boot auxiliary volume name $boot_aux_name to a volumeID in target workspace $target_ws_name."
+	fi
+
+	# Attach boot volume first
+	ACTIONS=""volumeIDs": ["$boot_vol_id"]"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Attaching BOOT volume to TARGET_VSI $target_vsi (volumeID=$boot_vol_id, name=$boot_aux_name)..." "1"
+	resp_att_boot=$(vol_att_multi 2>>"$log_file")
+	echo "$resp_att_boot" >>"$log_file"
+	if echo "$resp_att_boot" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$resp_att_boot" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error attaching boot volume to $target_vsi: $errmsg"
+	fi
+
+	# Build JSON list for remaining volumes (excluding boot_aux_name)
+	local json_ids=""
+	local aux_name
+	for aux_name in $aux_names
+	do
+		# Skip boot (already attached)
+		if [[ "$aux_name" == "$boot_aux_name" ]]
+		then
+			continue
+		fi
+		local vid
+		vid=$(echo "$target_vols_json" | jq -r --arg n "$aux_name" '.volumes[]? | select(.name == $n) | .volumeID' 2>>"$log_file" | head -n1)
+		if [[ -z "$vid" || "$vid" == "null" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not resolve auxiliary volume name $aux_name to a volumeID in target workspace $target_ws_name."
+		fi
+		json_ids="$json_ids"$vid","
+	done
+	json_ids="${json_ids%,}"
+
+	if [[ -n "$json_ids" ]]
+	then
+		ACTIONS=""volumeIDs": [${json_ids}]"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Attaching remaining auxiliary volumes to TARGET_VSI $target_vsi..." "1"
+		resp_att=$(vol_att_multi 2>>"$log_file")
+		echo "$resp_att" >>"$log_file"
+		if echo "$resp_att" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+		then
+			errmsg=$(echo "$resp_att" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error attaching auxiliary volumes to $target_vsi: $errmsg"
+		fi
+	else
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No additional auxiliary volumes to attach (only boot)." "1"
+	fi
+
+	# Quick validation: count attached volumes on TARGET VSI
+	local tgt_attached
+	tgt_attached=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .name' 2>>"$log_file")
+	local tgt_count
+	tgt_count=$(echo "$tgt_attached" | wc -w | awk '{print $1}')
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi now has $tgt_count attached volumes." "1"
+
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === GRS failover completed (ATTACH). Target activated and volumes attached to $target_vsi in workspace $target_ws_name. ==="
+}
+#### END:FUNCTION - GRS Failover (Activate Target) ####
+
 #### START:FUNCTION - Start VSI (do_start_vsi) ####
 do_start_vsi() {
 	local vsi="$1"
@@ -3294,6 +3558,36 @@ EOF
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Both VSIs validated. Proceeding with GRS delete..." "1"
 	delete_grs
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished GRS delete for VG $vg_name between $source_vsi and $target_vsi ==="
+    ;;
+
+  -grsfailover)
+	# Syntax: bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]
+	if [ $# -lt 4 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
+	fi
+	if [ $# -gt 5 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
+	fi
+	test=0
+	flagj=1
+	source_vsi="$2"
+	vg_name="$3"
+	attach_mode="$4"
+	target_vsi=""
+	if [[ "$attach_mode" == "ATTACH" ]]
+	then
+		if [ $# -ne 5 ]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI is required when using ATTACH mode. Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME ATTACH TARGET_VSI"
+		fi
+		target_vsi="$5"
+	elif [[ "$attach_mode" != "NO_ATTACH" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Invalid MODE '$attach_mode'. Use NO_ATTACH or ATTACH."
+	fi
+	do_grs_failover
     ;;
 
    -vsistart)
