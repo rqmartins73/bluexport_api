@@ -2186,7 +2186,7 @@ do_grs_failover() {
 	fi
 
 	# Attach boot volume first
-	ACTIONS=""volumeIDs": ["$boot_vol_id"]"
+	ACTIONS="\"volumeIDs\":[\"$boot_vol_id\"]"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Attaching BOOT volume to TARGET_VSI $target_vsi (volumeID=$boot_vol_id, name=$boot_aux_name)..." "1"
 	resp_att_boot=$(vol_att_multi 2>>"$log_file")
 	echo "$resp_att_boot" >>"$log_file"
@@ -2212,13 +2212,13 @@ do_grs_failover() {
 		then
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not resolve auxiliary volume name $aux_name to a volumeID in target workspace $target_ws_name."
 		fi
-		json_ids="$json_ids"$vid","
+		json_ids="$json_ids\"$vid\","
 	done
 	json_ids="${json_ids%,}"
 
 	if [[ -n "$json_ids" ]]
 	then
-		ACTIONS=""volumeIDs": [${json_ids}]"
+		ACTIONS="\"volumeIDs\":[${json_ids}]"
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Attaching remaining auxiliary volumes to TARGET_VSI $target_vsi..." "1"
 		resp_att=$(vol_att_multi 2>>"$log_file")
 		echo "$resp_att" >>"$log_file"
