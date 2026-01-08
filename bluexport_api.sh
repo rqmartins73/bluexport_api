@@ -2408,18 +2408,31 @@ do_grs_cancel_failover() {
 	VOLUME_GROUP_ID="$source_vg_id"
 
 	# Step A: stop with access=true (per IBM docs for fallback to primary / master)
-	ACTIONS='"stop":{"access":true}'
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Failback step: VG action stop.access=true on SOURCE VG $source_vg_id..." "1"
-	resp_stop=$(vg_act 2>>"$log_file")
-	echo "$resp_stop" >>"$log_file"
-	if ! echo "$resp_stop" | jq . >/dev/null 2>&1
+	# NOTE: -grscancelfailover is commonly used right after a failover, where the SOURCE VG may
+	# already be stopped/idling. If it's already idling, don't try to stop it again.
+	local s_state_pre
+	s_state_pre=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+	if [[ -z "$s_state_pre" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (stop access). Raw output logged."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read SOURCE VG storage-details/state before stop."
 	fi
-	if echo "$resp_stop" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	if [[ "$s_state_pre" == "idling" ]]
 	then
-		errmsg=$(echo "$resp_stop" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error stopping SOURCE VG (stop access): $errmsg"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG is already in state 'idling' (stopped). Skipping stop.access=true." "1"
+	else
+		ACTIONS='"stop":{"access":true}'
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Failback step: VG action stop.access=true on SOURCE VG $source_vg_id..." "1"
+		resp_stop=$(vg_act 2>>"$log_file")
+		echo "$resp_stop" >>"$log_file"
+		if ! echo "$resp_stop" | jq . >/dev/null 2>&1
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (stop access). Raw output logged."
+		fi
+		if echo "$resp_stop" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+		then
+			errmsg=$(echo "$resp_stop" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error stopping SOURCE VG (stop access): $errmsg"
+		fi
 	fi
 
 	# Wait until SOURCE VG becomes idling (or stable) before start master
