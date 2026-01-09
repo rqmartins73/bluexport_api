@@ -83,7 +83,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.5
+Version=1.6
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -357,8 +357,10 @@ help() {
 	echoscreen "                            ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	echoscreen "Failover GRS Volume Group (activate target):"
 	echoscreen "                            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
-	echoscreen "Cancel GRS failover (start from master):"
+	echoscreen "Cancel GRS failover (start from master. Replication master->aux):"
 	echoscreen "                            ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI"
+	echoscreen "Failback GRS Volume Group (sync aux->master and re-enable replication master->aux):"
+	echoscreen "                            ./bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME"
 	echoscreen ""
 	echoscreen "  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON."
 	echoscreen "  VG_NAME:                        Name for the Volume Group to create on the source workspace."
@@ -2635,6 +2637,333 @@ do_grs_cancel_failover() {
 }
 #### END:FUNCTION - GRS Cancel Failover (Start from Master) ####
 
+#### START:FUNCTION - GRS Failback (Aux -> Master) ####
+do_grs_failback() {
+	# Syntax: bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME
+	# Expected globals:
+	#   source_vsi, target_vsi, vg_name
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting GRS failback (sync aux->master, re-enable replication) for SOURCE_VSI=$source_vsi, TARGET_VSI=$target_vsi, VG_NAME=$vg_name ===" "1"
+
+	############################
+	# 0) Resolve SOURCE context #
+	############################
+	vsi="$source_vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+
+	local source_ws_key="$vsiwsshort"
+	local source_ws_name
+	source_ws_name=$(jq -r --arg ws "$source_ws_key" '.workspaces[$ws].name' "$bluexscrt")
+	local source_ws_crn_local="$shortnamecrn"
+	local source_cloud_instance_id_local="$CLOUD_INSTANCE_ID"
+	local source_base_url_local="$base_url"
+	local source_pvm_id_local="$PVM_ID"
+
+	############################
+	# 0b) Resolve TARGET context #
+	############################
+	vsi="$target_vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+
+	local target_ws_key="$vsiwsshort"
+	local target_ws_name
+	target_ws_name=$(jq -r --arg ws "$target_ws_key" '.workspaces[$ws].name' "$bluexscrt")
+	local target_ws_crn_local="$shortnamecrn"
+	local target_cloud_instance_id_local="$CLOUD_INSTANCE_ID"
+	local target_base_url_local="$base_url"
+	local target_pvm_id_local="$PVM_ID"
+
+	# Basic safety: SOURCE and TARGET must not be the same workspace
+	if [[ "$source_ws_crn_local" == "$target_ws_crn_local" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi and TARGET_VSI $target_vsi are in the same workspace ($source_ws_name). Failback requires two different workspaces."
+	fi
+
+	##############################################
+	# 0c) Both VSIs must be SHUTOFF (runbook rule)
+	##############################################
+	# Check SOURCE VSI status
+	base_url="$source_base_url_local"
+	CRN="$source_ws_crn_local"
+	CLOUD_INSTANCE_ID="$source_cloud_instance_id_local"
+	PVM_ID="$source_pvm_id_local"
+	local s_status
+	s_status=$(ins_get 2>>"$log_file" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi status: $s_status" "1"
+	if [[ "$s_status" != "SHUTOFF" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi is not SHUTOFF (current: $s_status). Stop it before running -grsfailback."
+	fi
+
+	# Check TARGET VSI status
+	base_url="$target_base_url_local"
+	CRN="$target_ws_crn_local"
+	CLOUD_INSTANCE_ID="$target_cloud_instance_id_local"
+	PVM_ID="$target_pvm_id_local"
+	local t_status
+	t_status=$(ins_get 2>>"$log_file" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi status: $t_status" "1"
+	if [[ "$t_status" != "SHUTOFF" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi is not SHUTOFF (current: $t_status). Stop it before running -grsfailback."
+	fi
+
+	##############################################
+	# 1) Identify SOURCE VG and consistencyGroupName
+	##############################################
+	base_url="$source_base_url_local"
+	CRN="$source_ws_crn_local"
+	CLOUD_INSTANCE_ID="$source_cloud_instance_id_local"
+	PVM_ID="$source_pvm_id_local"
+
+	local vg_json
+	vg_json=$(vg_ls 2>>"$log_file")
+	if [[ -z "$vg_json" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in source workspace $source_ws_name."
+	fi
+
+	local source_vg_id
+	source_vg_id=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .id' 2>>"$log_file")
+	if [[ -z "$source_vg_id" || "$source_vg_id" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting failback."
+	fi
+
+	local cgname
+	cgname=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .consistencyGroupName' 2>>"$log_file")
+	if [[ -z "$cgname" || "$cgname" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source workspace: $source_ws_name (id=$source_cloud_instance_id_local) - Source VG ID=$source_vg_id - consistencyGroupName=$cgname" "1"
+
+	##############################################
+	# 2) Identify TARGET VG by consistencyGroupName
+	##############################################
+	base_url="$target_base_url_local"
+	CRN="$target_ws_crn_local"
+	CLOUD_INSTANCE_ID="$target_cloud_instance_id_local"
+	PVM_ID="$target_pvm_id_local"
+
+	local t_vg_json
+	t_vg_json=$(vg_ls 2>>"$log_file")
+	if [[ -z "$t_vg_json" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in target workspace $target_ws_name."
+	fi
+
+	local target_vg_id
+	target_vg_id=$(echo "$t_vg_json" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file" | head -n1)
+	if [[ -z "$target_vg_id" || "$target_vg_id" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group with consistencyGroupName $cgname not found in target workspace $target_ws_name. Aborting failback."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target workspace: $target_ws_name (id=$target_cloud_instance_id_local) - Target VG ID=$target_vg_id" "1"
+
+	##############################################
+	# 3) TARGET: start.source=aux (sync aux -> master)
+	##############################################
+	VOLUME_GROUP_ID="$target_vg_id"
+	ACTIONS='"start":{"source":"aux"}'
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 4.1: Synchronizing I/O updates from AUX to MASTER (target VG action start.source=aux)..." "1"
+	resp_act=$(vg_act 2>>"$log_file")
+	echo "$resp_act" >>"$log_file"
+	if ! echo "$resp_act" | jq . >/dev/null 2>&1
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.1. Raw output logged."
+	fi
+	if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.1 failed: $errmsg"
+	fi
+
+	# Monitor until state=consistent_copying and primaryRole=aux
+	local max_wait=60
+	local i=0
+	while true
+	do
+		local t_state
+		t_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+		local t_primary
+		t_primary=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // empty' 2>>"$log_file")
+
+		if [[ -z "$t_state" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read target VG state while monitoring Step 4.1."
+		fi
+
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG status: state=$t_state, primaryRole=${t_primary:-UNKNOWN}" "1"
+
+		if [[ "$t_state" == "consistent_copying" && "$t_primary" == "aux" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG reached state 'consistent_copying' with primaryRole 'aux'." "1"
+			break
+		fi
+
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Target VG did not reach state consistent_copying with primaryRole=aux after $max_wait minutes (last: state=$t_state, primaryRole=$t_primary)."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
+		sleep 60
+	done
+
+	##############################################
+	# 4) SOURCE: stop.access=true (disable replication)
+	##############################################
+	base_url="$source_base_url_local"
+	CRN="$source_ws_crn_local"
+	CLOUD_INSTANCE_ID="$source_cloud_instance_id_local"
+	PVM_ID="$source_pvm_id_local"
+	VOLUME_GROUP_ID="$source_vg_id"
+
+	# If already idling, skip stop (same logic as cancel failover)
+	local s_state
+	s_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+	if [[ "$s_state" == "idling" ]]
+	then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG is already in state 'idling' (stopped). Skipping stop.access=true." "1"
+	else
+		ACTIONS='"stop":{"access":true}'
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 4.2: Stopping SOURCE VG to disable replication (VG action stop.access=true)..." "1"
+		resp_act=$(vg_act 2>>"$log_file")
+		echo "$resp_act" >>"$log_file"
+		if ! echo "$resp_act" | jq . >/dev/null 2>&1
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.2. Raw output logged."
+		fi
+		if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+		then
+			errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.2 failed: $errmsg"
+		fi
+	fi
+
+	# Wait for replicationStatus=disabled on SOURCE VG
+	i=0
+	while true
+	do
+		local rep_status
+		rep_status=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // empty' 2>>"$log_file")
+		s_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+
+		if [[ -z "$rep_status" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read source VG replicationStatus while monitoring Step 4.2."
+		fi
+
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG status: state=${s_state:-UNKNOWN}, replicationStatus=$rep_status" "1"
+
+		if [[ "$rep_status" == "disabled" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG replicationStatus is now 'disabled'." "1"
+			break
+		fi
+
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Source VG replicationStatus did not reach 'disabled' after $max_wait minutes (last: $rep_status)."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
+		sleep 60
+	done
+
+	##############################################
+	# 5) SOURCE: start.source=master (re-enable replication)
+	##############################################
+	ACTIONS='"start":{"source":"master"}'
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 4.3: Re-enabling replication on SOURCE VG (VG action start.source=master)..." "1"
+	resp_act=$(vg_act 2>>"$log_file")
+	echo "$resp_act" >>"$log_file"
+	if ! echo "$resp_act" | jq . >/dev/null 2>&1
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.3. Raw output logged."
+	fi
+	if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.3 failed: $errmsg"
+	fi
+
+	# Wait for replicationStatus=enabled and state=consistent_copying on SOURCE VG
+	i=0
+	while true
+	do
+		local rep_status
+		rep_status=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // empty' 2>>"$log_file")
+		s_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+
+		if [[ -z "$rep_status" || -z "$s_state" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read source VG status while monitoring Step 4.3."
+		fi
+
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG status: state=$s_state, replicationStatus=$rep_status" "1"
+
+		if [[ "$rep_status" == "enabled" && "$s_state" == "consistent_copying" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG is now replication-enabled and in 'consistent_copying'." "1"
+			break
+		fi
+
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Source VG did not reach replicationStatus=enabled and state=consistent_copying after $max_wait minutes (last: state=$s_state, replicationStatus=$rep_status)."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
+		sleep 60
+	done
+
+	##############################################
+	# 6) Visibility: monitor TARGET replicationStatus enabled (log it)
+	##############################################
+	base_url="$target_base_url_local"
+	CRN="$target_ws_crn_local"
+	CLOUD_INSTANCE_ID="$target_cloud_instance_id_local"
+	PVM_ID="$target_pvm_id_local"
+	VOLUME_GROUP_ID="$target_vg_id"
+
+	i=0
+	while true
+	do
+		local t_rep
+		t_rep=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // empty' 2>>"$log_file")
+		local t_state2
+		t_state2=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+
+		if [[ -z "$t_rep" || -z "$t_state2" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read target VG status while monitoring replication re-enable."
+		fi
+
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG status: state=$t_state2, replicationStatus=$t_rep" "1"
+
+		if [[ "$t_rep" == "enabled" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG replicationStatus is now 'enabled'." "1"
+			break
+		fi
+
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Target VG replicationStatus did not report 'enabled' after $max_wait minutes (last: $t_rep). Continuing anyway." "1"
+			break
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
+		sleep 60
+	done
+
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === GRS failback completed. You can now start SOURCE_VSI $source_vsi (MASTER) in workspace $source_ws_name. ==="
+}
+#### END:FUNCTION - GRS Failback (Aux -> Master) ####
+
 #### START:FUNCTION - Start VSI (do_start_vsi) ####
 do_start_vsi() {
 	local vsi="$1"
@@ -3839,7 +4168,7 @@ EOF
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone '$vclone_name' does not exist in any workspace."
 	fi
-    ;;
+     ;;
 
    -creategrs)
 	# Syntax: bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
@@ -3914,7 +4243,7 @@ EOF
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Both VSIs found and validated. Proceeding with GRS creation..." "1"
 	create_grs
-    ;;
+     ;;
 
   -deletegrs)
 	# Syntax: bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES
@@ -3954,7 +4283,7 @@ EOF
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Both VSIs validated. Proceeding with GRS delete..." "1"
 	delete_grs
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished GRS delete for VG $vg_name between $source_vsi and $target_vsi ==="
-    ;;
+     ;;
 
   -grsfailover)
 	# Syntax: bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]
@@ -3984,7 +4313,7 @@ EOF
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Invalid MODE '$attach_mode'. Use NO_ATTACH or ATTACH."
 	fi
 	do_grs_failover
-    ;;
+     ;;
 
   -grscancelfailover)
 	# Syntax: bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
@@ -4003,7 +4332,21 @@ EOF
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Invalid MODE '$detach_mode'. Use NO_DETACH or DETACH."
 	fi
 	do_grs_cancel_failover
-	;;
+     ;;
+
+  -grsfailback)
+	# Syntax: bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME
+	if [ $# -ne 4 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME"
+	fi
+	test=0
+	flagj=1
+	source_vsi="$2"
+	target_vsi="$3"
+	vg_name="$4"
+	do_grs_failback
+     ;;
 
    -vsistart)
 	if [ $# -ne 2 ]
