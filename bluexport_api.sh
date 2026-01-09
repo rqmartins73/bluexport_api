@@ -48,7 +48,6 @@
 #  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON.
 #  VG_NAME:                        Name for the Volume Group to create on the source workspace.
 #  SOURCE_VOLUMES_NAME:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS).
-#  TARGET_VOLUMES_NAME:            Common name/prefix for target VSI volumes (used mainly for documentation/logging).
 #
 # === VSI Operations ==="
 # IPL VSI:                       ./bluexport_api.sh -vsistart VSI_NAME"
@@ -364,7 +363,6 @@ help() {
 	echoscreen "  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON."
 	echoscreen "  VG_NAME:                        Name for the Volume Group to create on the source workspace."
 	echoscreen "  SOURCE_VOLUMES_NAME:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS)."
-	echoscreen "  TARGET_VOLUMES_NAME:            Common name/prefix for target VSI volumes (used mainly for documentation/logging)."
 	echoscreen ""
 	echoscreen "=== === VSI Operations === ==="
 	echoscreen "IPL VSI:                    ./bluexport_api.sh -vsistart VSI_NAME"
@@ -2558,6 +2556,54 @@ do_grs_cancel_failover() {
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG state is '$state_now'. Waiting 60 seconds..." "1"
 		sleep 60
 	done
+
+	##############################################
+	# 4B) Monitor TARGET VG replication status (enabled)
+	##############################################
+	# After SOURCE VG is back to consistent_copying, the TARGET VG should move to replicationStatus=enabled.
+	# Log this progression explicitly (requested for -grscancelfailover visibility).
+	base_url="$target_base_url"
+	CRN="$target_ws_crn"
+	CLOUD_INSTANCE_ID="$target_cloud_instance_id"
+	VOLUME_GROUP_ID="$target_vg_id"
+
+	local t_rep
+	local t_state
+	local t_try=0
+	local t_max_wait=60   # minutes
+	while true
+	do
+		t_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+		t_rep=$(vg_sd 2>>"$log_file" | jq -r '.replicationStatus // .replication_status // .replicationState // .replication_state // empty' 2>>"$log_file")
+
+		# Keep logs explicit even if some fields are missing
+		if [[ -z "$t_state" ]]; then t_state="UNKNOWN"; fi
+		if [[ -z "$t_rep" ]]; then t_rep="UNKNOWN"; fi
+
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG replicationStatus is '$t_rep' (state='$t_state')." "1"
+
+		# Desired condition: replicationStatus=enabled (case-insensitive)
+		if echo "$t_rep" | tr '[:upper:]' '[:lower:]' | grep -qx "enabled"
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG replicationStatus is now 'enabled'." "1"
+			break
+		fi
+
+		t_try=$((t_try + 1))
+		if (( t_try >= t_max_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - TARGET VG did not reach replicationStatus=enabled after $t_max_wait minutes (last replicationStatus=$t_rep, state=$t_state)."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds for TARGET VG replicationStatus to become enabled (attempt $t_try/$t_max_wait)..." "1"
+		sleep 60
+	done
+
+	# Restore SOURCE context (for final messages / any follow-up)
+	base_url="$source_base_url_local"
+	CRN="$source_ws_crn_local"
+	CLOUD_INSTANCE_ID="$source_cloud_instance_id_local"
+	PVM_ID="$source_pvm_id_local"
+	VOLUME_GROUP_ID="$source_vg_id"
 
 	##############################################
 	# 5) NO_DETACH post-check: warn if still attached
