@@ -43,7 +43,7 @@
 # Create GRS Volume Group and onboard auxiliary volumes:  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 # Delete GRS Volume Group and auxiliary volumes:	  ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 # Failover GRS Volume Group (activate target):            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]
-# Cancel GRS failover (failback to master):               ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
+# Cancel GRS failover (start from master):                ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
 #
 #  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON.
 #  VG_NAME:                        Name for the Volume Group to create on the source workspace.
@@ -357,7 +357,7 @@ help() {
 	echoscreen "                            ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	echoscreen "Failover GRS Volume Group (activate target):"
 	echoscreen "                            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
-	echoscreen "Cancel GRS failover (failback to master):"
+	echoscreen "Cancel GRS failover (start from master):"
 	echoscreen "                            ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI"
 	echoscreen ""
 	echoscreen "  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON."
@@ -1420,7 +1420,10 @@ do_snap_delete() {
 ####  START:FUNCTION - Do the Volume Clone Execute ####
 do_volume_clone_execute() {
 	# Flush ASPs na origem antes de executar o clone
-	flush_asps
+	if [[ $shutoff == "0" ]]
+	then
+		flush_asps
+	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Volume Clone with name $vclone_name ..." "1"
 	if [[ -z "$vclone_id" ]]; then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_execute."
@@ -2300,12 +2303,12 @@ do_grs_failover() {
 }
 #### END:FUNCTION - GRS Failover (Activate Target) ####
 
-#### START:FUNCTION - GRS Cancel Failover (Failback to Master) ####
+#### START:FUNCTION - GRS Cancel Failover (Start from Master) ####
 do_grs_cancel_failover() {
 	# Syntax: bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
 	# Expected globals:
 	#   source_vsi, vg_name, detach_mode, target_vsi
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting GRS cancel failover (failback to master) for SOURCE_VSI=$source_vsi, VG_NAME=$vg_name, MODE=$detach_mode, TARGET_VSI=$target_vsi ===" "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting GRS cancel failover (start from master) for SOURCE_VSI=$source_vsi, VG_NAME=$vg_name, MODE=$detach_mode, TARGET_VSI=$target_vsi ===" "1"
 
 	############################
 	# 1) Resolve SOURCE context #
@@ -2456,7 +2459,7 @@ do_grs_cancel_failover() {
 	fi
 
 	##############################################
-	# 4) Cancel failover (failback): STOP+START on SOURCE VG (master)
+	# 4) Cancel failover (start from Master): STOP+START on SOURCE VG (master)
 	##############################################
 	# Back to SOURCE workspace
 	base_url="$source_base_url_local"
@@ -2479,7 +2482,7 @@ do_grs_cancel_failover() {
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG is already in state 'idling' (stopped). Skipping stop.access=true." "1"
 	else
 		ACTIONS='"stop":{"access":true}'
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Failback step: VG action stop.access=true on SOURCE VG $source_vg_id..." "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Cancel Failover step: VG action stop.access=true on SOURCE VG $source_vg_id..." "1"
 		resp_stop=$(vg_act 2>>"$log_file")
 		echo "$resp_stop" >>"$log_file"
 		if ! echo "$resp_stop" | jq . >/dev/null 2>&1
@@ -2520,7 +2523,7 @@ do_grs_cancel_failover() {
 
 	# Step B: start with source=master (per IBM docs)
 	ACTIONS='"start":{"source":"master"}'
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Failback step: VG action start.source=master on SOURCE VG $source_vg_id..." "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Cancel Failover step: VG action start.source=master on SOURCE VG $source_vg_id..." "1"
 	resp_start=$(vg_act 2>>"$log_file")
 	echo "$resp_start" >>"$log_file"
 	if ! echo "$resp_start" | jq . >/dev/null 2>&1
@@ -2574,7 +2577,7 @@ do_grs_cancel_failover() {
 	while true
 	do
 		t_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
-		t_rep=$(vg_sd 2>>"$log_file" | jq -r '.replicationStatus // .replication_status // .replicationState // .replication_state // empty' 2>>"$log_file")
+		t_rep=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // .replication_status // .replicationState // .replication_state // empty' 2>>"$log_file")
 
 		# Keep logs explicit even if some fields are missing
 		if [[ -z "$t_state" ]]; then t_state="UNKNOWN"; fi
@@ -2630,7 +2633,7 @@ do_grs_cancel_failover() {
 
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === GRS cancel failover completed. SOURCE VG $vg_name is back to MASTER in workspace $source_ws_name. ==="
 }
-#### END:FUNCTION - GRS Cancel Failover (Failback to Master) ####
+#### END:FUNCTION - GRS Cancel Failover (Start from Master) ####
 
 #### START:FUNCTION - Start VSI (do_start_vsi) ####
 do_start_vsi() {
