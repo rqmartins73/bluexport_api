@@ -140,12 +140,18 @@ ensure_config_exists() {
 
 if [[ ! -f "$newpath" ]]; then
   echo "### File '$newpath' does not exist."
-  read -p "Do you want to create it now? (Y/N) " create_ans
+  read -p "Do you want to create it now using -createconfig? (Y/N) " create_ans
 
   if [[ "$create_ans" =~ ^[Yy]$ ]]; then
-    echo "{}" > "$newpath"
-    chmod 600 "$newpath"
-    echo "### Created new JSON file: $newpath (permissions 600)"
+    echo ""
+    echo "### Launching -createconfig wizard..."
+    echo ""
+
+    # Force createconfig to use this path
+    export BLUEXSCRT_JSON="$newpath"
+
+    run_createconfig
+    exit 0
   else
     echo "Aborting by user choice."
     exit 1
