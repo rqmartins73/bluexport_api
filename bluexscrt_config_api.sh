@@ -10,21 +10,22 @@ set -euo pipefail
 VERSION="1.2"
 
 conf_file="$HOME/bluexport_api_conf.json"
-if [[ $1 == "-v" ]] || [[ $1 == "--version" ]]
-then
-	if [ $# -gt 1 ]
-	then
-	echo "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -v | --version"
-	exit 0
-	fi
-echo
-jq -n --arg version "$VERSION" '{tool:"bluexscrt_config.api", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2025"}'
-echo "`date +%Y-%m-%d_%H:%M:%S`"
-echo
-exit 0
-fi
 
+# First argument (safe even when script is called with no args)
 flag="${1:-}"
+
+# Version flag
+if [[ "$flag" == "-v" || "$flag" == "--version" ]]; then
+	if [ $# -gt 1 ]; then
+		echo "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: $(basename "$0") -v | --version"
+		exit 1
+	fi
+	echo
+	jq -n --arg version "$VERSION" '{tool:"bluexscrt_config.api", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2025"}'
+	echo "$(date +%Y-%m-%d_%H:%M:%S)"
+	echo
+	exit 0
+fi
 
 # Para -createconfig ainda não podemos assumir que o conf_file existe.
 if [[ "$flag" == "-createconfig" ]]
@@ -137,13 +138,22 @@ ensure_config_exists() {
     exit 1
   fi
 
-  if [[ ! -f "$newpath" ]]; then
-    echo "ERROR: File '$newpath' does not exist. Aborting..."
+if [[ ! -f "$newpath" ]]; then
+  echo "### File '$newpath' does not exist."
+  read -p "Do you want to create it now? (Y/N) " create_ans
+
+  if [[ "$create_ans" =~ ^[Yy]$ ]]; then
+    echo "{}" > "$newpath"
+    chmod 600 "$newpath"
+    echo "### Created new JSON file: $newpath (permissions 600)"
+  else
+    echo "Aborting by user choice."
     exit 1
   fi
+fi
 
-  CONFIG_JSON="$newpath"
-  echo "### Using JSON config: $CONFIG_JSON"
+CONFIG_JSON="$newpath"
+echo "### Using JSON config: $CONFIG_JSON"
 }
 
 #ensure_config_exists
