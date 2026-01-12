@@ -4,27 +4,27 @@
 #
 # === General ===
 # Changing secret file:          ./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)
-# View secret file in use:      ./bluexport_api.sh -viewscrt
+# View secret file in use:       ./bluexport_api.sh -viewscrt
 #
-# Show help:                    ./bluexport_api.sh -h | --help | -help
-# Show version:                 ./bluexport_api.sh -v | --version
+# Show help:                     ./bluexport_api.sh -h | --help | -help
+# Show version:                  ./bluexport_api.sh -v | --version
 #
 # === Capture & Export ===
-# Usage for all volumes:        ./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
-# Usage for excluding volumes:  ./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
-# Usage for monitoring job:     ./bluexport_api.sh -j VSI_NAME IMAGE_NAME
+# Usage for all volumes:         ./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
+# Usage for excluding volumes:   ./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
+# Usage for monitoring job:      ./bluexport_api.sh -j VSI_NAME IMAGE_NAME
 #
 # === Snapshots ===
-# Create snapshot:              ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]
-# Update snapshot:              ./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]
-# Delete snapshot:              ./bluexport_api.sh -snapdel  SNAPSHOT_NAME
-# Restore snapshot:             ./bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME
-# List all snapshots (all WS):  ./bluexport_api.sh -snaplsall
+# Create snapshot:               ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]
+# Update snapshot:               ./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]
+# Delete snapshot:               ./bluexport_api.sh -snapdel  SNAPSHOT_NAME
+# Restore snapshot:              ./bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME
+# List all snapshots (all WS):   ./bluexport_api.sh -snaplsall
 #
 # === Captured Images ===
 # List all captured images
-#  in all Workspaces:           ./bluexport_api.sh -imglsall
-# Delete image:                 ./bluexport_api.sh -imgdel IMG_NAME"
+#  in all Workspaces:            ./bluexport_api.sh -imglsall
+# Delete image:                  ./bluexport_api.sh -imgdel IMG_NAME"
 #
 # === Cloud Object Storage (COS) ===
 # List buckets for all COS instances (from bluexscrt): 	./bluexport_api.sh -bucketslsall
@@ -32,18 +32,20 @@
 # Delete object from a COS bucket:    			./bluexport_api.sh -bucketdelobj
 #
 # === Volume Clones ===
-# Create volume clone:          ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
-# Delete volume clone:          ./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME 0|delete_volumes
-# List volume clones (all WS):  ./bluexport_api.sh -vclonelsall
+# Create volume clone:           ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
+# Delete volume clone:           ./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME 0|delete_volumes
+# List volume clones (all WS):   ./bluexport_api.sh -vclonelsall
 #
 # === Volume Tier ===
-# Change volume tier:           ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
+# Change volume tier:            ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
 #
 # === GRS (Global Replication Services) ===
 # Create GRS Volume Group and onboard auxiliary volumes:  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 # Delete GRS Volume Group and auxiliary volumes:	  ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 # Failover GRS Volume Group (activate target):            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]
-# Cancel GRS failover (start from master):                ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
+# Cancel GRS failover (sync master->aux):                 ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
+# Failback GRS Volume Group (sync aux->master
+#      and re-enable replication master->aux):            ./bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME"
 #
 #  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON.
 #  VG_NAME:                        Name for the Volume Group to create on the source workspace.
@@ -66,12 +68,12 @@
 # Monitor VSI SRC:               ./bluexport_api.sh -vsisrcmon VSI_NAME"
 #      Monitor VSI SRC until it reaches ACTIVE/00000000 or SHUTOFF."
 # === Examples ===
-# Capture all volumes:          ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily
-# Capture excluding ASP2_:      ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly
+# Capture all volumes:           ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily
+# Capture excluding ASP2_:       ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly
 # Capture excluding ASP2_ & iASPname:
-#                               ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly
+#                                ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly
 #
-# Test mode (no capture):       ./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single
+# Test mode (no capture):        ./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single
 #
 # Note: Recurrence "hourly" and "daily" only permits captures to image-catalog.
 #
