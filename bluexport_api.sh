@@ -24,7 +24,7 @@
 # === Captured Images ===
 # List all captured images
 #  in all Workspaces:            ./bluexport_api.sh -imglsall
-# Delete image:                  ./bluexport_api.sh -imgdel IMG_NAME"
+# Delete image:                  ./bluexport_api.sh -imgdel IMG_NAME
 #
 # === Cloud Object Storage (COS) ===
 # List buckets for all COS instances (from bluexscrt): 	./bluexport_api.sh -bucketslsall
@@ -45,28 +45,29 @@
 # Failover GRS Volume Group (activate target):            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]
 # Cancel GRS failover (sync master->aux):                 ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
 # Failback GRS Volume Group (sync aux->master
-#      and re-enable replication master->aux):            ./bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME"
+#      and re-enable replication master->aux):            ./bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME
 #
 #  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON.
 #  VG_NAME:                        Name for the Volume Group to create on the source workspace.
 #  SOURCE_VOLUMES_NAME:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS).
 #
 # === VSI Operations ==="
-# IPL VSI:                       ./bluexport_api.sh -vsistart VSI_NAME"
-#      Start a Virtual Server Instance. VSI must be in SHUTOFF status."
+# IPL VSI:                       ./bluexport_api.sh -vsistart VSI_NAME
+#      Start a Virtual Server Instance. VSI must be in SHUTOFF status.
 #
-# VSI Operations:                ./bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE"
-#      Set IBM i boot/operating mode for a VSI."
-#      BOOT_MODE: a | b | c | d"
-#      OPERATING_MODE: normal | manual"
+# VSI Operations:                ./bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE
+#      Set IBM i boot/operating mode for a VSI.
+#      BOOT_MODE: a | b | c | d
+#      OPERATING_MODE: normal | manual
 #
-# VSI Tasks:                     ./bluexport_api.sh -vsitask VSI_NAME TASK"
-#      Run an IBM i operation task on a VSI."
-#      TASK: dston | retrydump | consoleservice | iopreset | remotedstoff |"
-#            remotedston | iopdump | dumprestart"
+# VSI Tasks:                     ./bluexport_api.sh -vsitask VSI_NAME TASK
+#      Run an IBM i operation task on a VSI.
+#      TASK: dston | retrydump | consoleservice | iopreset | remotedstoff |
+#            remotedston | iopdump | dumprestart
 #
-# Monitor VSI SRC:               ./bluexport_api.sh -vsisrcmon VSI_NAME"
-#      Monitor VSI SRC until it reaches ACTIVE/00000000 or SHUTOFF."
+# Monitor VSI SRC:               ./bluexport_api.sh -vsisrcmon VSI_NAME  START|SHUTOFF
+#      START   -> Monitor until status=ACTIVE and SRC=00000000
+#      SHUTOFF -> Monitor until status=SHUTOFF (SRC ignored)
 # === Examples ===
 # Capture all volumes:           ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily
 # Capture excluding ASP2_:       ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly
@@ -382,8 +383,9 @@ help() {
 	echoscreen "      TASK: dston | retrydump | consoleservice | iopreset | remotedstoff |"
 	echoscreen "            remotedston | iopdump | dumprestart"
 	echoscreen ""
-	echoscreen "Monitor VSI SRC:            ./bluexport_api.sh -vsisrcmon VSI_NAME"
-	echoscreen "      Monitor VSI SRC until it reaches ACTIVE/00000000 or SHUTOFF."
+	echoscreen "Monitor VSI SRC:            ./bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF"
+	echoscreen "      START   -> Monitor until VSI reaches ACTIVE and SRC 00000000"
+	echoscreen "      SHUTOFF -> Monitor until VSI reaches SHUTOFF (SRC ignored)"
 	echoscreen ""
 	echoscreen "=== === Examples === ==="
 	echoscreen "Capture all volumes:        ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
@@ -3081,46 +3083,67 @@ do_vsi_task() {
 #### END:FUNCTION - VSI Task Operation (do_vsi_task) ####
 
 #### START:FUNCTION - VSI SRC Monitor (do_vsi_srcmon) ####
-# Monitors VSI SRC / Status until:
-#   - status == ACTIVE and SRC == 00000000
-#   - OR status == SHUTOFF
+# Usage:
+#   -vsisrcmon VSI_NAME START|SHUTOFF
+# Notes:
+#   START   -> success when status=ACTIVE and SRC=00000000
+#   SHUTOFF -> success when status=SHUTOFF (SRC ignored, because SRC may reach 00000000 before SHUTOFF)
 do_vsi_srcmon() {
-	local vsi="$1"
+	local vsi_name="$1"
+	local mode="$2"
+	local mode_u=""
 
-	if [[ -z "$vsi" ]]; then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME is missing. Syntax: bluexport_api.sh -vsisrcmon VSI_NAME"
+	if [[ -z "$vsi_name" || -z "$mode" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME or MODE is missing. Syntax: bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF"
 	fi
 
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Monitoring SRC for VSI $vsi ===" "1"
+	mode_u=$(echo "$mode" | tr '[:lower:]' '[:upper:]')
+	if [[ "$mode_u" != "START" && "$mode_u" != "SHUTOFF" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid MODE '$mode'. Use START or SHUTOFF. Syntax: bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF"
+	fi
 
-	# Resolve VSI and workspace
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Monitoring SRC/Status for VSI $vsi_name (mode: $mode_u) ===" "1"
+
+	# Resolve VSI and workspace (keeps script behavior consistent with other flags)
 	flagj=1
-	vsi="$vsi"
+	vsi="$vsi_name"
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
 
 	while true
 	do
 		vsi_json=$(ins_get 2>>"$log_file")
-		if [[ -z "$vsi_json" ]]; then
+		if [[ -z "$vsi_json" ]]
+		then
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING: Could not retrieve VSI status/SRC. Retrying in 30 seconds..." "1"
 			sleep 30
 			continue
 		fi
 
 		vsi_status=$(echo "$vsi_json" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
-		vsi_src=$(echo "$vsi_json" | jq -r '.srcs[0][0].src // "UNKNOWN"' 2>>"$log_file")
 
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi - Status: $vsi_status, SRC: $vsi_src" "1"
+		if [[ "$mode_u" == "START" ]]
+		then
+			# srcs is an array-of-array, like: "srcs": [[{ "src": "00000000", ... }]]
+			vsi_src=$(echo "$vsi_json" | jq -r '.srcs[0][0].src // "UNKNOWN"' 2>>"$log_file")
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name - Status: $vsi_status, SRC: $vsi_src" "1"
 
-		# Condição 1: ACTIVE + SRC limpo
-		if [[ "$vsi_status" == "ACTIVE" && "$vsi_src" == "00000000" ]]; then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi reached status ACTIVE with SRC 00000000. SRC monitoring completed. ==="
-		fi
+			if [[ "$vsi_status" == "ACTIVE" && "$vsi_src" == "00000000" ]]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name reached status ACTIVE with SRC 00000000. SRC monitoring completed. ==="
+			fi
+		else
+			# SHUTOFF mode: SRC can become 00000000 before status=SHUTOFF, so ignore SRC as a completion condition
+			# Still try to log SRC if present (best effort)
+			vsi_src=$(echo "$vsi_json" | jq -r '.srcs[0][0].src // "N/A"' 2>>"$log_file")
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name - Status: $vsi_status, SRC: $vsi_src" "1"
 
-		# Condição 2: SHUTOFF
-		if [[ "$vsi_status" == "SHUTOFF" ]]; then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi reached status SHUTOFF. SRC monitoring stopped. ==="
+			if [[ "$vsi_status" == "SHUTOFF" ]]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name reached status SHUTOFF. SRC monitoring completed. ==="
+			fi
 		fi
 
 		sleep 30
@@ -4382,12 +4405,13 @@ EOF
      ;;
 
    -vsisrcmon)
-	if [ $# -ne 2 ]
+	if [ $# -ne 3 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsisrcmon VSI_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF"
 	fi
 	vsi="$2"
-	do_vsi_srcmon "$vsi"
+	mode="$3"
+	do_vsi_srcmon "$vsi" "$mode"
      ;;
 
    -bucketslsall)
