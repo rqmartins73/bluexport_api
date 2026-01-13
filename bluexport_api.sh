@@ -3075,8 +3075,11 @@ do_vsi_task() {
 # Usage:
 #   -vsisrcmon VSI_NAME START|SHUTOFF
 # Notes:
-#   START   -> success when status=ACTIVE and SRC=00000000
-#   SHUTOFF -> success when status=SHUTOFF (SRC ignored, because SRC may reach 00000000 before SHUTOFF)
+#   START   -> waits for VSI to be truly started:
+#              - status must reach ACTIVE
+#              - SRC may briefly show 00000000 before it starts rolling
+#              - we wait up to 3 minutes to detect rolling; if rolling is detected, we wait until SRC returns to 00000000 (stable)
+#   SHUTOFF -> waits for status=SHUTOFF (SRC ignored, because SRC may reach 00000000 before SHUTOFF)
 do_vsi_srcmon() {
 	local vsi_name="$1"
 	local mode="$2"
@@ -3101,6 +3104,12 @@ do_vsi_srcmon() {
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
 
+	# START mode anti-false-positive logic (same principle as do_start_vsi)
+	local grace_seconds=180
+	local first_active_ts=0
+	local saw_nonzero=0
+	local stable_zero=0
+
 	while true
 	do
 		vsi_json=$(ins_get 2>>"$log_file")
@@ -3112,30 +3121,76 @@ do_vsi_srcmon() {
 		fi
 
 		vsi_status=$(echo "$vsi_json" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+		# srcs is an array-of-array, like: "srcs": [[{ "src": "00000000", ... }]]
+		vsi_src=$(echo "$vsi_json" | jq -r '.srcs[0][0].src // "UNKNOWN"' 2>>"$log_file")
 
-		if [[ "$mode_u" == "START" ]]
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name - Status: $vsi_status, SRC: $vsi_src" "1"
+
+		if [[ "$mode_u" == "SHUTOFF" ]]
 		then
-			# srcs is an array-of-array, like: "srcs": [[{ "src": "00000000", ... }]]
-			vsi_src=$(echo "$vsi_json" | jq -r '.srcs[0][0].src // "UNKNOWN"' 2>>"$log_file")
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name - Status: $vsi_status, SRC: $vsi_src" "1"
-
-			if [[ "$vsi_status" == "ACTIVE" && "$vsi_src" == "00000000" ]]
-			then
-				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name reached status ACTIVE with SRC 00000000. SRC monitoring completed. ==="
-			fi
-		else
-			# SHUTOFF mode: SRC can become 00000000 before status=SHUTOFF, so ignore SRC as a completion condition
-			# Still try to log SRC if present (best effort)
-			vsi_src=$(echo "$vsi_json" | jq -r '.srcs[0][0].src // "N/A"' 2>>"$log_file")
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name - Status: $vsi_status, SRC: $vsi_src" "1"
-
+			# SHUTOFF mode: ignore SRC as a completion condition
 			if [[ "$vsi_status" == "SHUTOFF" ]]
 			then
 				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name reached status SHUTOFF. SRC monitoring completed. ==="
 			fi
+
+			sleep 30
+			continue
 		fi
 
-		sleep 30
+		##############################################
+		# START mode
+		##############################################
+		# If not ACTIVE yet, just keep waiting (SHUTOFF here is normal while starting)
+		if [[ "$vsi_status" != "ACTIVE" ]]
+		then
+			sleep 30
+			continue
+		fi
+
+		# VSI is ACTIVE at this point
+		if [[ "$vsi_src" != "00000000" ]]
+		then
+			# SRC is rolling
+			saw_nonzero=1
+			stable_zero=0
+			sleep 30
+			continue
+		fi
+
+		# ACTIVE + SRC=00000000
+		if [[ "$saw_nonzero" == "1" ]]
+		then
+			# We already observed SRC rolling; require a tiny bit of stability at 00000000
+			stable_zero=$((stable_zero + 1))
+			if [ "$stable_zero" -ge 2 ]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name reached status ACTIVE with SRC 00000000 (stable). SRC monitoring completed. ==="
+			fi
+			sleep 30
+			continue
+		fi
+
+		# We have NOT observed any non-zero SRC yet (avoid false-positive: ACTIVE + 00000000 too early)
+		if [ "$first_active_ts" -eq 0 ]
+		then
+			first_active_ts=$(date +%s)
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name reached ACTIVE with SRC=00000000. Waiting up to ${grace_seconds}s to detect SRC rolling before declaring START completed..." "1"
+			sleep 30
+			continue
+		fi
+
+		now_ts=$(date +%s)
+		elapsed=$((now_ts - first_active_ts))
+		if [ "$elapsed" -lt "$grace_seconds" ]
+		then
+			# Still inside grace window, keep monitoring
+			sleep 30
+			continue
+		fi
+
+		# Grace window elapsed and we never saw SRC rolling
+		abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name reached status ACTIVE with SRC 00000000 and no SRC rolling was detected after ${grace_seconds}s. SRC monitoring completed. ==="
 	done
 }
 #### END:FUNCTION - VSI SRC Monitor (do_vsi_srcmon) ####
