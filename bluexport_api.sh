@@ -68,6 +68,13 @@
 # Monitor VSI SRC:               ./bluexport_api.sh -vsisrcmon VSI_NAME  START|SHUTOFF
 #      START   -> Monitor until status=ACTIVE and SRC=00000000
 #      SHUTOFF -> Monitor until status=SHUTOFF (SRC ignored)
+#
+# Attach volumes by common name: ./bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME
+#      Attach all volumes in the workspace whose name contains VOLUMES_COMMON_NAME.
+#      VSI must be SHUTOFF. Volumes already attached are skipped.
+# Detach ALL volumes from a VSI: ./bluexport_api.sh -detachvolumes VSI_NAME
+#       Detach all volumes currently attached to the VSI. VSI must be SHUTOFF.
+#
 # === Examples ===
 # Capture all volumes:           ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily
 # Capture excluding ASP2_:       ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly
@@ -86,7 +93,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.6
+Version=1.7
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -387,6 +394,13 @@ help() {
 	echoscreen "      START   -> Monitor until VSI reaches ACTIVE and SRC 00000000"
 	echoscreen "      SHUTOFF -> Monitor until VSI reaches SHUTOFF (SRC ignored)"
 	echoscreen ""
+	echoscreen "Attach volumes by common name: ./bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME"
+	echoscreen "      Attach all volumes in the workspace whose name contains VOLUMES_COMMON_NAME."
+	echoscreen "      VSI must be SHUTOFF. Volumes already attached are skipped."
+	echoscreen ""
+	echoscreen "Detach ALL volumes from a VSI: ./bluexport_api.sh -detachvolumes VSI_NAME"
+	echoscreen "      Detach all volumes currently attached to the VSI. VSI must be SHUTOFF."
+        echoscreen ""
 	echoscreen "=== === Examples === ==="
 	echoscreen "Capture all volumes:        ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
 	echoscreen "Capture excluding ASP2_:    ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly"
@@ -3195,6 +3209,212 @@ do_vsi_srcmon() {
 }
 #### END:FUNCTION - VSI SRC Monitor (do_vsi_srcmon) ####
 
+#### START:FUNCTION - Attach volumes to a VSI by common name (do_vsi_attach_volumes) ####
+# Usage:
+# 	-attachvolumes VOLUMES_COMMON_NAME VSI_NAME
+# Notes:
+# 	- VSI must be SHUTOFF (safe operation)
+# 	- Attaches all volumes in the workspace whose name contains VOLUMES_COMMON_NAME
+# 	- Skips volumes already attached to the VSI
+do_vsi_attach_volumes() {
+	local vol_common_name="$1"
+	local vsi_name="$2"
+
+	if [[ -z "$vol_common_name" || -z "$vsi_name" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME"
+	fi
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Attaching volumes matching '$vol_common_name' to VSI $vsi_name ===" "1"
+
+	# Resolve VSI and workspace
+	flagj=1
+	vsi="$vsi_name"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+
+	# VSI must be SHUTOFF
+	local vsi_status
+	vsi_status=$(ins_get 2>>"$log_file" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name is in status: $vsi_status." "1"
+	if [[ "$vsi_status" != "SHUTOFF" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name is not SHUTOFF (current: $vsi_status). Stop it before running -attachvolumes."
+	fi
+
+	# Current volumes already attached to this VSI
+	local attached_ids
+	attached_ids=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .volumeID' 2>>"$log_file" | tr '\n' ' ')
+
+	# Get all volumes in workspace matching common name (contains)
+	local match_lines
+	match_lines=$(vol_ls 2>>"$log_file" | jq -r --arg p "$vol_common_name" '.volumes[]? | select(.name | contains($p)) | "\(.volumeID) \(.name)"' 2>>"$log_file")
+	if [[ -z "$match_lines" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - No volumes found in workspace $shortnamecrn with name containing '$vol_common_name'. Nothing to attach."
+	fi
+
+	# Build list to attach (exclude already attached)
+	local ids_json=""
+	local attach_count=0
+	local names_to_attach=""
+	while IFS= read -r line
+	do
+		[[ -z "$line" ]] && continue
+		local vid vname
+		vid=$(echo "$line" | awk '{print $1}')
+		vname=$(echo "$line" | awk '{print $2}')
+		# Skip if already attached
+		if echo " $attached_ids " | grep -q " $vid "
+		then
+			continue
+		fi
+		if [[ -n "$ids_json" ]]
+		then
+			ids_json="$ids_json,\"$vid\""
+		else
+			ids_json="\"$vid\""
+		fi
+		attach_count=$((attach_count + 1))
+		names_to_attach="$names_to_attach $vname"
+	done <<< "$match_lines"
+
+	if [[ $attach_count -eq 0 ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - All volumes matching '$vol_common_name' are already attached to VSI $vsi_name. Nothing to do."
+	fi
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes to attach ($attach_count):$names_to_attach" "1"
+
+	ACTIONS="\"volumeIDs\":[${ids_json}]"
+	local resp_att
+	resp_att=$(vol_att_multi 2>>"$log_file")
+	echo "$resp_att" >>"$log_file"
+	if echo "$resp_att" | jq -e '.code? != null or .error? != null or .description? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$resp_att" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error attaching volumes to $vsi_name: $errmsg"
+	fi
+
+	# Wait for attach completion (async)
+	local expected_min
+	expected_min=$(( $(echo "$attached_ids" | wc -w) + attach_count ))
+	if [[ -z "$expected_min" || "$expected_min" -le 0 ]]
+	then
+		expected_min=$attach_count
+	fi
+
+	local max_wait=60
+	local i=0
+	while true
+	do
+		local cur_count
+		cur_count=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file")
+		if [[ -z "$cur_count" || "$cur_count" == "null" ]]
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not read attached volumes count while waiting for attaches."
+		fi
+		if (( cur_count >= expected_min ))
+		then
+			break
+		fi
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name did not reach $expected_min attached volumes after ~10 minutes (last count=$cur_count)."
+		fi
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes still attaching on $vsi_name... currently $cur_count/$expected_min attached. Waiting 10 seconds (attempt $i/$max_wait)" "1"
+		sleep 10
+	done
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Successfully requested attach of $attach_count volumes to VSI $vsi_name. ===" "1"
+	abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name now has $(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file") attached volumes."
+}
+#### END:FUNCTION - Attach volumes to a VSI by common name (do_vsi_attach_volumes) ####
+
+#### START:FUNCTION - Detach ALL volumes from a VSI (do_vsi_detach_volumes) ####
+# Usage:
+# 	-detachvolumes VSI_NAME
+# Notes:
+# 	- VSI must be SHUTOFF (safe operation)
+# 	- Detaches all volumes currently attached to the VSI
+do_vsi_detach_volumes() {
+	local vsi_name="$1"
+	if [[ -z "$vsi_name" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME is missing. Syntax: bluexport_api.sh -detachvolumes VSI_NAME"
+	fi
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Detaching ALL volumes from VSI $vsi_name ===" "1"
+
+	# Resolve VSI and workspace
+	flagj=1
+	vsi="$vsi_name"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+
+	# VSI must be SHUTOFF
+	local vsi_status
+	vsi_status=$(ins_get 2>>"$log_file" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name is in status: $vsi_status." "1"
+	if [[ "$vsi_status" != "SHUTOFF" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name is not SHUTOFF (current: $vsi_status). Stop it before running -detachvolumes."
+	fi
+
+	# Get attached volume IDs
+	local vol_ids
+	vol_ids=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .volumeID' 2>>"$log_file")
+	if [[ -z "$vol_ids" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name has no attached volumes. Nothing to detach."
+	fi
+
+	local count
+	count=$(echo "$vol_ids" | wc -l | tr -d ' ')
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name has $count attached volumes. Proceeding with bulk detach..." "1"
+
+	local ids_json
+	ids_json=$(echo "$vol_ids" | awk '{print "\""$1"\""}' | paste -sd, -)
+	ACTIONS="\"volumeIDs\":[${ids_json}]"
+
+	local resp_det
+	resp_det=$(ins_vol_bdet 2>>"$log_file")
+	echo "$resp_det" >>"$log_file"
+	if echo "$resp_det" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$resp_det" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error detaching volumes from $vsi_name: $errmsg"
+	fi
+
+	# Wait until no volumes are attached (async)
+	local max_wait=60
+	local i=0
+	while true
+	do
+		local cur_count
+		cur_count=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file")
+		if [[ -z "$cur_count" || "$cur_count" == "null" ]]
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not read attached volumes count while waiting for detaches."
+		fi
+		if (( cur_count == 0 ))
+		then
+			break
+		fi
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name still has $cur_count attached volumes after ~10 minutes."
+		fi
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes still detaching from $vsi_name... currently $cur_count attached. Waiting 10 seconds (attempt $i/$max_wait)" "1"
+		sleep 10
+	done
+
+	abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully detached all volumes from VSI $vsi_name. ==="
+}
+#### END:FUNCTION - Detach ALL volumes from a VSI (do_vsi_detach_volumes) ####
+
 #### START:FUNCTION - Delete Image (do_img_delete) ####
 do_img_delete() {
 	local img_name="$1"
@@ -4456,6 +4676,27 @@ EOF
 	vsi="$2"
 	mode="$3"
 	do_vsi_srcmon "$vsi" "$mode"
+     ;;
+
+   -attachvolumes)
+	# Syntax: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME
+	if [ $# -ne 3 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME"
+	fi
+	vol_common_name="$2"
+	vsi="$3"
+	do_vsi_attach_volumes "$vol_common_name" "$vsi"
+     ;;
+
+   -detachvolumes)
+	# Syntax: bluexport_api.sh -detachvolumes VSI_NAME
+	if [ $# -ne 2 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -detachvolumes VSI_NAME"
+	fi
+	vsi="$2"
+	do_vsi_detach_volumes "$vsi"
      ;;
 
    -bucketslsall)
