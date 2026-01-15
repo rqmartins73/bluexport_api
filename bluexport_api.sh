@@ -3216,6 +3216,7 @@ do_vsi_srcmon() {
 # 	- VSI must be SHUTOFF (safe operation)
 # 	- Attaches all volumes in the workspace whose name contains VOLUMES_COMMON_NAME
 # 	- Skips volumes already attached to the VSI
+# 	- If VSI has no volumes attached yet, boot volume MUST be attached first (PowerVS requirement)
 do_vsi_attach_volumes() {
 	local vol_common_name="$1"
 	local vsi_name="$2"
@@ -3246,29 +3247,72 @@ do_vsi_attach_volumes() {
 	local attached_ids
 	attached_ids=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .volumeID' 2>>"$log_file" | tr '\n' ' ')
 
+	local cur_count
+	cur_count=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file")
+	[[ -z "$cur_count" || "$cur_count" == "null" ]] && cur_count=0
+
 	# Get all volumes in workspace matching common name (contains)
+	local vols_json
+	vols_json=$(vol_ls 2>>"$log_file")
+	if [[ -z "$vols_json" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not list volumes via API (vol_ls)."
+	fi
+
 	local match_lines
-	match_lines=$(vol_ls 2>>"$log_file" | jq -r --arg p "$vol_common_name" '.volumes[]? | select(.name | contains($p)) | "\(.volumeID) \(.name)"' 2>>"$log_file")
+	match_lines=$(echo "$vols_json" | jq -r --arg p "$vol_common_name" '.volumes[]? | select(.name | contains($p)) | "\(.volumeID) \(.name)"' 2>>"$log_file")
 	if [[ -z "$match_lines" ]]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - No volumes found in workspace $shortnamecrn with name containing '$vol_common_name'. Nothing to attach."
 	fi
 
+	# Identify boot volume among matches
+	# We try metadata first (best), then fallback to name pattern (boot / BOOT / -boot- / _boot_)
+	local boot_line
+	boot_line=$(echo "$vols_json" | jq -r --arg p "$vol_common_name" '
+		.volumes[]?
+		| select(.name | contains($p))
+		| select(
+			(.bootable? == true) or
+			(.isBootVolume? == true) or
+			(.bootVolume? == true) or
+			(.volumeType? == "boot") or
+			(.type? == "boot") or
+			(.name | test("(^|[-_])boot($|[-_])"; "i"))
+		)
+		| "\(.volumeID) \(.name)"' 2>>"$log_file" | head -n 1)
+
+	local boot_vol_id=""
+	local boot_vol_name=""
+	if [[ -n "$boot_line" ]]
+	then
+		boot_vol_id=$(echo "$boot_line" | awk '{print $1}')
+		boot_vol_name=$(echo "$boot_line" | awk '{print $2}')
+	fi
+
 	# Build list to attach (exclude already attached)
+	# Also build "remaining" excluding boot (boot will be attached first if needed)
 	local ids_json=""
 	local attach_count=0
 	local names_to_attach=""
+	local ids_json_rest=""
+	local attach_count_rest=0
+	local names_to_attach_rest=""
+
 	while IFS= read -r line
 	do
 		[[ -z "$line" ]] && continue
 		local vid vname
 		vid=$(echo "$line" | awk '{print $1}')
 		vname=$(echo "$line" | awk '{print $2}')
+
 		# Skip if already attached
 		if echo " $attached_ids " | grep -q " $vid "
 		then
 			continue
 		fi
+
+		# Overall list (for reporting)
 		if [[ -n "$ids_json" ]]
 		then
 			ids_json="$ids_json,\"$vid\""
@@ -3277,6 +3321,20 @@ do_vsi_attach_volumes() {
 		fi
 		attach_count=$((attach_count + 1))
 		names_to_attach="$names_to_attach $vname"
+
+		# Remaining list (exclude boot)
+		if [[ -n "$boot_vol_id" && "$vid" == "$boot_vol_id" ]]
+		then
+			continue
+		fi
+		if [[ -n "$ids_json_rest" ]]
+		then
+			ids_json_rest="$ids_json_rest,\"$vid\""
+		else
+			ids_json_rest="\"$vid\""
+		fi
+		attach_count_rest=$((attach_count_rest + 1))
+		names_to_attach_rest="$names_to_attach_rest $vname"
 	done <<< "$match_lines"
 
 	if [[ $attach_count -eq 0 ]]
@@ -3286,19 +3344,87 @@ do_vsi_attach_volumes() {
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes to attach ($attach_count):$names_to_attach" "1"
 
-	ACTIONS="\"volumeIDs\":[${ids_json}]"
-	local resp_att
-	resp_att=$(vol_att_multi 2>>"$log_file")
-	echo "$resp_att" >>"$log_file"
-	if echo "$resp_att" | jq -e '.code? != null or .error? != null or .description? != null' >/dev/null 2>&1
+	#########################################################
+	# If VSI currently has 0 volumes, attach BOOT first      #
+	#########################################################
+	if [[ "$cur_count" -eq 0 ]]
 	then
-		errmsg=$(echo "$resp_att" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error attaching volumes to $vsi_name: $errmsg"
+		if [[ -z "$boot_vol_id" ]]
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name has no volumes attached, and I could not identify a boot volume among matches for '$vol_common_name'. Ensure the boot volume name includes the common string, or contains 'boot' in the name."
+		fi
+
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI has no volumes attached. Attaching BOOT volume first: $boot_vol_name ($boot_vol_id)" "1"
+		ACTIONS="\"volumeIDs\":[\"$boot_vol_id\"]"
+		local resp_boot
+		resp_boot=$(vol_att_multi 2>>"$log_file")
+		echo "$resp_boot" >>"$log_file"
+		if echo "$resp_boot" | jq -e '.code? != null or .error? != null or .description? != null' >/dev/null 2>&1
+		then
+			errmsg=$(echo "$resp_boot" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error attaching boot volume to $vsi_name: $errmsg"
+		fi
+
+		# Wait until boot volume is visible on VSI
+		local max_boot_wait=60
+		local boot_try=0
+		while true
+		do
+			local seen_boot
+			seen_boot=$(ins_vol_ls 2>>"$log_file" | jq -r --arg vid "$boot_vol_id" '.volumes[]? | select(.volumeID==$vid) | .volumeID' 2>>"$log_file")
+			if [[ "$seen_boot" == "$boot_vol_id" ]]
+			then
+				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Boot volume is now attached to $vsi_name. Proceeding with remaining volumes..." "1"
+				break
+			fi
+			boot_try=$((boot_try + 1))
+			if (( boot_try >= max_boot_wait ))
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Boot volume ($boot_vol_name / $boot_vol_id) did not become attached/visible on $vsi_name after ~10 minutes. Aborting."
+			fi
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Boot volume still attaching on $vsi_name... waiting 10 seconds (attempt $boot_try/$max_boot_wait)" "1"
+			sleep 10
+		done
+	fi
+
+	###########################################
+	# Attach remaining volumes (excluding boot)
+	###########################################
+	if [[ -n "$boot_vol_id" ]]
+	then
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Boot volume detected: $boot_vol_name ($boot_vol_id)" "1"
+	fi
+
+	if [[ -z "$ids_json_rest" || "$attach_count_rest" -eq 0 ]]
+	then
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - No additional volumes to attach (only boot or all already attached)." "1"
+	else
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Attaching remaining volumes ($attach_count_rest):$names_to_attach_rest" "1"
+		ACTIONS="\"volumeIDs\":[${ids_json_rest}]"
+		local resp_att
+		resp_att=$(vol_att_multi 2>>"$log_file")
+		echo "$resp_att" >>"$log_file"
+		if echo "$resp_att" | jq -e '.code? != null or .error? != null or .description? != null' >/dev/null 2>&1
+		then
+			errmsg=$(echo "$resp_att" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error attaching volumes to $vsi_name: $errmsg"
+		fi
 	fi
 
 	# Wait for attach completion (async)
 	local expected_min
-	expected_min=$(( $(echo "$attached_ids" | wc -w) + attach_count ))
+	local base_count
+	base_count=$(echo "$attached_ids" | wc -w | awk '{print $1}')
+	[[ -z "$base_count" ]] && base_count=0
+
+	# If VSI had 0 before and we attached boot, total expected increases by 1 + attach_count_rest
+	# Otherwise, expected increases by attach_count (excluding already attached)
+	if [[ "$cur_count" -eq 0 ]]
+	then
+		expected_min=$(( 1 + attach_count_rest ))
+	else
+		expected_min=$(( base_count + attach_count ))
+	fi
 	if [[ -z "$expected_min" || "$expected_min" -le 0 ]]
 	then
 		expected_min=$attach_count
@@ -3308,29 +3434,30 @@ do_vsi_attach_volumes() {
 	local i=0
 	while true
 	do
-		local cur_count
-		cur_count=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file")
-		if [[ -z "$cur_count" || "$cur_count" == "null" ]]
+		local cur
+		cur=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file")
+		if [[ -z "$cur" || "$cur" == "null" ]]
 		then
 			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not read attached volumes count while waiting for attaches."
 		fi
-		if (( cur_count >= expected_min ))
+		if (( cur >= expected_min ))
 		then
 			break
 		fi
 		i=$((i + 1))
 		if (( i >= max_wait ))
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name did not reach $expected_min attached volumes after ~10 minutes (last count=$cur_count)."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name did not reach $expected_min attached volumes after ~10 minutes (last count=$cur)."
 		fi
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes still attaching on $vsi_name... currently $cur_count/$expected_min attached. Waiting 10 seconds (attempt $i/$max_wait)" "1"
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes still attaching on $vsi_name... currently $cur/$expected_min attached. Waiting 10 seconds (attempt $i/$max_wait)" "1"
 		sleep 10
 	done
 
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Successfully requested attach of $attach_count volumes to VSI $vsi_name. ===" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Successfully requested attach of volumes to VSI $vsi_name. ===" "1"
 	abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name now has $(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file") attached volumes."
 }
 #### END:FUNCTION - Attach volumes to a VSI by common name (do_vsi_attach_volumes) ####
+
 
 #### START:FUNCTION - Detach ALL volumes from a VSI (do_vsi_detach_volumes) ####
 # Usage:
