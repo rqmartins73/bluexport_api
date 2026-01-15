@@ -46,6 +46,7 @@
 # Cancel GRS failover (sync master->aux):                 ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
 # Failback GRS Volume Group (sync aux->master
 #      and re-enable replication master->aux):            ./bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME
+# Reverse GRS replication direction (sync aux->master):   ./bluexport_api.sh -grsreversereplica SOURCE_VSI TARGET_VSI VG_NAME
 #
 #  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON.
 #  VG_NAME:                        Name for the Volume Group to create on the source workspace.
@@ -93,7 +94,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.7
+Version=1.8
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -371,6 +372,8 @@ help() {
 	echoscreen "                            ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI"
 	echoscreen "Failback GRS Volume Group (sync aux->master and re-enable replication master->aux):"
 	echoscreen "                            ./bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME"
+	echoscreen "Reverse GRS replication direction (sync aux->master):"
+	echoscreen "                            ./bluexport_api.sh -grsreversereplica SOURCE_VSI TARGET_VSI VG_NAME"
 	echoscreen ""
 	echoscreen "  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON."
 	echoscreen "  VG_NAME:                        Name for the Volume Group to create on the source workspace."
@@ -2982,6 +2985,201 @@ do_grs_failback() {
 }
 #### END:FUNCTION - GRS Failback (Aux -> Master) ####
 
+#### START:FUNCTION - GRS Reverse Replica (Stay on TARGET as master) ####
+# Purpose:
+#	After a -grsfailover (activate target) when you decide to KEEP working on TARGET,
+#	this reverses replication direction so TARGET becomes the replication master.
+#	Safety rules:
+#	- SOURCE_VSI must be SHUTOFF (abort otherwise)
+#	- TARGET_VSI can be ACTIVE (or SHUTOFF)
+do_grs_reverse_replica() {
+	# Syntax: bluexport_api.sh -grsreversereplica SOURCE_VSI TARGET_VSI VG_NAME
+	# We will:
+	#  1) Validate both VSIs in config
+	#  2) Ensure SOURCE_VSI is SHUTOFF
+	#  3) Resolve SOURCE VG + consistencyGroupName (CG)
+	#  4) Resolve TARGET VG by same CG
+	#  5) Start replication with TARGET as master (VG action start.source=aux)
+	#  6) Monitor both sides for replicationStatus/state visibility
+
+	##############################################
+	# 0) Validate VSIs in config + capture context
+	##############################################
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting GRS reverse replica (keep working on TARGET) ===" "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VSI: $source_vsi | Target VSI: $target_vsi | VG: $vg_name" "1"
+
+	# SOURCE context
+	vsi="$source_vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	local source_ws_name
+	source_ws_name="$workspace"
+	local source_ws_crn_local
+	source_ws_crn_local="$shortnamecrn"
+	local source_cloud_instance_id_local
+	source_cloud_instance_id_local="$CLOUD_INSTANCE_ID"
+	local source_base_url_local
+	source_base_url_local="$base_url"
+	local source_pvm_id_local
+	source_pvm_id_local="$PVM_ID"
+	local source_vsi_id_local
+	source_vsi_id_local="$vsi_id"
+
+	# TARGET context
+	vsi="$target_vsi"
+	vsi_id_bluexscrt
+	check_locally_VSI_exists
+	local target_ws_name
+	target_ws_name="$workspace"
+	local target_ws_crn_local
+	target_ws_crn_local="$shortnamecrn"
+	local target_cloud_instance_id_local
+	target_cloud_instance_id_local="$CLOUD_INSTANCE_ID"
+	local target_base_url_local
+	target_base_url_local="$base_url"
+	local target_pvm_id_local
+	target_pvm_id_local="$PVM_ID"
+	local target_vsi_id_local
+	target_vsi_id_local="$vsi_id"
+
+	##############################################
+	# 0.1) Safety: SOURCE VSI must be SHUTOFF
+	##############################################
+	base_url="$source_base_url_local"
+	CRN="$source_ws_crn_local"
+	CLOUD_INSTANCE_ID="$source_cloud_instance_id_local"
+	PVM_ID="$source_pvm_id_local"
+	local s_status
+	s_status=$(ins_get 2>>"$log_file" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi status: $s_status" "1"
+	if [[ "$s_status" != "SHUTOFF" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi is not SHUTOFF (current: $s_status). Stop it before running -grsreversereplica."
+	fi
+
+	##############################################
+	# 1) Resolve SOURCE VG and consistencyGroupName
+	##############################################
+	local vg_json
+	vg_json=$(vg_ls 2>>"$log_file")
+	if [[ -z "$vg_json" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in source workspace $source_ws_name."
+	fi
+
+	local source_vg_id
+	source_vg_id=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .id' 2>>"$log_file")
+	if [[ -z "$source_vg_id" || "$source_vg_id" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting reverse replica."
+	fi
+
+	local cgname
+	cgname=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .consistencyGroupName' 2>>"$log_file")
+	if [[ -z "$cgname" || "$cgname" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source workspace: $source_ws_name (id=$source_cloud_instance_id_local) - Source VG ID=$source_vg_id - consistencyGroupName=$cgname" "1"
+
+	##############################################
+	# 2) Resolve TARGET VG by consistencyGroupName
+	##############################################
+	base_url="$target_base_url_local"
+	CRN="$target_ws_crn_local"
+	CLOUD_INSTANCE_ID="$target_cloud_instance_id_local"
+	PVM_ID="$target_pvm_id_local"
+
+	local t_vg_json
+	t_vg_json=$(vg_ls 2>>"$log_file")
+	if [[ -z "$t_vg_json" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in target workspace $target_ws_name."
+	fi
+
+	local target_vg_id
+	target_vg_id=$(echo "$t_vg_json" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file" | head -n1)
+	if [[ -z "$target_vg_id" || "$target_vg_id" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group for consistencyGroupName $cgname not found in target workspace $target_ws_name. Aborting reverse replica."
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target workspace: $target_ws_name (id=$target_cloud_instance_id_local) - Target VG ID=$target_vg_id" "1"
+
+	##############################################
+	# 3) TARGET: start.source=aux (reverse direction)
+	##############################################
+	VOLUME_GROUP_ID="$target_vg_id"
+	local t_rep_before t_state_before t_primary_before
+	t_rep_before=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // "UNKNOWN"' 2>>"$log_file")
+	t_state_before=$(vg_sd 2>>"$log_file" | jq -r '.state // "UNKNOWN"' 2>>"$log_file")
+	t_primary_before=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // "UNKNOWN"' 2>>"$log_file")
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG current: state=$t_state_before, replicationStatus=$t_rep_before, primaryRole=$t_primary_before" "1"
+
+	ACTIONS='"start":{"source":"aux"}'
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Starting replication with TARGET as master (VG action start.source=master) on target VG $target_vg_id..." "1"
+	resp_act=$(vg_act 2>>"$log_file")
+	echo "$resp_act" >>"$log_file"
+	if ! echo "$resp_act" | jq . >/dev/null 2>&1
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (reverse replica). Raw output logged."
+	fi
+	if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	then
+		errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting TARGET VG as master: $errmsg"
+	fi
+
+	# Monitor TARGET until replicationStatus=enabled AND state=consistent_copying
+	local max_wait=60
+	local i=0
+	while true
+	do
+		local t_rep t_state t_primary
+		t_rep=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // empty' 2>>"$log_file")
+		t_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+		t_primary=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // empty' 2>>"$log_file")
+
+		if [[ -z "$t_rep" || -z "$t_state" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read TARGET VG status while monitoring reverse replica."
+		fi
+
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG status: state=$t_state, replicationStatus=$t_rep, primaryRole=${t_primary:-UNKNOWN}" "1"
+
+		if [[ "$t_rep" == "enabled" && "$t_state" == "consistent_copying" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG is now replication-enabled and in 'consistent_copying'." "1"
+			break
+		fi
+
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - TARGET VG did not reach replicationStatus=enabled and state=consistent_copying after $max_wait minutes (last: state=$t_state, replicationStatus=$t_rep)."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
+		sleep 60
+	done
+
+	##############################################
+	# 4) SOURCE: monitor replication visibility
+	##############################################
+	base_url="$source_base_url_local"
+	CRN="$source_ws_crn_local"
+	CLOUD_INSTANCE_ID="$source_cloud_instance_id_local"
+	PVM_ID="$source_pvm_id_local"
+	VOLUME_GROUP_ID="$source_vg_id"
+
+	local s_rep s_state s_primary
+	s_rep=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // "UNKNOWN"' 2>>"$log_file")
+	s_state=$(vg_sd 2>>"$log_file" | jq -r '.state // "UNKNOWN"' 2>>"$log_file")
+	s_primary=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // "UNKNOWN"' 2>>"$log_file")
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG after reverse: state=$s_state, replicationStatus=$s_rep, primaryRole=$s_primary" "1"
+
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === GRS reverse replica completed. TARGET is now MASTER for CG $cgname. ==="
+}
+#### END:FUNCTION - GRS Reverse Replica (Stay on TARGET as master) ####
+
 #### START:FUNCTION - Start VSI (do_start_vsi) ####
 do_start_vsi() {
 	local vsi="$1"
@@ -4762,6 +4960,20 @@ EOF
 	target_vsi="$3"
 	vg_name="$4"
 	do_grs_failback
+     ;;
+
+  -grsreversereplica)
+	# Syntax: bluexport_api.sh -grsreversereplica SOURCE_VSI TARGET_VSI VG_NAME
+	if [ $# -ne 4 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME"
+	fi
+	test=0
+	flagj=1
+	source_vsi="$2"
+	target_vsi="$3"
+	vg_name="$4"
+	do_grs_reverse_replica
      ;;
 
    -vsistart)
