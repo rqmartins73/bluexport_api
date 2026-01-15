@@ -3062,7 +3062,7 @@ do_grs_reverse_replica() {
 	#  2) Ensure SOURCE_VSI is SHUTOFF
 	#  3) Resolve SOURCE VG + consistencyGroupName (CG)
 	#  4) Resolve TARGET VG by same CG
-	#  5) Start replication with TARGET as master (VG action start.source=aux)
+	#  5) Start aux->master sync on TARGET (VG action start.source=aux)
 	#  6) Monitor both sides for replicationStatus/state visibility
 
 	##############################################
@@ -3173,14 +3173,16 @@ do_grs_reverse_replica() {
 	##############################################
 	VOLUME_GROUP_ID="$target_vg_id"
 
-	# If already syncing aux->master, skip this step
-	local t_state_pre t_primary_pre
-	t_state_pre=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
-	t_primary_pre=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // empty' 2>>"$log_file")
-
-	if [[ "$t_state_pre" == "consistent_copying" && "$t_primary_pre" == "aux" ]]
+	# If already syncing aux->master, skip start + monitoring
+	vg_is_sync_aux_to_master
+	ret=$?
+	if [ $ret -eq 2 ]
 	then
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG is already syncing aux->master (state=$t_state_pre, primaryRole=$t_primary_pre). Skipping start.source=aux." "1"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read TARGET VG status before starting aux->master sync."
+	fi
+	if [ $ret -eq 0 ]
+	then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG is already syncing aux->master (enabled + consistent_copying + primaryRole=aux). Skipping start.source=aux and monitoring." "1"
 	else
 		ACTIONS='"start":{"source":"aux"}'
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 3: Starting aux->master sync on TARGET VG (VG action start.source=aux)..." "1"
@@ -3195,42 +3197,10 @@ do_grs_reverse_replica() {
 			errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 3 failed: $errmsg"
 		fi
+
+		# Monitor TARGET until aux->master steady state is reached
+		vg_wait_sync_aux_to_master "TARGET" 60 "GRS reverse replica aux->master sync"
 	fi
-
-	# Keep (or add) the existing wait loop that confirms:
-	# state=consistent_copying AND primaryRole=aux (so we KNOW it’s syncing aux->master).
-
-	# Monitor TARGET until replicationStatus=enabled AND state=consistent_copying
-	local max_wait=60
-	local i=0
-	while true
-	do
-		local t_rep t_state t_primary
-		t_rep=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // empty' 2>>"$log_file")
-		t_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
-		t_primary=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // empty' 2>>"$log_file")
-
-		if [[ -z "$t_rep" || -z "$t_state" ]]
-		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read TARGET VG status while monitoring reverse replica."
-		fi
-
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG status: state=$t_state, replicationStatus=$t_rep, primaryRole=${t_primary:-UNKNOWN}" "1"
-
-		if [[ "$t_rep" == "enabled" && "$t_state" == "consistent_copying" ]]
-		then
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG is now replication-enabled and in 'consistent_copying'." "1"
-			break
-		fi
-
-		i=$((i + 1))
-		if (( i >= max_wait ))
-		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - TARGET VG did not reach replicationStatus=enabled and state=consistent_copying after $max_wait minutes (last: state=$t_state, replicationStatus=$t_rep)."
-		fi
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
-		sleep 60
-	done
 
 	##############################################
 	# 4) SOURCE: monitor replication visibility
