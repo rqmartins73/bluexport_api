@@ -4355,7 +4355,7 @@ case $1 in
 		# Get workspace CRN and ID from JSON
 		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
 		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
-		full_ws_name="${wsmap[$ws]}"
+		full_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name' "$bluexscrt")
 		if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
 		then
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping..." "1"
