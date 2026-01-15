@@ -670,6 +670,85 @@ cos_ls_buckets() {
 }
 #### END:FUNCTIONS - API Commands ####
 
+#### START:FUNCTIONS - Helper vg_is_sync_aux_to_master
+vg_is_sync_aux_to_master() {
+	# Returns:
+	#  0 -> already syncing aux->master (replicationStatus=enabled, state=consistent_copying, primaryRole=aux)
+	#  1 -> not in desired state
+	#  2 -> could not read VG status (caller should abort)
+	local t_rep t_state t_primary
+	t_rep=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // empty' 2>>"$log_file")
+	t_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+	t_primary=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // empty' 2>>"$log_file")
+	if [[ -z "$t_rep" || -z "$t_state" ]]
+	then
+		return 2
+	fi
+	if [[ "$t_rep" == "enabled" && "$t_state" == "consistent_copying" && "$t_primary" == "aux" ]]
+	then
+		return 0
+	fi
+	return 1
+}
+#### END:FUNCTIONS - Helper vg_is_sync_aux_to_master
+
+#### START:FUNCTIONS - Helper vg_wait_sync_aux_to_master
+vg_wait_sync_aux_to_master() {
+	# Wait until VG reaches aux->master syncing steady state:
+	# replicationStatus=enabled AND state=consistent_copying AND primaryRole=aux
+	# Args:
+	#  $1 -> label (e.g. TARGET)
+	#  $2 -> max_wait (minutes), default 60
+	#  $3 -> purpose string for error messages (optional)
+	local label max_wait purpose
+	label="$1"
+	max_wait="$2"
+	purpose="$3"
+	if [[ -z "$label" ]]
+	then
+		label="VG"
+	fi
+	if [[ -z "$max_wait" ]]
+	then
+		max_wait=60
+	fi
+	if [[ -z "$purpose" ]]
+	then
+		purpose="aux->master sync"
+	fi
+
+	local i=0
+	while true
+	do
+		local t_rep t_state t_primary
+		t_rep=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // empty' 2>>"$log_file")
+		t_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+		t_primary=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // empty' 2>>"$log_file")
+
+		if [[ -z "$t_rep" || -z "$t_state" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read $label VG status while monitoring $purpose."
+		fi
+
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $label VG status: state=$t_state, replicationStatus=$t_rep, primaryRole=${t_primary:-UNKNOWN}" "1"
+
+		if [[ "$t_rep" == "enabled" && "$t_state" == "consistent_copying" && "$t_primary" == "aux" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $label VG is now syncing aux->master (enabled + consistent_copying + primaryRole=aux)." "1"
+			break
+		fi
+
+		i=$((i + 1))
+		if (( i >= max_wait ))
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - $label VG did not reach aux->master syncing state after $max_wait minutes (last: state=$t_state, replicationStatus=$t_rep, primaryRole=${t_primary:-UNKNOWN})."
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
+		sleep 60
+	done
+}
+#### END:FUNCTIONS - Helper vg_wait_sync_aux_to_master
+
 #### START:FUNCTIONS - GRS Code Helpers ####
 ## Helper: check and enable replication on volumes, then wait until all are replicationEnabled=true
 chk_vol_rep() {
@@ -2787,51 +2866,35 @@ do_grs_failback() {
 	# 3) TARGET: start.source=aux (sync aux -> master)
 	##############################################
 	VOLUME_GROUP_ID="$target_vg_id"
-	ACTIONS='"start":{"source":"aux"}'
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 4.1: Synchronizing I/O updates from AUX to MASTER (target VG action start.source=aux)..." "1"
-	resp_act=$(vg_act 2>>"$log_file")
-	echo "$resp_act" >>"$log_file"
-	if ! echo "$resp_act" | jq . >/dev/null 2>&1
+
+	# If already syncing aux->master, skip start + monitoring
+	vg_is_sync_aux_to_master
+	ret=$?
+	if [ $ret -eq 2 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.1. Raw output logged."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read TARGET VG status before starting aux->master sync."
 	fi
-	if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	if [ $ret -eq 0 ]
 	then
-		errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.1 failed: $errmsg"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG is already syncing aux->master (enabled + consistent_copying + primaryRole=aux). Skipping start.source=aux and monitoring." "1"
+	else
+		ACTIONS='"start":{"source":"aux"}'
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 4.1: Synchronizing primary volumes from AUX to MASTER (target VG action start.source=aux)..." "1"
+		resp_act=$(vg_act 2>>"$log_file")
+		echo "$resp_act" >>"$log_file"
+		if ! echo "$resp_act" | jq . >/dev/null 2>&1
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.1. Raw output logged."
+		fi
+		if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+		then
+			errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.1 failed: $errmsg"
+		fi
+
+		# Monitor TARGET until aux->master steady state is reached
+		vg_wait_sync_aux_to_master "TARGET" 60 "GRS failback aux->master sync"
 	fi
-
-	# Monitor until state=consistent_copying and primaryRole=aux
-	local max_wait=60
-	local i=0
-	while true
-	do
-		local t_state
-		t_state=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
-		local t_primary
-		t_primary=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // empty' 2>>"$log_file")
-
-		if [[ -z "$t_state" ]]
-		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read target VG state while monitoring Step 4.1."
-		fi
-
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG status: state=$t_state, primaryRole=${t_primary:-UNKNOWN}" "1"
-
-		if [[ "$t_state" == "consistent_copying" && "$t_primary" == "aux" ]]
-		then
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG reached state 'consistent_copying' with primaryRole 'aux'." "1"
-			break
-		fi
-
-		i=$((i + 1))
-		if (( i >= max_wait ))
-		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Target VG did not reach state consistent_copying with primaryRole=aux after $max_wait minutes (last: state=$t_state, primaryRole=$t_primary)."
-		fi
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
-		sleep 60
-	done
 
 	##############################################
 	# 4) SOURCE: stop.access=true (disable replication)
@@ -3106,28 +3169,36 @@ do_grs_reverse_replica() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target workspace: $target_ws_name (id=$target_cloud_instance_id_local) - Target VG ID=$target_vg_id" "1"
 
 	##############################################
-	# 3) TARGET: start.source=aux (reverse direction)
+	# 3) TARGET: start.source=aux (sync aux -> master)
 	##############################################
 	VOLUME_GROUP_ID="$target_vg_id"
-	local t_rep_before t_state_before t_primary_before
-	t_rep_before=$(vg_get 2>>"$log_file" | jq -r '.replicationStatus // "UNKNOWN"' 2>>"$log_file")
-	t_state_before=$(vg_sd 2>>"$log_file" | jq -r '.state // "UNKNOWN"' 2>>"$log_file")
-	t_primary_before=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // "UNKNOWN"' 2>>"$log_file")
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG current: state=$t_state_before, replicationStatus=$t_rep_before, primaryRole=$t_primary_before" "1"
 
-	ACTIONS='"start":{"source":"aux"}'
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Starting replication with TARGET as master (VG action start.source=master) on target VG $target_vg_id..." "1"
-	resp_act=$(vg_act 2>>"$log_file")
-	echo "$resp_act" >>"$log_file"
-	if ! echo "$resp_act" | jq . >/dev/null 2>&1
+	# If already syncing aux->master, skip this step
+	local t_state_pre t_primary_pre
+	t_state_pre=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
+	t_primary_pre=$(vg_get 2>>"$log_file" | jq -r '.primaryRole // empty' 2>>"$log_file")
+
+	if [[ "$t_state_pre" == "consistent_copying" && "$t_primary_pre" == "aux" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (reverse replica). Raw output logged."
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET VG is already syncing aux->master (state=$t_state_pre, primaryRole=$t_primary_pre). Skipping start.source=aux." "1"
+	else
+		ACTIONS='"start":{"source":"aux"}'
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 3: Starting aux->master sync on TARGET VG (VG action start.source=aux)..." "1"
+		resp_act=$(vg_act 2>>"$log_file")
+		echo "$resp_act" >>"$log_file"
+		if ! echo "$resp_act" | jq . >/dev/null 2>&1
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 3. Raw output logged."
+		fi
+		if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+		then
+			errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 3 failed: $errmsg"
+		fi
 	fi
-	if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-	then
-		errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting TARGET VG as master: $errmsg"
-	fi
+
+	# Keep (or add) the existing wait loop that confirms:
+	# state=consistent_copying AND primaryRole=aux (so we KNOW it’s syncing aux->master).
 
 	# Monitor TARGET until replicationStatus=enabled AND state=consistent_copying
 	local max_wait=60
