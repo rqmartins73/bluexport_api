@@ -325,7 +325,7 @@ help() {
 	echoscreen "Version: $Version"
 	echoscreen ""
 	echoscreen "=== === General === ==="
-	echoscreen "Changing secret file:       ./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)"
+	echoscreen "Changing secret file:       ./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new.json)  (will also ask/update log file path)"
 	echoscreen "View secret file in use:    ./bluexport_api.sh -viewscrt"
 	echoscreen ""
 	echoscreen "Show help:                  ./bluexport_api.sh -h | --help | -help"
@@ -4088,9 +4088,21 @@ case $1 in
 
 
    -chscrt)
-	# Modo 1: foi passado um caminho diretamente: -chscrt /path/bluexscrt_xxx.json
+# Change secrets file AND (optionally) change log file path in $conf_file
+	# Behavior:
+	#   - If a new secrets file is provided as arg2, use it (must exist).
+	#   - Otherwise, list bluexscrt*.json files in the current secrets directory and ask the user to select one.
+	#   - After selecting the secrets file, ask for the desired log file full path (press Enter to keep current).
+	#
+	# NOTE: This is the ONLY flag that changes paths inside $conf_file.
+
+	# -------------------------------------------
+	# Step 1: Determine new secrets file
+	# -------------------------------------------
+	new_scrt=""
 	if [ $# -ge 2 ]
 	then
+		# Mode 1: path provided directly: -chscrt /path/bluexscrt_xxx.json
 		if [ $# -gt 2 ]
 		then
 			abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -chscrt bluexscrt_file_name  (use full path, e.g. /home/user/bluexscrt_new.json)"
@@ -4100,49 +4112,108 @@ case $1 in
 		then
 			abort "`date +%Y-%m-%d_%H:%M:%S` - Secret file $new_scrt does not exist. Aborting..."
 		fi
-		jq --arg new "$new_scrt" '.bluexscrt = $new' "$conf_file" > "$conf_file.tmp" && mv "$conf_file.tmp" "$conf_file"
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Secret file changed to $new_scrt !"
-	fi
-	# Modo 2: sem argumentos → lista e pergunta qual usar
-	scrt_dir=$(dirname "$bluexscrt")
-	echoscreen ""
-	echoscreen "### Available secret files in $scrt_dir (pattern: bluexscrt*.json):"
-	shopt -s nullglob
-	scrt_files=("$scrt_dir"/bluexscrt*.json)
-	if [ ${#scrt_files[@]} -eq 0 ]
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - No secret files found (pattern: bluexscrt*.json)."
-	fi
-	index=1
-	current_index=0
-	for f in "${scrt_files[@]}"
-	do
-		if [[ "$f" == "$bluexscrt" ]]
+	else
+		# Mode 2: no args -> list and ask which one to use
+		scrt_dir=$(dirname "$bluexscrt")
+		echoscreen ""
+		echoscreen "### Available secret files in $scrt_dir (pattern: bluexscrt*.json):"
+		shopt -s nullglob
+		scrt_files=("$scrt_dir"/bluexscrt*.json)
+		if [ ${#scrt_files[@]} -eq 0 ]
 		then
-			marker="(in use)"
-			current_index=$index
-		else
-			marker=""
+			abort "`date +%Y-%m-%d_%H:%M:%S` - No secret files found (pattern: bluexscrt*.json)."
 		fi
-		# ⚙️ Aqui é onde sai exatamente como queres:
-		printf "[%s] %s %s\n" "$index" "$f" "$marker"
-		index=$((index + 1))
-	done
-	echo ""
-	printf "### Select the secret file to use [1-%d]: " "${#scrt_files[@]}"
-	read choice
-	# Validar escolha
-	if ! [[ "$choice" =~ ^[0-9]+$ ]]
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid selection (not a number)."
+		index=1
+		for f in "${scrt_files[@]}"
+		do
+			if [[ "$f" == "$bluexscrt" ]]
+			then
+				marker="(in use)"
+			else
+				marker=""
+			fi
+			printf "[%s] %s %s
+" "$index" "$f" "$marker"
+			index=$((index + 1))
+		done
+		echo ""
+		printf "### Select the secret file to use [1-%d]: " "${#scrt_files[@]}"
+		read choice
+		# Validate choice
+		if ! [[ "$choice" =~ ^[0-9]+$ ]]
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid selection (not a number)."
+		fi
+		if (( choice < 1 || choice > ${#scrt_files[@]} ))
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid selection (out of range)."
+		fi
+		new_scrt="${scrt_files[$((choice-1))]}"
 	fi
-	if (( choice < 1 || choice > ${#scrt_files[@]} ))
+
+	# -------------------------------------------
+	# Step 2: Ask for new log file path
+	# -------------------------------------------
+	current_log=$(jq -r '.log_file' "$conf_file" 2>/dev/null)
+	if [[ -z "$current_log" || "$current_log" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid selection (out of range)."
+		current_log="$log_file"
 	fi
-	new_scrt="${scrt_files[$((choice-1))]}"
-	jq --arg new "$new_scrt" '.bluexscrt = $new' "$conf_file" > "$conf_file.tmp" && mv "$conf_file.tmp" "$conf_file"
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Secret file changed to $new_scrt !"
+
+	echoscreen ""
+	echoscreen "### Current log file path: $current_log"
+	printf "### Full path for new log file (press Enter to keep current): "
+	read new_log
+
+	# Normalize: if empty, keep current
+	if [[ -z "$new_log" ]]
+	then
+		new_log="$current_log"
+	else
+		# Basic sanity checks
+		log_dir=$(dirname "$new_log")
+		if [[ ! -d "$log_dir" ]]
+		then
+			echoscreen "### Directory '$log_dir' does not exist."
+			read -p "Do you want to create it now? (Y/N) " mk_ans
+			if [[ "$mk_ans" =~ ^[Yy]$ ]]
+			then
+				mkdir -p "$log_dir" 2>/dev/null
+				if [ $? -ne 0 ]
+				then
+					abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not create directory $log_dir. Aborting..."
+				fi
+			else
+				abort "`date +%Y-%m-%d_%H:%M:%S` - Aborting by user choice (log directory not created)."
+			fi
+		fi
+		# Create file if missing (so later appends won't fail)
+		if [[ ! -f "$new_log" ]]
+		then
+			echoscreen "### Log file '$new_log' does not exist."
+			read -p "Do you want to create it now? (Y/N) " lf_ans
+			if [[ "$lf_ans" =~ ^[Yy]$ ]]
+			then
+				: > "$new_log" 2>/dev/null
+				if [ $? -ne 0 ]
+				then
+					abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not create log file $new_log. Aborting..."
+				fi
+				chmod 600 "$new_log" 2>/dev/null
+			else
+				abort "`date +%Y-%m-%d_%H:%M:%S` - Aborting by user choice (log file not created)."
+			fi
+		fi
+	fi
+
+	# -------------------------------------------
+	# Step 3: Update $conf_file atomically
+	# -------------------------------------------
+	jq --arg new_scrt "$new_scrt" --arg new_log "$new_log" \
+		'.bluexscrt = $new_scrt | .log_file = $new_log' \
+		"$conf_file" > "$conf_file.tmp" && mv "$conf_file.tmp" "$conf_file"
+
+	abort "`date +%Y-%m-%d_%H:%M:%S` - Config updated: bluexscrt=$new_scrt ; log_file=$new_log"
      ;;
 
   -viewscrt)
