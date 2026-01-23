@@ -672,7 +672,7 @@ cos_ls_buckets() {
 }
 
 cos_rest_arch() {
-	curl -sX GET https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "$header_json" -d "{$ACTIONS}"
+	curl -sX POST https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "$header_json" -d "{$ACTIONS}"
 }
 #### END:FUNCTIONS - API Commands ####
 
@@ -1839,8 +1839,10 @@ cos_head_object() {
 
 	head_out=$(curl -sI "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$bucket_name/$object_key" -H "$header_auth" 2>>"$log_file" | tee -a "$log_file")
 
-	COS_OBJ_STORAGE_CLASS=$(echo "$head_out" | awk -F': ' 'tolower($1)=="x-amz-storage-class"{print $2}' | tr -d '\r')
-	COS_OBJ_RESTORE_HEADER=$(echo "$head_out" | awk -F': ' 'tolower($1)=="x-amz-restore"{print $2}' | tr -d '\r')
+	COS_OBJ_STORAGE_CLASS=$(echo "$head_out" | grep -i '^x-amz-storage-class:' | head -n 1 | cut -d':' -f2- | sed 's/^ *//;s/
+$//')
+	COS_OBJ_RESTORE_HEADER=$(echo "$head_out" | grep -i '^x-amz-restore:' | head -n 1 | cut -d':' -f2- | sed 's/^ *//;s/
+$//')
 
 	echo "$head_out"
 }
@@ -1854,7 +1856,6 @@ cos_head_bucket() {
 }
 
 ####  END:FUNCTION  COS Head Object (detect Storage Class / Restore state)  ####
-
 
 ####  START:FUNCTION  Restore object from Archive to COS Bucket  ####
 do_object_restore_from_archive() {
@@ -1933,9 +1934,13 @@ do_object_restore_from_archive() {
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Object '$OBJECT' not found (HEAD returned 404)."
 	fi
+	# NOTE:
+	# - Smart Tier objects may not always return x-amz-storage-class in HEAD responses.
+	# - COS lifecycle "Archived (Accelerated/Bulk)" may still show the base storage class in some endpoints.
+	# Because of that, we DO NOT hard-block on storage class; we log what we detected and attempt the restore.
 	if [[ -z "$COS_OBJ_STORAGE_CLASS" ]]
 	then
-		COS_OBJ_STORAGE_CLASS="STANDARD"
+		COS_OBJ_STORAGE_CLASS="UNKNOWN"
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Object storage class detected: $COS_OBJ_STORAGE_CLASS" "1"
 	if [[ -n "$COS_OBJ_RESTORE_HEADER" ]]
@@ -1943,11 +1948,10 @@ do_object_restore_from_archive() {
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Object restore status: $COS_OBJ_RESTORE_HEADER" "1"
 	fi
 
-	# Only allow restore on archive-like storage classes
-	# Note: IBM COS lifecycle "Archived (Accelerated)" commonly returns storage class "ACCELERATED"
-	if [[ "$COS_OBJ_STORAGE_CLASS" != "GLACIER" && "$COS_OBJ_STORAGE_CLASS" != "DEEP_ARCHIVE" && "$COS_OBJ_STORAGE_CLASS" != "ACCELERATED" ]]
+	# If it *looks* like a standard object, warn (restore will likely return InvalidObjectState)
+	if [[ "$COS_OBJ_STORAGE_CLASS" != "UNKNOWN" && "$COS_OBJ_STORAGE_CLASS" != "GLACIER" && "$COS_OBJ_STORAGE_CLASS" != "DEEP_ARCHIVE" && "$COS_OBJ_STORAGE_CLASS" != "ACCELERATED" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - InvalidObjectState: object is in storage class '$COS_OBJ_STORAGE_CLASS'. Restore is only valid for GLACIER/DEEP_ARCHIVE and COS lifecycle Archived(Accelerated) objects (storage class ACCELERATED)."
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Storage class '$COS_OBJ_STORAGE_CLASS' is not typically restorable. Will still attempt restore and let COS decide." "1"
 	fi
 
 	# 3) Build restore request XML
@@ -1970,6 +1974,18 @@ EOF
 		# Best-effort extract <Code> and <Message>
 		err_code=$(echo "$resp_restore" | awk -F'<Code>|</Code>' 'NF>1{print $2; exit}')
 		err_msg=$(echo "$resp_restore" | awk -F'<Message>|</Message>' 'NF>1{print $2; exit}')
+
+		if [[ "$err_code" == "RestoreAlreadyInProgress" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - RestoreAlreadyInProgress - A restore is already running for this object. Nothing else to do." "1"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - === Restore request already in progress for '$OBJECT' in bucket '$BUCKET'. ==="
+		fi
+
+		if [[ "$err_code" == "InvalidObjectState" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - InvalidObjectState: ${err_msg:-Operation is not valid for the object's storage class}. (Detected storage class: $COS_OBJ_STORAGE_CLASS). If this object is Smart Tier + Archived in the UI, COS may not expose the archive state via x-amz-storage-class on HEAD; try restore anyway via raw curl POST (your manual example) or re-check region/credentials."
+		fi
+
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Restore request returned error: ${err_code:-Unknown} ${err_msg:-Unknown}"
 	fi
 
