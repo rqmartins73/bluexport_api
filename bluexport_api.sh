@@ -1969,7 +1969,7 @@ do_object_restore_from_archive() {
 	fi
 
 	# Otherwise, just log the response and exit OK
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Restore request response: $resp" "1"
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - Restore request response: $resp" "1"
 }
 ####  END:FUNCTION  Restore object from Archive to COS Bucket  ####
 
