@@ -673,7 +673,7 @@ cos_ls_buckets() {
 }
 
 cos_rest_arch() {
-	curl -sX POST https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "$header_json" -d "{$ACTIONS}"
+	curl -sX POST https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "$header_json" -d "$ACTIONS"
 }
 #### END:FUNCTIONS - API Commands ####
 
@@ -1764,25 +1764,31 @@ vchtier() {
 ####  END:FUNCTION  Change Instance Volumes Tier  ####
 
 ####  START:FUNCTION COS Head Bucket  ####
+# HEAD request for a bucket. Logs raw headers to $log_file.
 cos_head_bucket() {
 	local bucket_name="$1"
 
 	curl -sI "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$bucket_name" \
 		-H "$header_auth" 2>>"$log_file" | tee -a "$log_file"
 }
-
 ####  END:FUNCTION COS Head Bucket  ####
 
 ####  START:FUNCTION COS Head Object  ####
+# HEAD request for an object. Logs raw headers to $log_file.
+# Sets globals:
+#   COS_OBJ_STORAGE_CLASS
+#   COS_OBJ_RESTORE_HEADER
 cos_head_object() {
 	local bucket_name="$1"
 	local object_key="$2"
 	local head_out
 
+	COS_OBJ_STORAGE_CLASS=""
+	COS_OBJ_RESTORE_HEADER=""
+
 	head_out=$(curl -sI "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$bucket_name/$object_key" \
 		-H "$header_auth" 2>>"$log_file" | tee -a "$log_file")
 
-	# Best-effort header extraction (no sed traps, no multiline quotes)
 	COS_OBJ_STORAGE_CLASS=$(echo "$head_out" | tr -d '\r' | grep -i '^x-amz-storage-class:' | head -n 1 | cut -d':' -f2- | sed 's/^[[:space:]]*//')
 	COS_OBJ_RESTORE_HEADER=$(echo "$head_out" | tr -d '\r' | grep -i '^x-amz-restore:'       | head -n 1 | cut -d':' -f2- | sed 's/^[[:space:]]*//')
 
