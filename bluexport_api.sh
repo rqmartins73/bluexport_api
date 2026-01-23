@@ -1955,8 +1955,7 @@ do_object_restore_from_archive() {
 	if [[ -z "$resp" ]]
 	then
 		# Successful restore is often empty body (200 OK). We still log headers in $log_file via tee.
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Restore request submitted (empty body). Check restore status with HEAD (x-amz-restore) or in COS UI." "1"
-		return 0
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - SUCCESS - Restore request submitted (empty body). Check restore status with HEAD (x-amz-restore) or in COS UI." "1"
 	fi
 
 	# If S3 returns an XML error, handle it
