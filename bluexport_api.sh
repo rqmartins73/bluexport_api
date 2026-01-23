@@ -673,8 +673,19 @@ cos_ls_buckets() {
 }
 
 cos_rest_arch() {
-	curl -sX POST https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "$header_json" -d "{$ACTIONS}"
+cos_rest_arch() {
+	local bucket_name="$1"
+	local object_key="$2"
+	local actions_xml="$3"
+
+	curl -sX POST "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$bucket_name/$object_key?restore" \
+		-H "$header_auth" \
+		-H "$header_xml" \
+		--data-binary "$actions_xml" 2>>"$log_file" | tee -a "$log_file"
 }
+
+#	curl -sX POST https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "$header_json" -d "{$ACTIONS}"
+#}
 #### END:FUNCTIONS - API Commands ####
 
 #### START:FUNCTIONS - Helper vg_is_sync_aux_to_master
