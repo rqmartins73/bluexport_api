@@ -1958,14 +1958,26 @@ do_object_restore_from_archive() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - SUCCESS - Restore request submitted (empty body). Check restore status with HEAD (x-amz-restore) or in COS UI." "1"
 	fi
 
-	# If S3 returns an XML error, handle it
 	if echo "$resp" | grep -q "<Error>"
 	then
 		local err_code err_msg
-		err_code=$(echo "$resp" | sed 's/^.*<Code>\([^<]*\)<\/Code>.*$/\1/' 2>>"$log_file")
-		err_msg=$(echo "$resp" | sed 's/^.*<Message>\([^<]*\)<\/Message>.*$/\1/' 2>>"$log_file")
+		err_code=$(echo "$resp" | grep -oPm1 '(?<=<Code>)[^<]+')
+		err_msg=$(echo "$resp" | grep -oPm1 '(?<=<Message>)[^<]+')
+
+		if [[ "$err_code" == "RestoreAlreadyInProgress" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - INFO - Restore already in progress for '$object_key' in bucket '$bucket_name'." "1"
+		fi
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Restore request returned error: ${err_code:-Unknown} ${err_msg:-Unknown}"
 	fi
+#	# If S3 returns an XML error, handle it
+#	if echo "$resp" | grep -q "<Error>"
+#	then
+#		local err_code err_msg
+#		err_code=$(echo "$resp" | sed 's/^.*<Code>\([^<]*\)<\/Code>.*$/\1/' 2>>"$log_file")
+#		err_msg=$(echo "$resp" | sed 's/^.*<Message>\([^<]*\)<\/Message>.*$/\1/' 2>>"$log_file")
+#		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Restore request returned error: ${err_code:-Unknown} ${err_msg:-Unknown}"
+#	fi
 
 	# Otherwise, just log the response and exit OK
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - Restore request response: $resp" "1"
