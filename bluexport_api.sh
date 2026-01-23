@@ -1824,6 +1824,38 @@ cos_resolve_bucket_region() {
 }
 ####  END:FUNCTION  Resolve COS Bucket Region  ####
 
+####  START:FUNCTION  COS Head Object (detect Storage Class / Restore state)  ####
+# Returns raw headers for an object (HEAD). Logs all headers to $log_file.
+# Sets global variables:
+#   COS_OBJ_STORAGE_CLASS
+#   COS_OBJ_RESTORE_HEADER
+cos_head_object() {
+	local bucket_name="$1"
+	local object_key="$2"
+	local head_out
+
+	COS_OBJ_STORAGE_CLASS=""
+	COS_OBJ_RESTORE_HEADER=""
+
+	head_out=$(curl -sI "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$bucket_name/$object_key" -H "$header_auth" 2>>"$log_file" | tee -a "$log_file")
+
+	COS_OBJ_STORAGE_CLASS=$(echo "$head_out" | awk -F': ' 'tolower($1)=="x-amz-storage-class"{print $2}' | tr -d '\r')
+	COS_OBJ_RESTORE_HEADER=$(echo "$head_out" | awk -F': ' 'tolower($1)=="x-amz-restore"{print $2}' | tr -d '\r')
+
+	echo "$head_out"
+}
+
+cos_head_bucket() {
+	local bucket_name="$1"
+	local head_out
+
+	head_out=$(curl -sI "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$bucket_name" -H "$header_auth" 2>>"$log_file" | tee -a "$log_file")
+	echo "$head_out"
+}
+
+####  END:FUNCTION  COS Head Object (detect Storage Class / Restore state)  ####
+
+
 ####  START:FUNCTION  Restore object from Archive to COS Bucket  ####
 do_object_restore_from_archive() {
 	BUCKET="$1"
@@ -1862,26 +1894,60 @@ do_object_restore_from_archive() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - DAYS must be a number (received: $DAYS)."
 	fi
 
-	# 1) Check bucket exists (list objects and detect NoSuchBucket)
-	KEY=""
-	xml_bucket=$(list_object 2>>"$log_file" | tee -a "$log_file")
-	if [[ -z "$xml_bucket" ]]
+	# 1) Check bucket exists (HEAD bucket)
+	bucket_hdrs=$(cos_head_bucket "$BUCKET" 2>>"$log_file")
+	bucket_code=$(echo "$bucket_hdrs" | awk 'NR==1{print $2}')
+	if [[ "$bucket_code" == "404" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Empty response when listing bucket '$BUCKET' (region=$REGION). Check connectivity/credentials/region."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Bucket '$BUCKET' does not exist (HEAD returned 404)."
 	fi
-	if echo "$xml_bucket" | grep -q "<Code>NoSuchBucket</Code>"
+	if [[ "$bucket_code" == "403" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Bucket '$BUCKET' does not exist (NoSuchBucket)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Access denied when accessing bucket '$BUCKET' (HEAD returned 403). Check COS credentials/policies."
 	fi
-	if echo "$xml_bucket" | grep -q "<Code>AccessDenied</Code>"
+	if [[ -z "$bucket_code" || "$bucket_code" != "200" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Access denied when listing bucket '$BUCKET'. Check COS credentials/policies."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Unexpected response when checking bucket '$BUCKET' (HTTP $bucket_code). Check connectivity/credentials/region."
 	fi
 
-	# 2) Check object exists (exact match on <Key>OBJECT</Key>)
-	if ! echo "$xml_bucket" | grep -Fq "<Key>$OBJECT</Key>"
+	# 2) Check object exists (HEAD object)
+	head_hdrs=$(cos_head_object "$BUCKET" "$OBJECT" 2>>"$log_file")
+	head_code=$(echo "$head_hdrs" | awk 'NR==1{print $2}')
+	if [[ "$head_code" == "404" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Object '$OBJECT' does not exist in bucket '$BUCKET'."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Object '$OBJECT' does not exist in bucket '$BUCKET' (HEAD returned 404)."
+	fi
+	if [[ "$head_code" == "403" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Access denied when accessing object '$OBJECT' in bucket '$BUCKET' (HEAD returned 403)."
+	fi
+	if [[ -z "$head_code" || "$head_code" != "200" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Unexpected response when checking object '$OBJECT' (HTTP $head_code)."
+	fi
+
+	# 2.1) Pre-check storage class (COS "Archived" objects may present as ACCELERATED)
+	head_hdrs=$(cos_head_object "$BUCKET" "$OBJECT" 2>>"$log_file")
+	head_code=$(echo "$head_hdrs" | awk 'NR==1{print $2}')
+	if [[ "$head_code" == "404" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Object '$OBJECT' not found (HEAD returned 404)."
+	fi
+	if [[ -z "$COS_OBJ_STORAGE_CLASS" ]]
+	then
+		COS_OBJ_STORAGE_CLASS="STANDARD"
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Object storage class detected: $COS_OBJ_STORAGE_CLASS" "1"
+	if [[ -n "$COS_OBJ_RESTORE_HEADER" ]]
+	then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Object restore status: $COS_OBJ_RESTORE_HEADER" "1"
+	fi
+
+	# Only allow restore on archive-like storage classes
+	# Note: IBM COS lifecycle "Archived (Accelerated)" commonly returns storage class "ACCELERATED"
+	if [[ "$COS_OBJ_STORAGE_CLASS" != "GLACIER" && "$COS_OBJ_STORAGE_CLASS" != "DEEP_ARCHIVE" && "$COS_OBJ_STORAGE_CLASS" != "ACCELERATED" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - InvalidObjectState: object is in storage class '$COS_OBJ_STORAGE_CLASS'. Restore is only valid for GLACIER/DEEP_ARCHIVE and COS lifecycle Archived(Accelerated) objects (storage class ACCELERATED)."
 	fi
 
 	# 3) Build restore request XML
