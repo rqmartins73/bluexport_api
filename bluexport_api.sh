@@ -1763,6 +1763,33 @@ vchtier() {
 }
 ####  END:FUNCTION  Change Instance Volumes Tier  ####
 
+####  START:FUNCTION COS Head Bucket  ####
+cos_head_bucket() {
+	local bucket_name="$1"
+
+	curl -sI "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$bucket_name" \
+		-H "$header_auth" 2>>"$log_file" | tee -a "$log_file"
+}
+
+####  END:FUNCTION COS Head Bucket  ####
+
+####  START:FUNCTION COS Head Object  ####
+cos_head_object() {
+	local bucket_name="$1"
+	local object_key="$2"
+	local head_out
+
+	head_out=$(curl -sI "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$bucket_name/$object_key" \
+		-H "$header_auth" 2>>"$log_file" | tee -a "$log_file")
+
+	# Best-effort header extraction (no sed traps, no multiline quotes)
+	COS_OBJ_STORAGE_CLASS=$(echo "$head_out" | tr -d '\r' | grep -i '^x-amz-storage-class:' | head -n 1 | cut -d':' -f2- | sed 's/^[[:space:]]*//')
+	COS_OBJ_RESTORE_HEADER=$(echo "$head_out" | tr -d '\r' | grep -i '^x-amz-restore:'       | head -n 1 | cut -d':' -f2- | sed 's/^[[:space:]]*//')
+
+	echo "$head_out"
+}
+####  END:FUNCTION COS Head Object  ####
+
 ####  START:FUNCTION  Resolve COS Bucket Region  ####
 # Tries to determine the correct COS S3 endpoint region for a given bucket.
 # If it cannot be determined, it keeps current REGION (usually loaded from secrets).
@@ -1825,7 +1852,120 @@ cos_resolve_bucket_region() {
 }
 ####  END:FUNCTION  Resolve COS Bucket Region  ####
 
+####  START:FUNCTION  Restore object from Archive to COS Bucket  ####
+do_object_restore_from_archive() {
+	local bucket_name object_key days archive_type
+	bucket_name="$1"
+	object_key="$2"
+	days="$3"
+	archive_type="$4"
 
+	# Defaults
+	if [[ -z "$days" ]]
+	then
+		days=3
+	fi
+	if [[ -z "$archive_type" ]]
+	then
+		archive_type="Accelerated"
+	fi
+
+	# Validate DAYS numeric
+	if ! echo "$days" | grep -Eq '^[0-9]+$'
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - DAYS must be a number (received: $days)."
+	fi
+
+	# Normalize ARCHIVE_TYPE (Bulk|Accelerated)
+	archive_type=$(echo "$archive_type" | tr '[:upper:]' '[:lower:]')
+	if [[ "$archive_type" == "bulk" ]]
+	then
+		archive_type="Bulk"
+	elif [[ "$archive_type" == "accelerated" ]]
+	then
+		archive_type="Accelerated"
+	else
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - ARCHIVE_TYPE must be Bulk or Accelerated (received: $4)."
+	fi
+
+	# Resolve bucket region (best effort). Start with configured region from secrets.
+	REGION="$region"
+	if cos_resolve_bucket_region "$bucket_name"
+	then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Using COS region '$REGION' for bucket '$bucket_name'." "1"
+	else
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Could not auto-detect COS region for bucket '$bucket_name'. Using configured region '$REGION'." "1"
+	fi
+
+	# 1) Check bucket exists (HEAD bucket)
+	local bucket_hdrs bucket_code
+	bucket_hdrs=$(cos_head_bucket "$bucket_name" "$REGION" 2>>"$log_file")
+	bucket_code=$(echo "$bucket_hdrs" | awk 'NR==1{print $2}')
+	if [[ "$bucket_code" == "404" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Bucket '$bucket_name' does not exist (HEAD returned 404)."
+	fi
+	if [[ "$bucket_code" == "403" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Access denied when accessing bucket '$bucket_name' (HEAD returned 403). Check COS credentials/policies."
+	fi
+	if [[ -z "$bucket_code" || "$bucket_code" != "200" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Unexpected response when checking bucket '$bucket_name' (HTTP $bucket_code). Check connectivity/credentials/region."
+	fi
+
+	# 2) Check object exists (HEAD object)
+	local obj_hdrs obj_code
+	obj_hdrs=$(cos_head_object "$bucket_name" "$object_key" "$REGION" 2>>"$log_file")
+	obj_code=$(echo "$obj_hdrs" | awk 'NR==1{print $2}')
+	if [[ "$obj_code" == "404" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Object '$object_key' does not exist in bucket '$bucket_name' (HEAD returned 404)."
+	fi
+	if [[ "$obj_code" == "403" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Access denied when accessing object '$object_key' in bucket '$bucket_name' (HEAD returned 403)."
+	fi
+	if [[ -z "$obj_code" || "$obj_code" != "200" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Unexpected response when checking object '$object_key' (HTTP $obj_code)."
+	fi
+
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Object storage class detected: ${COS_OBJ_STORAGE_CLASS:-UNKNOWN}" "1"
+	if [[ -n "$COS_OBJ_RESTORE_HEADER" ]]
+	then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Object restore header: $COS_OBJ_RESTORE_HEADER" "1"
+	fi
+
+	# 3) Build XML actions
+	ACTIONS="<RestoreRequest><Days>$days</Days><GlacierJobParameters><Tier>$archive_type</Tier></GlacierJobParameters></RestoreRequest>"
+
+	# 4) Submit restore request
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting restore request for object '$object_key' in bucket '$bucket_name' (Days=$days, Tier=$archive_type) ===" "1"
+	BUCKET="$bucket_name"
+	OBJECT="$object_key"
+	resp=$(cos_rest_arch 2>>"$log_file")
+	# resp already logged by cos_rest_arch (tee)
+	if [[ -z "$resp" ]]
+	then
+		# Successful restore is often empty body (200 OK). We still log headers in $log_file via tee.
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Restore request submitted (empty body). Check restore status with HEAD (x-amz-restore) or in COS UI." "1"
+		return 0
+	fi
+
+	# If S3 returns an XML error, handle it
+	if echo "$resp" | grep -q "<Error>"
+	then
+		local err_code err_msg
+		err_code=$(echo "$resp" | sed 's/^.*<Code>\([^<]*\)<\/Code>.*$/\1/' 2>>"$log_file")
+		err_msg=$(echo "$resp" | sed 's/^.*<Message>\([^<]*\)<\/Message>.*$/\1/' 2>>"$log_file")
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Restore request returned error: ${err_code:-Unknown} ${err_msg:-Unknown}"
+	fi
+
+	# Otherwise, just log the response and exit OK
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Restore request response: $resp" "1"
+}
+####  END:FUNCTION  Restore object from Archive to COS Bucket  ####
 
 ####  START:FUNCTION  Main GRS function: create VG in source and onboard aux volumes in target  ####
 create_grs() {
