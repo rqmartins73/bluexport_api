@@ -1762,12 +1762,83 @@ vchtier() {
 }
 ####  END:FUNCTION  Change Instance Volumes Tier  ####
 
+####  START:FUNCTION  Resolve COS Bucket Region  ####
+# Tries to determine the correct COS S3 endpoint region for a given bucket.
+# If it cannot be determined, it keeps current REGION (usually loaded from secrets).
+cos_resolve_bucket_region() {
+	local bucket_name="$1"
+	local detected_region=""
+	local head_out http_code line location_hdr
+
+	# If REGION already set and bucket works there, keep it (fast path)
+	if [[ -n "$REGION" ]]
+	then
+		head_out=$(curl -sI "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$bucket_name" -H "$header_auth" 2>>"$log_file" | tee -a "$log_file")
+		http_code=$(echo "$head_out" | awk 'NR==1{print $2}')
+		# If we get a response (200/403/301), attempt to read x-amz-bucket-region
+		detected_region=$(echo "$head_out" | awk -F': ' 'tolower($1)=="x-amz-bucket-region"{print $2}' | tr -d '\r')
+		if [[ -n "$detected_region" ]]
+		then
+			REGION="$detected_region"
+			return 0
+		fi
+		# If not present but request succeeded in this REGION, accept it
+		if [[ "$http_code" == "200" || "$http_code" == "403" ]]
+		then
+			return 0
+		fi
+	fi
+
+	# Otherwise, brute-force common COS regions (cheap and reliable)
+	for r in eu-de eu-gb us-south us-east jp-tok au-syd br-sao ca-tor
+	do
+		head_out=$(curl -sI "https://s3.$r.cloud-object-storage.appdomain.cloud/$bucket_name" -H "$header_auth" 2>>"$log_file" | tee -a "$log_file")
+		http_code=$(echo "$head_out" | awk 'NR==1{print $2}')
+		detected_region=$(echo "$head_out" | awk -F': ' 'tolower($1)=="x-amz-bucket-region"{print $2}' | tr -d '\r')
+		if [[ -n "$detected_region" ]]
+		then
+			REGION="$detected_region"
+			return 0
+		fi
+		# Sometimes there is no x-amz-bucket-region, but 200/403 indicates bucket exists on that endpoint
+		if [[ "$http_code" == "200" || "$http_code" == "403" ]]
+		then
+			REGION="$r"
+			return 0
+		fi
+		# If redirected, try to parse region from Location
+		location_hdr=$(echo "$head_out" | awk -F': ' 'tolower($1)=="location"{print $2}' | tr -d '\r')
+		if [[ "$http_code" == "301" && -n "$location_hdr" ]]
+		then
+			# Extract 's3.<region>.cloud-object-storage' from Location if present
+			detected_region=$(echo "$location_hdr" | sed -n 's#.*s3\.\([a-z0-9-]*\)\.cloud-object-storage.*#\1#p')
+			if [[ -n "$detected_region" ]]
+			then
+				REGION="$detected_region"
+				return 0
+			fi
+		fi
+	done
+
+	return 1
+}
+####  END:FUNCTION  Resolve COS Bucket Region  ####
+
 ####  START:FUNCTION  Restore object from Archive to COS Bucket  ####
 do_object_restore_from_archive() {
 	BUCKET="$1"
 	OBJECT="$2"
 	DAYS="$3"
 	ARCHIVE_TYPE="$4"
+
+	# Ensure COS region is set (default from secrets), then try to resolve bucket-specific region
+	REGION="$region"
+	if cos_resolve_bucket_region "$BUCKET"
+	then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Using COS region '$REGION' for bucket '$BUCKET'." "1"
+	else
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Could not auto-detect COS region for bucket '$BUCKET'. Using configured region '$REGION'." "1"
+	fi
 
 	# Defaults
 	if [[ -z "$DAYS" ]]; then DAYS=3; fi
@@ -1794,6 +1865,10 @@ do_object_restore_from_archive() {
 	# 1) Check bucket exists (list objects and detect NoSuchBucket)
 	KEY=""
 	xml_bucket=$(list_object 2>>"$log_file" | tee -a "$log_file")
+	if [[ -z "$xml_bucket" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Empty response when listing bucket '$BUCKET' (region=$REGION). Check connectivity/credentials/region."
+	fi
 	if echo "$xml_bucket" | grep -q "<Code>NoSuchBucket</Code>"
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Bucket '$BUCKET' does not exist (NoSuchBucket)."
