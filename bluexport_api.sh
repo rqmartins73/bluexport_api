@@ -30,6 +30,7 @@
 # List buckets for all COS instances (from bluexscrt): 	./bluexport_api.sh -bucketslsall
 # List objects from a COS bucket:     			./bluexport_api.sh -bucketlsobjs
 # Delete object from a COS bucket:    			./bluexport_api.sh -bucketdelobj
+# Restore object from Archive to COS bucket:		./bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]
 #
 # === Volume Clones ===
 # Create volume clone:           ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
@@ -94,7 +95,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.8
+Version=1.9
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -352,6 +353,7 @@ help() {
 	echoscreen "List buckets for all COS instances: ./bluexport_api.sh -bucketslsall"
 	echoscreen "List objects from a COS bucket:     ./bluexport_api.sh -bucketlsobjs"
 	echoscreen "Delete object from a COS bucket:    ./bluexport_api.sh -bucketdelobj"
+	echoscreen "Restore object from Archive to COS bucket: ./bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
 	echoscreen ""
 	echoscreen "=== === Volume Clones === ==="
 	echoscreen "Create volume clone:        ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
@@ -667,6 +669,10 @@ cos_ins_ls() {
 
 cos_ls_buckets() {
 	curl -sX GET https://s3.$REGION.cloud-object-storage.appdomain.cloud/ -H "$header_auth" -H "ibm-service-instance-id: $SERVICE_INSTANCE_ID"
+}
+
+cos_rest_arch() {
+	curl -sX GET https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "$header_json" -d "{$ACTIONS}"
 }
 #### END:FUNCTIONS - API Commands ####
 
@@ -1755,6 +1761,80 @@ vchtier() {
 	abort "`date +%Y-%m-%d_%H:%M:%S` - Tier change finished successfully!"
 }
 ####  END:FUNCTION  Change Instance Volumes Tier  ####
+
+####  START:FUNCTION  Restore object from Archive to COS Bucket  ####
+do_object_restore_from_archive() {
+	BUCKET="$1"
+	OBJECT="$2"
+	DAYS="$3"
+	ARCHIVE_TYPE="$4"
+
+	# Defaults
+	if [[ -z "$DAYS" ]]; then DAYS=3; fi
+	if [[ -z "$ARCHIVE_TYPE" ]]; then ARCHIVE_TYPE="Accelerated"; fi
+
+	# Normalize ARCHIVE_TYPE (Bulk|Accelerated)
+	ARCHIVE_TYPE=$(echo "$ARCHIVE_TYPE" | tr '[:upper:]' '[:lower:]')
+	if [[ "$ARCHIVE_TYPE" == "bulk" ]]
+	then
+		ARCHIVE_TYPE="Bulk"
+	elif [[ "$ARCHIVE_TYPE" == "accelerated" ]]
+	then
+		ARCHIVE_TYPE="Accelerated"
+	else
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - ARCHIVE_TYPE must be Bulk or Accelerated (received: $4)."
+	fi
+
+	# Validate DAYS numeric
+	if ! echo "$DAYS" | grep -Eq '^[0-9]+$'
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - DAYS must be a number (received: $DAYS)."
+	fi
+
+	# 1) Check bucket exists (list objects and detect NoSuchBucket)
+	KEY=""
+	xml_bucket=$(list_object 2>>"$log_file" | tee -a "$log_file")
+	if echo "$xml_bucket" | grep -q "<Code>NoSuchBucket</Code>"
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Bucket '$BUCKET' does not exist (NoSuchBucket)."
+	fi
+	if echo "$xml_bucket" | grep -q "<Code>AccessDenied</Code>"
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Access denied when listing bucket '$BUCKET'. Check COS credentials/policies."
+	fi
+
+	# 2) Check object exists (exact match on <Key>OBJECT</Key>)
+	if ! echo "$xml_bucket" | grep -Fq "<Key>$OBJECT</Key>"
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Object '$OBJECT' does not exist in bucket '$BUCKET'."
+	fi
+
+	# 3) Build restore request XML
+	ACTIONS=$(cat <<EOF
+<RestoreRequest>
+	<Days>$DAYS</Days>
+	<GlacierJobParameters>
+		<Tier>$ARCHIVE_TYPE</Tier>
+	</GlacierJobParameters>
+</RestoreRequest>
+EOF
+)
+
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting restore request for object '$OBJECT' in bucket '$BUCKET' (Days=$DAYS, Tier=$ARCHIVE_TYPE) ===" "1"
+
+	resp_restore=$(cos_rest_arch 2>>"$log_file" | tee -a "$log_file")
+	# COS S3 restore returns XML or empty; treat Error codes
+	if echo "$resp_restore" | grep -q "<Error>"
+	then
+		# Best-effort extract <Code> and <Message>
+		err_code=$(echo "$resp_restore" | awk -F'<Code>|</Code>' 'NF>1{print $2; exit}')
+		err_msg=$(echo "$resp_restore" | awk -F'<Message>|</Message>' 'NF>1{print $2; exit}')
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Restore request returned error: ${err_code:-Unknown} ${err_msg:-Unknown}"
+	fi
+
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Restore request submitted for '$OBJECT' in bucket '$BUCKET'. ==="
+}
+####  END:FUNCTION  Restore object from Archive to COS Bucket  ####
 
 ####  START:FUNCTION  Main GRS function: create VG in source and onboard aux volumes in target  ####
 create_grs() {
@@ -5385,6 +5465,25 @@ EOF
 		echoscreen "No objects found in bucket \"$chosen_bucket\"." "1"
 	fi
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing objects for bucket \"$chosen_bucket\" ==="
+     ;;
+
+   -restorefromarchive)
+	# Restore an archived object from COS bucket (S3 Restore)
+	if [ $# -lt 3 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
+	fi
+	if [ $# -gt 5 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
+	fi
+	test=0
+	bucket="$2"
+	object="$3"
+	days="$4"
+	arch_type="$5"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -restorefromarchive for bucket '$bucket' object '$object' ===" "1"
+	do_object_restore_from_archive "$bucket" "$object" "$days" "$arch_type"
      ;;
 
    -bucketdelobj)
