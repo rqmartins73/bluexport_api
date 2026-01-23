@@ -284,6 +284,7 @@ header_json="Content-Type: application/json"
 header_accept="Accept: application/json"
 iam_token=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}" | jq -r '.access_token')
 header_auth="Authorization: Bearer $iam_token"
+header_xml="Content-Type: application/xml"
 
 # Current date (YYYY-MM-DD). Required for Transit Gateway API versioning.
 version=$(date +%F)
@@ -1838,12 +1839,8 @@ cos_head_object() {
 	COS_OBJ_RESTORE_HEADER=""
 
 	head_out=$(curl -sI "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$bucket_name/$object_key" -H "$header_auth" 2>>"$log_file" | tee -a "$log_file")
-
-	COS_OBJ_STORAGE_CLASS=$(echo "$head_out" | grep -i '^x-amz-storage-class:' | head -n 1 | cut -d':' -f2- | sed 's/^ *//;s/
-$//')
-	COS_OBJ_RESTORE_HEADER=$(echo "$head_out" | grep -i '^x-amz-restore:' | head -n 1 | cut -d':' -f2- | sed 's/^ *//;s/
-$//')
-
+	COS_OBJ_STORAGE_CLASS=$(echo "$head_out" | tr -d '\r' | grep -i '^x-amz-storage-class:' | head -n 1 | cut -d':' -f2- | sed 's/^[[:space:]]*//')
+	COS_OBJ_RESTORE_HEADER=$(echo "$head_out" | tr -d '\r' | grep -i '^x-amz-restore:' | head -n 1 | cut -d':' -f2- | sed 's/^[[:space:]]*//')
 	echo "$head_out"
 }
 
@@ -1955,15 +1952,7 @@ do_object_restore_from_archive() {
 	fi
 
 	# 3) Build restore request XML
-	ACTIONS=$(cat <<EOF
-<RestoreRequest>
-	<Days>$DAYS</Days>
-	<GlacierJobParameters>
-		<Tier>$ARCHIVE_TYPE</Tier>
-	</GlacierJobParameters>
-</RestoreRequest>
-EOF
-)
+	ACTIONS="<RestoreRequest><Days>$DAYS</Days><GlacierJobParameters><Tier>$ARCHIVE_TYPE</Tier></GlacierJobParameters></RestoreRequest>"
 
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting restore request for object '$OBJECT' in bucket '$BUCKET' (Days=$DAYS, Tier=$ARCHIVE_TYPE) ===" "1"
 
