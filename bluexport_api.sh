@@ -1983,7 +1983,7 @@ EOF
 
 		if [[ "$err_code" == "InvalidObjectState" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - InvalidObjectState: ${err_msg:-Operation is not valid for the object's storage class}. (Detected storage class: $COS_OBJ_STORAGE_CLASS). If this object is Smart Tier + Archived in the UI, COS may not expose the archive state via x-amz-storage-class on HEAD; try restore anyway via raw curl POST (your manual example) or re-check region/credentials."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - InvalidObjectState: ${err_msg:-Operation is not valid for the object storage class}. (Detected storage class: $COS_OBJ_STORAGE_CLASS). If this object is Smart Tier + Archived in the UI, COS may not expose the archive state via x-amz-storage-class on HEAD; try restore anyway via raw curl POST (your manual example) or re-check region/credentials."
 		fi
 
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Restore request returned error: ${err_code:-Unknown} ${err_msg:-Unknown}"
