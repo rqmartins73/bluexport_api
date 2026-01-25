@@ -3596,8 +3596,8 @@ do_vsi_srcmon() {
 		vsi_json=$(ins_get 2>>"$log_file")
 		if [[ -z "$vsi_json" ]]
 		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING: Could not retrieve VSI status/SRC. Retrying in 30 seconds..." "1"
-			sleep 30
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING: Could not retrieve VSI status/SRC. Retrying in 15 seconds..." "1"
+			sleep 15
 			continue
 		fi
 
