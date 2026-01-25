@@ -4736,67 +4736,99 @@ case $1 in
 		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
 	done
 	# Loop all workspaces
-	for ws in "${allws_array[@]}"
+
+	for ws in $allws
 	do
-		# Get workspace CRN and ID from JSON
-		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
-		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
-		# Workspace human friendly name
-		full_ws_name="${wsmap[$ws]}"
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name" "1"
-		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+		# Bind workspace context properly
+		shortnamecrn=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$bluexscrt")
+		CRN="$shortnamecrn"
+
+		region_api=$(ws_ls | jq -r --arg s "$shortnamecrn" '.workspaces[] | select(.details.crn == $s) | .location.region | gsub("-"; "_")')
 		base_url_var="base_${region_api}"
 		base_url="${!base_url_var}"
+
+		CLOUD_INSTANCE_ID=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$bluexscrt")
+		ws_name=$(jq -r --arg ws "$ws" '.workspaces[$ws].name' "$bluexscrt")
+
+		echoscreen ""
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Listing snapshots at workspace $ws_name ===" "1"
+
 		snaps_json=$(snap_ls 2>>"$log_file")
-		# Check if there are snapshots
-		if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
+
+		if echo "$snaps_json" | jq -e '.snapshots[]?' >/dev/null 2>&1
 		then
-			msg="----------------------- No Snapshots Found -----------------------"
-			echoscreen "$msg" "1"
-		else
-			# Transform snapshots into TSV to process in bash
-			echo "$snaps_json" | jq -r '.snapshots // [] |.[] |
-			[
-			.name,
-			.description,
-			.creationDate,
-			.lastUpdateDate,
-			.action,
-			.snapshotID,
-			.percentComplete,
-			.status,
-			.statusDetail,
-			.pvmInstanceID,
-			(.volumeSnapshots | tostring)
-			] | @tsv' 2>>"$log_file" | \
-			while IFS=$'\t' read -r s_name s_description s_cdate s_udate s_action s_id s_pct s_status s_sdetail s_pvmid s_vols
+			echo "$snaps_json" | jq -r '.snapshots[] | .name' | while read -r snap_name
 			do
-				# Resolve Instance Name from config JSON for this workspace + pvmInstanceID
-				instname=$(jq -r --arg ws "$ws" --arg id "$s_pvmid" '
-				(.systems // [])
-				| map(select(.workspace == $ws and .pvmInstanceID == $id))
-				| if length > 0 then .[0].name else "N/A" end
-				' "$bluexscrt")
-				{
-					echo "----------------------- Snapshot Found -----------------------"
-					echo "Name: $s_name"
-					echo "Description: $s_description" 
-					echo "Creation Date: $s_cdate"
-					echo "Last Update Date: $s_udate"
-					echo "Action: $s_action"
-					echo "Snapshot ID: $s_id"
-					echo "Percentage Complete: $s_pct"
-					echo "Status: $s_status"
-					echo "Status Detail: $s_sdetail"
-					echo "Instance ID: $s_pvmid"
-					echo "Instance Name: $instname"
-					echo "Volumes: $s_vols"
-					echo "------------------------------------------------------------"
-				} | tee -a "$log_file"
+				echoscreen "----------------------- Snapshot Found -----------------------" "1"
+				echoscreen "Name: $snap_name" "1"
 			done
+		else
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - No snapshots found in this workspace." "1"
 		fi
-		echoscreen "" "1"
 	done
+
+
+#	for ws in "${allws_array[@]}"
+#	do
+#		# Get workspace CRN and ID from JSON
+#		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+#		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+#		# Workspace human friendly name
+#		full_ws_name="${wsmap[$ws]}"
+#		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name" "1"
+#		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+#		base_url_var="base_${region_api}"
+#		base_url="${!base_url_var}"
+#		snaps_json=$(snap_ls 2>>"$log_file")
+#		# Check if there are snapshots
+#		if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
+#		then
+#			msg="----------------------- No Snapshots Found -----------------------"
+#			echoscreen "$msg" "1"
+#		else
+#			# Transform snapshots into TSV to process in bash
+#			echo "$snaps_json" | jq -r '.snapshots // [] |.[] |
+#			[
+#			.name,
+#			.description,
+#			.creationDate,
+#			.lastUpdateDate,
+#			.action,
+#			.snapshotID,
+#			.percentComplete,
+#			.status,
+#			.statusDetail,
+#			.pvmInstanceID,
+#			(.volumeSnapshots | tostring)
+#			] | @tsv' 2>>"$log_file" | \
+#			while IFS=$'\t' read -r s_name s_description s_cdate s_udate s_action s_id s_pct s_status s_sdetail s_pvmid s_vols
+#			do
+#				# Resolve Instance Name from config JSON for this workspace + pvmInstanceID
+#				instname=$(jq -r --arg ws "$ws" --arg id "$s_pvmid" '
+#				(.systems // [])
+#				| map(select(.workspace == $ws and .pvmInstanceID == $id))
+#				| if length > 0 then .[0].name else "N/A" end
+#				' "$bluexscrt")
+#				{
+#					echo "----------------------- Snapshot Found -----------------------"
+#					echo "Name: $s_name"
+#					echo "Description: $s_description" 
+#					echo "Creation Date: $s_cdate"
+#					echo "Last Update Date: $s_udate"
+#					echo "Action: $s_action"
+#					echo "Snapshot ID: $s_id"
+#					echo "Percentage Complete: $s_pct"
+#					echo "Status: $s_status"
+#					echo "Status Detail: $s_sdetail"
+#					echo "Instance ID: $s_pvmid"
+#					echo "Instance Name: $instname"
+#					echo "Volumes: $s_vols"
+#					echo "------------------------------------------------------------"
+#				} | tee -a "$log_file"
+#			done
+#		fi
+#		echoscreen "" "1"
+#	done
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing all snapshots in all workspaces"
     ;;
 
