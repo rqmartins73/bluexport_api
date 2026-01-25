@@ -3635,7 +3635,7 @@ do_vsi_srcmon() {
 			# SRC is rolling
 			saw_nonzero=1
 			stable_zero=0
-			sleep 30
+			sleep 15
 			continue
 		fi
 
@@ -4652,11 +4652,11 @@ case $1 in
 	# Validate arguments
 	if [ $# -lt 2 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME"
 	fi
 	if [ $# -gt 2 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME"
 	fi
 	test=0
 	flagj=1
