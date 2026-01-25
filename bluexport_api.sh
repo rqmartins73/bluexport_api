@@ -4742,7 +4742,10 @@ case $1 in
 		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
 		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
 		# Workspace human friendly name
-		full_ws_name="${wsmap[$ws]}"
+#		full_ws_name="${wsmap[$ws]}"
+                # Workspace human friendly name (source of truth: JSON)
+                full_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name // $k' "$bluexscrt")
+
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Listing snapshots at workspace $full_ws_name" "1"
 		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
 		base_url_var="base_${region_api}"
