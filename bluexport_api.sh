@@ -4725,16 +4725,17 @@ case $1 in
 	fi
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing all snapshots in all workspaces!" "1"
-	# Convert wsnames from colon-separated string → array
-	IFS=':' read -r -a wsnames_array <<< "$wsnames"
-	# Convert allws (space separated) → array
 	read -r -a allws_array <<< "$allws"
-	# Create mapping: workspace shortname → full name
-	declare -A wsmap
-	for i in "${!allws_array[@]}"
-	do
-		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-	done
+#	# Convert wsnames from colon-separated string → array
+#	IFS=':' read -r -a wsnames_array <<< "$wsnames"
+#	# Convert allws (space separated) → array
+#	read -r -a allws_array <<< "$allws"
+#	# Create mapping: workspace shortname → full name
+#	declare -A wsmap
+#	for i in "${!allws_array[@]}"
+#	do
+#		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+#	done
 	# Loop all workspaces
 	for ws in "${allws_array[@]}"
 	do
@@ -4807,16 +4808,17 @@ case $1 in
 	fi
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Captured Images in all Workspaces !" "1"
-	# Convert 'wsnames' string to an array (built antes a partir do JSON)
-	IFS=':' read -r -a wsnames_array <<< "$wsnames"
-	# Convert 'allws' string to an array (built antes a partir do JSON)
+#	# Convert 'wsnames' string to an array (built antes a partir do JSON)
+#	IFS=':' read -r -a wsnames_array <<< "$wsnames"
+#	# Convert 'allws' string to an array (built antes a partir do JSON)
+#	read -r -a allws_array <<< "$allws"
+#	# Map workspace short name -> full name
+#	declare -A wsmap
+#	for i in "${!allws_array[@]}"
+#	do
+#		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
+#	done
 	read -r -a allws_array <<< "$allws"
-	# Map workspace short name -> full name
-	declare -A wsmap
-	for i in "${!allws_array[@]}"
-	do
-		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-	done
 	for ws in "${allws_array[@]}"
 	do
 		# Get CRN and Workspace ID from JSON
