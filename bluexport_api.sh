@@ -4726,16 +4726,6 @@ case $1 in
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing all snapshots in all workspaces!" "1"
 	read -r -a allws_array <<< "$allws"
-#	# Convert wsnames from colon-separated string → array
-#	IFS=':' read -r -a wsnames_array <<< "$wsnames"
-#	# Convert allws (space separated) → array
-#	read -r -a allws_array <<< "$allws"
-#	# Create mapping: workspace shortname → full name
-#	declare -A wsmap
-#	for i in "${!allws_array[@]}"
-#	do
-#		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-#	done
 	# Loop all workspaces
 	for ws in "${allws_array[@]}"
 	do
@@ -4808,16 +4798,6 @@ case $1 in
 	fi
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Captured Images in all Workspaces !" "1"
-#	# Convert 'wsnames' string to an array (built antes a partir do JSON)
-#	IFS=':' read -r -a wsnames_array <<< "$wsnames"
-#	# Convert 'allws' string to an array (built antes a partir do JSON)
-#	read -r -a allws_array <<< "$allws"
-#	# Map workspace short name -> full name
-#	declare -A wsmap
-#	for i in "${!allws_array[@]}"
-#	do
-#		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-#	done
 	read -r -a allws_array <<< "$allws"
 	for ws in "${allws_array[@]}"
 	do
@@ -4828,7 +4808,6 @@ case $1 in
 		base_url_var="base_${region_api}"
 		base_url="${!base_url_var}"
                 full_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name // $k' "$bluexscrt")
-#		full_ws_name="${wsmap[$ws]}"
 		if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
 		then
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping..." "1"
