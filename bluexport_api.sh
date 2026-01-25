@@ -3615,7 +3615,7 @@ do_vsi_srcmon() {
 				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name reached status SHUTOFF. SRC monitoring completed. ==="
 			fi
 
-			sleep 30
+			sleep 15
 			continue
 		fi
 
@@ -3625,7 +3625,7 @@ do_vsi_srcmon() {
 		# If not ACTIVE yet, just keep waiting (SHUTOFF here is normal while starting)
 		if [[ "$vsi_status" != "ACTIVE" ]]
 		then
-			sleep 30
+			sleep 15
 			continue
 		fi
 
@@ -3648,7 +3648,7 @@ do_vsi_srcmon() {
 			then
 				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name reached status ACTIVE with SRC 00000000 (stable). SRC monitoring completed. ==="
 			fi
-			sleep 30
+			sleep 15
 			continue
 		fi
 
