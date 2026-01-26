@@ -308,8 +308,9 @@ then
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $netcheck_err" "1"
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
 fi
-echoscreen "   ### Getting IAM Token..."
+echoscreen "   ### Retrieving IAM Token..."
 iam_token=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}" | jq -r '.access_token')
+echoscreen "   ### IAM Token successfully retrieved!"
 header_auth="Authorization: Bearer $iam_token"
 header_xml="Content-Type: application/xml"
 
