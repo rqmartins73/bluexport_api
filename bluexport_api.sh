@@ -255,24 +255,24 @@ then
 	#  END: Workspace Mapping               #
 	#########################################
 
-# Optional debugging
-#echo "vsi_user       = $vsi_user"
-#echo "sshkeypath     = $sshkeypath"
-#echo "resource_grp   = $resource_grp"
-#echo "accesskey      = $accesskey"
-#echo "secretkey      = $secretkey"
-#echo "bucket         = $bucket"
-#echo "region         = $region"
-#echo "api_key        = $api_key"
-#echo "allws          = $allws"
-#echo "wsnames        = $wsnames"
-#echo "WSFRA1         = $WSFRA1"
-#echo "WSFRA1ID       = $WSFRA1ID"
-#echo "WSFRA1NAME     = $WSFRA1NAME"
-#echo "WSFRA2         = $WSFRA2"
-#echo "WSFRA2ID       = $WSFRA2ID"
-#echo "WSFRA2NAME     = $WSFRA2NAME"
-#exit 0
+	# Optional debugging
+	#echo "vsi_user       = $vsi_user"
+	#echo "sshkeypath     = $sshkeypath"
+	#echo "resource_grp   = $resource_grp"
+	#echo "accesskey      = $accesskey"
+	#echo "secretkey      = $secretkey"
+	#echo "bucket         = $bucket"
+	#echo "region         = $region"
+	#echo "api_key        = $api_key"
+	#echo "allws          = $allws"
+	#echo "wsnames        = $wsnames"
+	#echo "WSFRA1         = $WSFRA1"
+	#echo "WSFRA1ID       = $WSFRA1ID"
+	#echo "WSFRA1NAME     = $WSFRA1NAME"
+	#echo "WSFRA2         = $WSFRA2"
+	#echo "WSFRA2ID       = $WSFRA2ID"
+	#echo "WSFRA2NAME     = $WSFRA2NAME"
+	#exit 0
 
 	#### START: API Environment ###
 	#  authentication
