@@ -143,20 +143,6 @@ echoscreen() {
         printf '%s\n' "$wrapped" >> "$log_file"
     fi
 }
-
-#echoscreen() {
-#	msg="$1"
-#	flag="$2"
-#
-#	# Interactive (TTY) OR forced (IBM i batch)
-#	if [ -t 1 ] || [[ "${ECHOSCREEN_FORCE_STDOUT:-0}" == "1" ]]; then
-#		printf '%s\n' "$msg"
-#	fi
-#
-#	if [[ "$flag" == "1" ]]; then
-#		printf '%s\n' "$msg" >> "$log_file"
-#	fi
-#}
 #### END:FUNCTION - Echo to log file and screen  ####
 
 if [[ $1 != "-chscrt" ]] && [[ $1 != "-viewscrt" ]] && [[ $1 != "-h" ]] && [[ $1 != "--help" ]] && [[ $1 != "-help" ]] && [[ $1 != "" ]]
@@ -300,7 +286,7 @@ header_accept="Accept: application/json"
 # Fail fast: need internet (IAM + COS)
 echoscreen "   ### Retrieving IAM Token..."
 iam_token=""
-if ! iam_token=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}" | jq -r '.access_token')
+if ! iam_token=$(curl -sS --connect-timeout 30 --max-time 60 -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}" | jq -r '.access_token')
 then
 	timestamp=$(date +%F" "%T" "%Z)
 	echoscreen "==== START ======= $timestamp =========" "1"
@@ -447,21 +433,6 @@ help() {
 	echoscreen ""
 }
 #### END:FUNCTION - Help  ####
-
-#### START:FUNCTION - Finish vsi_status=$(log file when aborting  ####
-#abort() {
-#	echo $1 >> $log_file
-#	if [ -t 1 ]
-#	then
-#		echo ""
-#		echo "   ### $1"
-#		echo ""
-#	fi
-#	timestamp=$(date +%F" "%T" "%Z)
-#	eval echo $end_log_file >> $log_file
-#	exit 0
-#}
-#### END:FUNCTION - Finish log file when aborting  ####
 
 #### START:FUNCTIONS - API Commands ####
 ##  Workspace management aliases
