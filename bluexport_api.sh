@@ -274,14 +274,11 @@ then
 #echo "WSFRA2NAME     = $WSFRA2NAME"
 #exit 0
 
-	echoscreen ""
-	echoscreen "   ### Logging at $log_file" ""
-	echoscreen ""
-
 	#### START: API Environment ###
 	#  authentication
 	header_json="Content-Type: application/json"
 	header_accept="Accept: application/json"
+	echo
 	echoscreen "   ### Retrieving IAM Token..."
 	iam_resp=""
 	if ! iam_resp=$(curl -sS --connect-timeout 30 --max-time 60 -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}"  2>&1)
@@ -297,7 +294,6 @@ then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - IAM token response did not contain access_token. Raw response: $iam_resp"
 	fi
 	echoscreen "   ### IAM Token successfully retrieved!"
-	echo
 	header_auth="Authorization: Bearer $iam_token"
 	header_xml="Content-Type: application/xml"
 
@@ -331,8 +327,10 @@ then
 
 	default_base_url=$base_mad02 # change to your prefered
 	#### END: API Environment ###
+	echoscreen ""
+	echoscreen "   ### Logging at $log_file" ""
+	echoscreen ""
 fi
-
        #####  START: FUNCTIONS  #####
 
 #### START:FUNCTION - Help  ####
