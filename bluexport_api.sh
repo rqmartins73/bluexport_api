@@ -278,10 +278,30 @@ echoscreen ""
 fi
 
 
+#### START:FUNCTION - Finish vsi_status=$(log file when aborting  ####
+abort() {
+        echo $1 >> $log_file
+        if [ -t 1 ]
+        then
+                echo ""
+                echo "   ### $1"
+                echo ""
+        fi
+        timestamp=$(date +%F" "%T" "%Z)
+        eval echo $end_log_file >> $log_file
+        exit 0
+}
+#### END:FUNCTION - Finish log file when aborting  ####
+
 #### START: API Environment ###
 #  authentication
 header_json="Content-Type: application/json"
 header_accept="Accept: application/json"
+# Fail fast: need internet (IAM + COS)
+if ! curl -sS --connect-timeout 30 --max-time 60 https://iam.cloud.ibm.com/ >/dev/null 2>>"$log_file"
+then
+  abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
+fi
 iam_token=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}" | jq -r '.access_token')
 header_auth="Authorization: Bearer $iam_token"
 header_xml="Content-Type: application/xml"
@@ -423,18 +443,18 @@ help() {
 #### END:FUNCTION - Help  ####
 
 #### START:FUNCTION - Finish vsi_status=$(log file when aborting  ####
-abort() {
-	echo $1 >> $log_file
-	if [ -t 1 ]
-	then
-		echo ""
-		echo "   ### $1"
-		echo ""
-	fi
-	timestamp=$(date +%F" "%T" "%Z)
-	eval echo $end_log_file >> $log_file
-	exit 0
-}
+#abort() {
+#	echo $1 >> $log_file
+#	if [ -t 1 ]
+#	then
+#		echo ""
+#		echo "   ### $1"
+#		echo ""
+#	fi
+#	timestamp=$(date +%F" "%T" "%Z)
+#	eval echo $end_log_file >> $log_file
+#	exit 0
+#}
 #### END:FUNCTION - Finish log file when aborting  ####
 
 #### START:FUNCTIONS - API Commands ####
@@ -5374,6 +5394,7 @@ EOF
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - No cos_instances section or no COS instances defined in $bluexscrt. Nothing to list."
 	fi
+
 	# Iterar linha a linha para não partir nomes com espaços
 	while IFS= read -r cos
 	do
@@ -5396,6 +5417,11 @@ EOF
 		echoscreen "================================================================================" "1"
 		# Chamada à API S3 para listar buckets deste COS instance
 		buckets_xml=$(cos_ls_buckets 2>>"$log_file")
+		ret=$?
+		if [ $ret -ne 0 ]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - COS bucket listing failed (curl rc=$ret). Likely no internet / DNS / TLS. See log: $log_file"
+		fi
 		# Guardar XML bruto no log para debug
 		echo "$buckets_xml" >>"$log_file"
 		if [[ -z "$buckets_xml" ]]
@@ -5506,6 +5532,11 @@ EOF
 	echoscreen "================================================================================" "1"
 	# 3) Listar buckets dessa COS instance
 	buckets_xml=$(cos_ls_buckets 2>>"$log_file")
+	ret=$?
+	if [ $ret -ne 0 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - COS bucket listing failed (curl rc=$ret). Likely no internet / DNS / TLS. See log: $log_file"
+	fi
 	echo "$buckets_xml" >>"$log_file"
 	if [[ -z "$buckets_xml" ]]
 	then
@@ -5686,6 +5717,11 @@ EOF
 	echoscreen "================================================================================" "1"
 	# 3) Listar buckets dessa COS instance
 	buckets_xml=$(cos_ls_buckets 2>>"$log_file")
+	ret=$?
+	if [ $ret -ne 0 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - COS bucket listing failed (curl rc=$ret). Likely no internet / DNS / TLS. See log: $log_file"
+	fi
 	echo "$buckets_xml" >>"$log_file"
 	if [[ -z "$buckets_xml" ]]
 	then
