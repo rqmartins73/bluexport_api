@@ -301,7 +301,7 @@ header_accept="Accept: application/json"
 echoscreen "   ### Testing internet connection..."
 echo
 netcheck_err=""
-if ! netcheck_err=$(curl -sS --connect-timeout 30 --max-time 60 https://iam.cloud.ibm.com/ 2>&1 >/dev/null)
+if ! netcheck_err=$(curl -sS --connect-timeout 30 --max-time 60 https://iam.cloud.ibm.com/) #2>&1 >/dev/null)
 then
 	timestamp=$(date +%F" "%T" "%Z)
 	echoscreen "==== START ======= $timestamp =========" "1"
