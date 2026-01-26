@@ -298,19 +298,17 @@ abort() {
 header_json="Content-Type: application/json"
 header_accept="Accept: application/json"
 # Fail fast: need internet (IAM + COS)
-echoscreen "   ### Testing internet connection..."
-echo
-netcheck_err=""
-if ! netcheck_err=$(curl -sS --connect-timeout 30 --max-time 60 https://iam.cloud.ibm.com/ 2>&1 >/dev/null)
+echoscreen "   ### Retrieving IAM Token..."
+iam_token=""
+if ! iam_token=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}" | jq -r '.access_token')
 then
 	timestamp=$(date +%F" "%T" "%Z)
 	echoscreen "==== START ======= $timestamp =========" "1"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $netcheck_err" "1"
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
 fi
-echoscreen "   ### Retrieving IAM Token..."
-iam_token=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}" | jq -r '.access_token')
 echoscreen "   ### IAM Token successfully retrieved!"
+echo
 header_auth="Authorization: Bearer $iam_token"
 header_xml="Content-Type: application/xml"
 
