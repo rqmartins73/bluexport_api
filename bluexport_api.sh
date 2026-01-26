@@ -304,7 +304,7 @@ if ! iam_token=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" -H "
 then
 	timestamp=$(date +%F" "%T" "%Z)
 	echoscreen "==== START ======= $timestamp =========" "1"
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $netcheck_err" "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $iam_token" "1"
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
 fi
 echoscreen "   ### IAM Token successfully retrieved!"
