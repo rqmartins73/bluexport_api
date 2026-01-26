@@ -145,6 +145,21 @@ echoscreen() {
 }
 #### END:FUNCTION - Echo to log file and screen  ####
 
+#### START:FUNCTION - Finish vsi_status=$(log file when aborting  ####
+abort() {
+        echo $1 >> $log_file
+        if [ -t 1 ]
+        then
+                echo ""
+                echo "   ### $1"
+                echo ""
+        fi
+        timestamp=$(date +%F" "%T" "%Z)
+        eval echo $end_log_file >> $log_file
+        exit 0
+}
+#### END:FUNCTION - Finish log file when aborting  ####
+
 if [[ $1 != "-chscrt" ]] && [[ $1 != "-viewscrt" ]] && [[ $1 != "-h" ]] && [[ $1 != "--help" ]] && [[ $1 != "-help" ]] && [[ $1 != "" ]]
 then
 	####  START: Check if Config File exists  ####
@@ -159,86 +174,86 @@ then
 		echoscreen ""
 		exit 0
 	fi
-####  END: Check if Config File exists  ####
+	####  END: Check if Config File exists  ####
 
-echo
-echoscreen "   ### Building environment..."
+	echo
+	echoscreen "   ### Building environment..."
 
-####  START: Constants Definition  #####
-capture_time=`date +%Y-%m-%d_%H%M`
-capture_date=`date +%Y-%m-%d`
-capture_hour=`date "+%H"`
-flagj=0
-job_log=$(jq -r '.job_log' "$conf_file")
-job_test_log=$(jq -r '.job_test_log' "$conf_file")
-job_id_file=$(jq -r '.job_id' "$conf_file")
-job_log_short=$(jq -r '.job_log_short' "$conf_file")
-job_monitor=$(jq -r '.job_monitor' "$conf_file")
-operid_file=$(jq -r '.operid_file' "$conf_file")
-vsi_list_id_tmp=$(jq -r '.vsi_list_id_tmp' "$conf_file")
-vsi_list_tmp=$(jq -r '.vsi_list_tmp' "$conf_file")
-volumes_file=$(jq -r '.volumes_file' "$conf_file")
-vol_ch_tier=$(jq -r '.vol_ch_tier' "$conf_file")
-vol_failed_tst=$(jq -r '.vol_failed_tst' "$conf_file")
-snap_retention=$(jq -r '.snap_retention' "$conf_file")
-iasp_names_file=$(jq -r '.iasp_names_file' "$conf_file")
-single=0
-flags="$@"
-####  END: Constants Definition  #####
+	####  START: Constants Definition  #####
+	capture_time=`date +%Y-%m-%d_%H%M`
+	capture_date=`date +%Y-%m-%d`
+	capture_hour=`date "+%H"`
+	flagj=0
+	job_log=$(jq -r '.job_log' "$conf_file")
+	job_test_log=$(jq -r '.job_test_log' "$conf_file")
+	job_id_file=$(jq -r '.job_id' "$conf_file")
+	job_log_short=$(jq -r '.job_log_short' "$conf_file")
+	job_monitor=$(jq -r '.job_monitor' "$conf_file")
+	operid_file=$(jq -r '.operid_file' "$conf_file")
+	vsi_list_id_tmp=$(jq -r '.vsi_list_id_tmp' "$conf_file")
+	vsi_list_tmp=$(jq -r '.vsi_list_tmp' "$conf_file")
+	volumes_file=$(jq -r '.volumes_file' "$conf_file")
+	vol_ch_tier=$(jq -r '.vol_ch_tier' "$conf_file")
+	vol_failed_tst=$(jq -r '.vol_failed_tst' "$conf_file")
+	snap_retention=$(jq -r '.snap_retention' "$conf_file")
+	iasp_names_file=$(jq -r '.iasp_names_file' "$conf_file")
+	single=0
+	flags="$@"
+	####  END: Constants Definition  #####
 
-####  START: Get Cloud Config Data  #####
+	####  START: Get Cloud Config Data  #####
 
-#############################
-#  START: Load Base Config  #
-#############################
+	#############################
+	#  START: Load Base Config  #
+	#############################
 
-# SSH / VSI user information
-vsi_user=$(jq -r '.ssh.user'          "$bluexscrt")
-sshkeypath=$(jq -r '.ssh.keyPath'     "$bluexscrt")
+	# SSH / VSI user information
+	vsi_user=$(jq -r '.ssh.user'          "$bluexscrt")
+	sshkeypath=$(jq -r '.ssh.keyPath'     "$bluexscrt")
 
-# PowerVS Resource Group
-resource_grp=$(jq -r '.resourceGroup' "$bluexscrt")
+	# PowerVS Resource Group
+	resource_grp=$(jq -r '.resourceGroup' "$bluexscrt")
 
-# IBM Cloud Object Storage access keys
-accesskey=$(jq -r '.access.accessKey'     "$bluexscrt")
-secretkey=$(jq -r '.access.secretKey'     "$bluexscrt")
-bucket=$(jq -r '.access.bucketName'       "$bluexscrt")
-region=$(jq -r '.access.region'           "$bluexscrt")
+	# IBM Cloud Object Storage access keys
+	accesskey=$(jq -r '.access.accessKey'     "$bluexscrt")
+	secretkey=$(jq -r '.access.secretKey'     "$bluexscrt")
+	bucket=$(jq -r '.access.bucketName'       "$bluexscrt")
+	region=$(jq -r '.access.region'           "$bluexscrt")
 
-# IBM Cloud API key
-api_key=$(jq -r '.apikey' "$bluexscrt")
+	# IBM Cloud API key
+	api_key=$(jq -r '.apikey' "$bluexscrt")
 
 
-###########################################
-#  START: Workspace Mapping (ALLWS, Names) #
-###########################################
+	###########################################
+	#  START: Workspace Mapping (ALLWS, Names) #
+	###########################################
 
-# Equivalent of ALLWS — list of workspace keys (e.g., "WSFRA1 WSFRA2 WSMAD2 WSMAD4")
-allws=$(jq -r '.workspaces | keys | join(" ")' "$bluexscrt")
+	# Equivalent of ALLWS — list of workspace keys (e.g., "WSFRA1 WSFRA2 WSMAD2 WSMAD4")
+	allws=$(jq -r '.workspaces | keys | join(" ")' "$bluexscrt")
 
-# Equivalent of WSNAMES — all workspace display names separated by ":" and ending with ":"
-wsnames=$(jq -r '.workspaces | to_entries | map(.value.name) | join(":") + ":"' "$bluexscrt")
+	# Equivalent of WSNAMES — all workspace display names separated by ":" and ending with ":"
+	wsnames=$(jq -r '.workspaces | to_entries | map(.value.name) | join(":") + ":"' "$bluexscrt")
 
-# Dynamically create environment variables for each workspace:
-#   WSFRA1     = workspace CRN
-#   WSFRA1ID   = workspace ID
-#   WSFRA1NAME = workspace display name
-for ws in $allws; do
-    crn=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn'  "$bluexscrt")
-    id=$(jq -r  --arg ws "$ws" '.workspaces[$ws].id'   "$bluexscrt")
-    name=$(jq -r --arg ws "$ws" '.workspaces[$ws].name' "$bluexscrt")
+	# Dynamically create environment variables for each workspace:
+	#   WSFRA1     = workspace CRN
+	#   WSFRA1ID   = workspace ID
+	#   WSFRA1NAME = workspace display name
+	for ws in $allws; do
+	    crn=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn'  "$bluexscrt")
+	    id=$(jq -r  --arg ws "$ws" '.workspaces[$ws].id'   "$bluexscrt")
+	    name=$(jq -r --arg ws "$ws" '.workspaces[$ws].name' "$bluexscrt")
 
-    # Variable containing the CRN (matches original behavior)
-    declare "${ws}=$crn"
+	    # Variable containing the CRN (matches original behavior)
+	    declare "${ws}=$crn"
 
-    # Additional helpful variables
-    declare "${ws}ID=$id"
-    declare "${ws}NAME=$name"
-done
+	    # Additional helpful variables
+	    declare "${ws}ID=$id"
+	    declare "${ws}NAME=$name"
+	done
 
-#########################################
-#  END: Workspace Mapping               #
-#########################################
+	#########################################
+	#  END: Workspace Mapping               #
+	#########################################
 
 # Optional debugging
 #echo "vsi_user       = $vsi_user"
@@ -259,81 +274,64 @@ done
 #echo "WSFRA2NAME     = $WSFRA2NAME"
 #exit 0
 
-echoscreen ""
-echoscreen "   ### Logging at $log_file" ""
-echoscreen ""
+	echoscreen ""
+	echoscreen "   ### Logging at $log_file" ""
+	echoscreen ""
+
+	#### START: API Environment ###
+	#  authentication
+	header_json="Content-Type: application/json"
+	header_accept="Accept: application/json"
+	echoscreen "   ### Retrieving IAM Token..."
+	iam_resp=""
+	if ! iam_resp=$(curl -sS --connect-timeout 30 --max-time 60 -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}"  2>&1)
+	then
+		timestamp=$(date +%F" "%T" "%Z)
+		echoscreen "==== START ======= $timestamp =========" "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $iam_resp" "1"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
+	fi
+	iam_token=$(printf '%s\n' "$iam_resp" | jq -r '.access_token')
+	if [[ -z "$iam_token" || "$iam_token" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - IAM token response did not contain access_token. Raw response: $iam_resp"
+	fi
+	echoscreen "   ### IAM Token successfully retrieved!"
+	echo
+	header_auth="Authorization: Bearer $iam_token"
+	header_xml="Content-Type: application/xml"
+
+	# Current date (YYYY-MM-DD). Required for Transit Gateway API versioning.
+	version=$(date +%F)
+
+	#  base endpoints per region
+	base_syd04="https://syd.power-iaas.cloud.ibm.com"
+	base_syd05="https://syd.power-iaas.cloud.ibm.com"
+	base_sao1="https://sao.power-iaas.cloud.ibm.com"
+	base_sao4="https://sao.power-iaas.cloud.ibm.com"
+	base_sao5="https://sao.power-iaas.cloud.ibm.com"
+	base_mon01="https://mon.power-iaas.cloud.ibm.com"
+	base_tor01="https://tor.power-iaas.cloud.ibm.com"
+	base_eu_de_1="https://eu-de.power-iaas.cloud.ibm.com"
+	base_eu_de_2="https://eu-de.power-iaas.cloud.ibm.com"
+	base_lon04="https://lon.power-iaas.cloud.ibm.com"
+	base_lon06="https://lon.power-iaas.cloud.ibm.com"
+	base_che="https://che.power-iaas.cloud.ibm.com"
+	base_tok04="https://tok.power-iaas.cloud.ibm.com"
+	base_osa21="https://osa.power-iaas.cloud.ibm.com"
+	base_mad04="https://mad.power-iaas.cloud.ibm.com"
+	base_mad02="https://mad.power-iaas.cloud.ibm.com"
+	base_us_east="https://us-east.power-iaas.cloud.ibm.com"
+	base_wdc06="https://us-east.power-iaas.cloud.ibm.com"
+	base_wdc07="https://us-east.power-iaas.cloud.ibm.com"
+	base_us_south="https://us-south.power-iaas.cloud.ibm.com"
+	base_dal10="https://us-south.power-iaas.cloud.ibm.com"
+	base_dal12="https://us-south.power-iaas.cloud.ibm.com"
+	base_dal14="https://us-south.power-iaas.cloud.ibm.com"
+
+	default_base_url=$base_mad02 # change to your prefered
+	#### END: API Environment ###
 fi
-
-
-#### START:FUNCTION - Finish vsi_status=$(log file when aborting  ####
-abort() {
-        echo $1 >> $log_file
-        if [ -t 1 ]
-        then
-                echo ""
-                echo "   ### $1"
-                echo ""
-        fi
-        timestamp=$(date +%F" "%T" "%Z)
-        eval echo $end_log_file >> $log_file
-        exit 0
-}
-#### END:FUNCTION - Finish log file when aborting  ####
-
-#### START: API Environment ###
-#  authentication
-header_json="Content-Type: application/json"
-header_accept="Accept: application/json"
-echoscreen "   ### Retrieving IAM Token..."
-iam_resp=""
-if ! iam_resp=$(curl -sS --connect-timeout 30 --max-time 60 -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}"  2>&1)
-then
-	timestamp=$(date +%F" "%T" "%Z)
-	echoscreen "==== START ======= $timestamp =========" "1"
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $iam_resp" "1"
-	abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
-fi
-iam_token=$(printf '%s\n' "$iam_resp" | jq -r '.access_token')
-if [[ -z "$iam_token" || "$iam_token" == "null" ]]
-then
-	abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - IAM token response did not contain access_token. Raw response: $iam_resp"
-fi
-echoscreen "   ### IAM Token successfully retrieved!"
-echo
-header_auth="Authorization: Bearer $iam_token"
-header_xml="Content-Type: application/xml"
-
-# Current date (YYYY-MM-DD). Required for Transit Gateway API versioning.
-version=$(date +%F)
-
-#  base endpoints per region
-base_syd04="https://syd.power-iaas.cloud.ibm.com"
-base_syd05="https://syd.power-iaas.cloud.ibm.com"
-base_sao1="https://sao.power-iaas.cloud.ibm.com"
-base_sao4="https://sao.power-iaas.cloud.ibm.com"
-base_sao5="https://sao.power-iaas.cloud.ibm.com"
-base_mon01="https://mon.power-iaas.cloud.ibm.com"
-base_tor01="https://tor.power-iaas.cloud.ibm.com"
-base_eu_de_1="https://eu-de.power-iaas.cloud.ibm.com"
-base_eu_de_2="https://eu-de.power-iaas.cloud.ibm.com"
-base_lon04="https://lon.power-iaas.cloud.ibm.com"
-base_lon06="https://lon.power-iaas.cloud.ibm.com"
-base_che="https://che.power-iaas.cloud.ibm.com"
-base_tok04="https://tok.power-iaas.cloud.ibm.com"
-base_osa21="https://osa.power-iaas.cloud.ibm.com"
-base_mad04="https://mad.power-iaas.cloud.ibm.com"
-base_mad02="https://mad.power-iaas.cloud.ibm.com"
-base_us_east="https://us-east.power-iaas.cloud.ibm.com"
-base_wdc06="https://us-east.power-iaas.cloud.ibm.com"
-base_wdc07="https://us-east.power-iaas.cloud.ibm.com"
-base_us_south="https://us-south.power-iaas.cloud.ibm.com"
-base_dal10="https://us-south.power-iaas.cloud.ibm.com"
-base_dal12="https://us-south.power-iaas.cloud.ibm.com"
-base_dal14="https://us-south.power-iaas.cloud.ibm.com"
-
-default_base_url=$base_mad02 # change to your prefered
-#### END: API Environment ###
-
 
        #####  START: FUNCTIONS  #####
 
