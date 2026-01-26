@@ -301,11 +301,11 @@ header_accept="Accept: application/json"
 echoscreen "   ### Testing internet connection..."
 echo
 netcheck_err=""
-if ! netcheck_err=$(curl -sS --connect-timeout 30 --max-time 60 https://iam.cloud.ibm.com/) #2>&1 >/dev/null)
+if ! netcheck_err=$(curl -sS --connect-timeout 30 --max-time 60 https://iam.cloud.ibm.com/ 2>&1 >/dev/null)
 then
 	timestamp=$(date +%F" "%T" "%Z)
 	echoscreen "==== START ======= $timestamp =========" "1"
-	echoscreen $netcheck_err "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $netcheck_err" "1"
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
 fi
 echoscreen "   ### Getting IAM Token..."
