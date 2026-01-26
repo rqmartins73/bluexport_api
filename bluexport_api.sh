@@ -283,15 +283,19 @@ abort() {
 #  authentication
 header_json="Content-Type: application/json"
 header_accept="Accept: application/json"
-# Fail fast: need internet (IAM + COS)
 echoscreen "   ### Retrieving IAM Token..."
-iam_token=""
-if ! iam_token=$(curl -sS --connect-timeout 30 --max-time 60 -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}" | jq -r '.access_token')
+iam_resp=""
+if ! iam_resp=$(curl -sS --connect-timeout 30 --max-time 60 -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}"  2>&1)
 then
 	timestamp=$(date +%F" "%T" "%Z)
 	echoscreen "==== START ======= $timestamp =========" "1"
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $iam_token" "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $iam_resp" "1"
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
+fi
+iam_token=$(printf '%s\n' "$iam_resp" | jq -r '.access_token')
+if [[ -z "$iam_token" || "$iam_token" == "null" ]]
+then
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - IAM token response did not contain access_token. Raw response: $iam_resp"
 fi
 echoscreen "   ### IAM Token successfully retrieved!"
 echo
