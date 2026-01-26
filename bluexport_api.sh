@@ -298,7 +298,7 @@ abort() {
 header_json="Content-Type: application/json"
 header_accept="Accept: application/json"
 # Fail fast: need internet (IAM + COS)
-echoscreen " ### Trying to get iam_token..."
+echoscreen "    ### Trying to get iam_token..."
 echo
 if ! curl -sS --connect-timeout 30 --max-time 60 https://iam.cloud.ibm.com/ >/dev/null 2>>"$log_file"
 then
