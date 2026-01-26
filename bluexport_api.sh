@@ -161,6 +161,7 @@ then
 	fi
 ####  END: Check if Config File exists  ####
 
+echo
 echoscreen "   ### Building environment..."
 
 ####  START: Constants Definition  #####
