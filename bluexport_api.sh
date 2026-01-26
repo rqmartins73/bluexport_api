@@ -161,7 +161,7 @@ then
 	fi
 ####  END: Check if Config File exists  ####
 
-
+echoscreen "   ### Building environment..."
 
 ####  START: Constants Definition  #####
 capture_time=`date +%Y-%m-%d_%H%M`
