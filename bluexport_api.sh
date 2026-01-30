@@ -368,6 +368,8 @@ help() {
 	echoscreen "List objects from a COS bucket:     ./bluexport_api.sh -bucketlsobjs"
 	echoscreen "Delete object from a COS bucket:    ./bluexport_api.sh -bucketdelobj"
 	echoscreen "Restore object from Archive to COS bucket: ./bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
+	echoscreen "  DAYS default is 3."
+	echoscreen "  ARCHIVE_TYPE default is Acelerated"
 	echoscreen ""
 	echoscreen "=== === Volume Clones === ==="
 	echoscreen "Create volume clone:        ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
@@ -3655,7 +3657,7 @@ do_vsi_srcmon() {
 		then
 			first_active_ts=$(date +%s)
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name reached ACTIVE with SRC=00000000. Waiting up to ${grace_seconds}s to detect SRC rolling before declaring START completed..." "1"
-			sleep 30
+			sleep $grace_seconds
 			continue
 		fi
 
