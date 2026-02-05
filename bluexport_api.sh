@@ -4017,15 +4017,10 @@ do_img_delete() {
 		abort "`date +%Y-%m-%d_%H:%M:%S` - IMG_NAME is missing. Syntax: bluexport_api.sh -imgdel IMG_NAME"
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Image Delete for $img_name in all Workspaces ===" "1"
-	# Vamos construir os arrays de workspaces e o mapa curto->nome completo
-	IFS=':' read -r -a wsnames_array <<< "$wsnames"
-	read -r -a allws_array <<< "$allws"
-	declare -A wsmap
-	local i
-	for i in "${!allws_array[@]}"
-	do
-		wsmap[${allws_array[i]}]="${wsnames_array[i]}"
-	done
+	# Workspaces: use keys list, and ALWAYS resolve display name from JSON (no fragile wsname/allws ordering tricks)
+	# Root cause of the "wrong workspace in output" bug: $allws comes from jq keys (sorted),
+	# while $wsnames comes from jq to_entries (object iteration order). They don't reliably line up.
+	read -r -a allws_array <<< "$allws" 
 	local IMAGE_ID=""
 	local found_ws=""
 	local found_ws_name=""
@@ -4034,7 +4029,8 @@ do_img_delete() {
 	do
 		CRN=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$bluexscrt")
 		CLOUD_INSTANCE_ID=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$bluexscrt")
-		full_ws_name="${wsmap[$ws]}"
+        full_ws_name=$(jq -r --arg ws "$ws" '.workspaces[$ws].name' "$bluexscrt" 2>>"$log_file")
+		if [[ -z "$full_ws_name" || "$full_ws_name" == "null" ]]; then full_ws_name="$ws"; fi
 		if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
 		then
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping." "1"
