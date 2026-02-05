@@ -4133,11 +4133,11 @@ case $1 in
    -a | -ta)
 	if [ $# -lt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME EXPORT_LOCATION [daily|weekly|monthly|single]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage [daily|weekly|monthly|single]"
 	fi
 	if [ $# -gt 5 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME EXPORT_LOCATION [daily|weekly|monthly|single]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage [daily|weekly|monthly|single]"
 	fi
 	destination=$4
 	capture_img_name=${3^^}
