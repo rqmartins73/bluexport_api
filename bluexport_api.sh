@@ -33,8 +33,8 @@
 # Restore object from Archive to COS bucket:		./bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]
 #
 # === Volume Clones ===
-# Create volume clone:           ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
-# Delete volume clone:           ./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME 0|delete_volumes
+# Create volume clone:           ./bluexport_api.sh -vclone CLONE_REQUEST_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
+# Delete volume clone:           ./bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes
 # List volume clones (all WS):   ./bluexport_api.sh -vclonelsall
 #
 # === Volume Tier ===
@@ -372,8 +372,8 @@ help() {
 	echoscreen "  ARCHIVE_TYPE default is Acelerated"
 	echoscreen ""
 	echoscreen "=== === Volume Clones === ==="
-	echoscreen "Create volume clone:        ./bluexport_api.sh -vclone VOLUME_CLONE_NAME BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
-	echoscreen "Delete volume clone:        ./bluexport_api.sh -vclonedel VOLUME_CLONE_NAME 0|delete_volumes"
+	echoscreen "Create volume clone:        ./bluexport_api.sh -vclone REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
+	echoscreen "Delete volume clone:        ./bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes"
 	echoscreen "List volume clones(all WS): ./bluexport_api.sh -vclonelsall"
 	echoscreen ""
 	echoscreen "=== === Volume Tier === ==="
@@ -4906,14 +4906,14 @@ case $1 in
     ;;
 
   -vclone)
-	# Args: VOLUME_CLONE_NAME BASE_NAME LPAR_NAME Replication(True|False) Rollback(True|False) TARGET_TIER volumes(ALL|id1,id2,...)
+	# Args: REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME Replication(True|False) Rollback(True|False) TARGET_TIER volumes(ALL|id1,id2,...)
 	if [ $# -lt 8 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
 	fi
 	if [ $# -gt 8 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME (Replication)True|False (Rollback)True|False TARGET_STORAGE_TIER ALL|VOLUMES(Comma separated Volumes ID list to clone)"
 	fi
 	test=0
 	vclone_name="$2"
@@ -4975,14 +4975,14 @@ case $1 in
     ;;
 
   -vclonedel)
-	# Syntax: bluexport_api.sh -vclonedel VOLUME_CLONE_NAME 0|delete_volumes
+	# Syntax: bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes
 	if [ $# -lt 2 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME 0|delete_volumes"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes"
 	fi
 	if [ $# -gt 3 ]
 	then
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME 0|delete_volumes"
+	abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes"
 	fi
 	test=0
 	found=0
@@ -4991,7 +4991,7 @@ case $1 in
 	# Validar o modo
 	if [[ "$delete_mode" != "0" && "$delete_mode" != "delete_volumes" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid parameter for delete_volumes. Use 0 or delete_volumes. Syntax: bluexport_api.sh $1 VOLUME_CLONE_NAME 0|delete_volumes"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid parameter for delete_volumes. Use 0 or delete_volumes. Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes"
 	fi
 	# Converter 'wsnames' (colon-separated) para array
 	IFS=':' read -r -a wsnames_array <<< "$wsnames"
