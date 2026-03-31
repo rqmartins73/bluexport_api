@@ -87,7 +87,7 @@ This will build a complete and valid `bluexscrt_*.json` secrets file that the ma
 ## 🧩 Requirements
 - Bash 5.x or higher
 - `curl`
-- `jq` 1.7+
+- `jq` 1.6+
 - IBM Cloud PowerVS API access
 - A secrets JSON file generated with `bluexscrt_config_api.sh`
 
