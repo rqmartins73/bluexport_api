@@ -1,0 +1,80 @@
+# Secrets and Configuration Files
+bluexscrt*.json
+*_secrets.json
+*_config.json
+bluexport_api_conf.json
+
+# Log Files
+*.log
+logs/
+*.log.*
+
+# Backup Files
+*.bak
+*.backup
+*~
+*.swp
+*.swo
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.project
+.settings/
+*.code-workspace
+
+# SSH Keys
+*.pem
+*.key
+id_rsa*
+*.ppk
+
+# Environment Files
+.env
+.env.local
+.env.*.local
+
+# Archive Files
+*.zip
+*.tar.gz
+*.tar
+*.rar
+
+# Test Output
+test-results/
+coverage/
+
+# Node modules (if any tooling is added)
+node_modules/
+
+# Python (if any tooling is added)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+ENV/
+
+# Documentation Build
+docs/_build/
+site/
+
+# Zone Identifier files (Windows WSL)
+*.Identifier
