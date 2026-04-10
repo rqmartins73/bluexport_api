@@ -574,7 +574,7 @@ create_vsi_user_from_json() {
       read -p "Create user profile $vsi_user on $name? (Y/N) " crt
       if [[ "$crt" =~ ^[Yy]$ ]]; then
         echo "Creating IBM i user profile $vsi_user on $name ..."
-        ssh $sshkey_opt "$admin_user@$ip" "system 'CRTUSRPRF USRPRF($vsi_user) PASSWORD(*NONE) USRCLS(*USER) INLMNU(*SIGNOFF) SPCAUT(*ALLOBJ *JOBCTL)'"
+        ssh $sshkey_opt "$admin_user@$ip" "system 'CRTUSRPRF USRPRF($vsi_user) PASSWORD(*NONE) USRCLS(*USER) INLMNU(*SIGNOFF) SPCAUT(*ALLOBJ *JOBCTL *IOSYSCFG)'"
       else
         echo "   Skipping user creation on $name."
       fi
