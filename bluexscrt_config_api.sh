@@ -549,7 +549,7 @@ create_vsi_user_from_json() {
       continue
     fi
 
-    read -p "If you have an SSH key for $admin_user, enter full path (or leave blank for password auth): " admin_key
+    read -p "If you have an SSH key for $admin_user, enter full path (or leave blank for password auth, it will be asked for password several times): " admin_key
     local sshkey_opt=""
     if [[ -n "$admin_key" ]]; then
       sshkey_opt="-i $admin_key"
