@@ -39,6 +39,7 @@ Desktop.ini
 .project
 .settings/
 *.code-workspace
+.claude/
 
 # SSH Keys
 *.pem
