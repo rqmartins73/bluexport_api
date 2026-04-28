@@ -26,7 +26,10 @@
 #  in all Workspaces:            ./bluexport_api.sh -imglsall
 # Delete image:                  ./bluexport_api.sh -imgdel IMG_NAME
 # Import image from COS:
-#   ./bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
+#   ./bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
+#
+#   BUCKET_REGION is the IBM COS S3 endpoint region where the source bucket exists.
+#     Example: eu-es, eu-de, us-east, us-south. Do not use the PowerVS datacenter name here, for example mad02.
 #
 #   STORAGE_TYPE must be one of:
 #     tier0 | tier1 | tier3 | tier5k
@@ -387,7 +390,12 @@ help() {
 	echoscreen " in all Workspaces:         ./bluexport_api.sh -imglsall"
 	echoscreen "Delete image:               ./bluexport_api.sh -imgdel IMG_NAME"
 	echoscreen "Import image from COS:"
-	echoscreen "  ./bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMAC_JSON]"
+	echoscreen "  ./bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMAC_JSON]"
+	echoscreen ""
+	echoscreen "  BUCKET_REGION:"
+	echoscreen "    IBM COS S3 endpoint region where the source bucket exists."
+	echoscreen "    Examples: eu-es, eu-de, us-east, us-south."
+	echoscreen "    Do not use the PowerVS datacenter name here, for example mad02."
 	echoscreen ""
 	echoscreen "  STORAGE_TYPE:"
 	echoscreen "    tier0 | tier1 | tier3 | tier5k"
@@ -674,7 +682,7 @@ img_del() {
 }
 
 img_import_api() {
-	curl -X POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/cos-images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/cos-images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
 ## Snapshots
@@ -4128,15 +4136,22 @@ do_img_delete() {
 img_import() {
 	local img_name="$1"
 	local import_bucket="$2"
-	local workspace_to_import="$3"
-	local img_name_ws="$4"
-	local storage_type="$5"
-	local account_type="$6"
-	local hmac_file="$7"
+	local import_bucket_region="$3"
+	local workspace_to_import="$4"
+	local img_name_ws="$5"
+	local storage_type="$6"
+	local account_type="$7"
+	local hmac_file="$8"
 
-	if [[ -z "$img_name" || -z "$import_bucket" || -z "$workspace_to_import" || -z "$img_name_ws" || -z "$storage_type" || -z "$account_type" ]]
+	if [[ -z "$img_name" || -z "$import_bucket" || -z "$import_bucket_region" || -z "$workspace_to_import" || -z "$img_name_ws" || -z "$storage_type" || -z "$account_type" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
+	fi
+
+	import_bucket_region=${import_bucket_region,,}
+	if ! echo "$import_bucket_region" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid BUCKET_REGION: $import_bucket_region. Use the IBM COS S3 endpoint region, for example eu-es, eu-de, us-east or us-south."
 	fi
 
 	storage_type=${storage_type,,}
@@ -4168,6 +4183,7 @@ img_import() {
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Target image catalog name: $img_name_ws" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Storage Type: $storage_type" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Bucket: $import_bucket" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Bucket Region: $import_bucket_region" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Target Workspace: $workspace_to_import" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Account Type: $account_type" "1"
 
@@ -4210,15 +4226,15 @@ img_import() {
 	fi
 
 	local cos_accesskey cos_secretkey cos_region
+	cos_region="$import_bucket_region"
 	if [[ "$account_type" == "CURRACCOUNT" ]]
 	then
 		cos_accesskey="$accesskey"
 		cos_secretkey="$secretkey"
-		cos_region="$region"
 	else
-		cos_accesskey=$(jq -r '.access.accessKey // .accessKey // .cos_hmac_keys.access_key_id // .cos_hmac_keys.accessKeyId // empty' "$hmac_file" 2>>"$log_file")
-		cos_secretkey=$(jq -r '.access.secretKey // .secretKey // .cos_hmac_keys.secret_access_key // .cos_hmac_keys.secretAccessKey // empty' "$hmac_file" 2>>"$log_file")
-		cos_region=$(jq -r '.access.region // .region // empty' "$hmac_file" 2>>"$log_file")
+		load_hmac_keys "$hmac_file"
+		cos_accesskey="$hmac_access_key"
+		cos_secretkey="$hmac_secret_key"
 	fi
 	if [[ -z "$cos_accesskey" || -z "$cos_secretkey" || "$cos_accesskey" == "null" || "$cos_secretkey" == "null" ]]
 	then
@@ -4229,15 +4245,6 @@ img_import() {
 			abort "`date +%Y-%m-%d_%H:%M:%S` - Missing COS HMAC accessKey/secretKey. Check $bluexscrt."
 		fi
 	fi
-	if [[ -z "$cos_region" || "$cos_region" == "null" ]]
-	then
-		cos_region="$region"
-	fi
-	if [[ -z "$cos_region" || "$cos_region" == "null" ]]
-	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - COS region is missing. Add .access.region to the JSON file."
-	fi
-
 	local cos_endpoint head_http head_body
 	cos_endpoint="https://s3.${cos_region}.cloud-object-storage.appdomain.cloud/${import_bucket}/${img_name}"
 	head_body="/tmp/bluexport_imgimport_head_$$.out"
@@ -4253,8 +4260,11 @@ img_import() {
 		200|204)
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - COS bucket/object check OK: $import_bucket/$img_name in region $cos_region." "1"
 			;;
+		301|302|307|308)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS bucket/object validation was redirected. This usually means BUCKET_REGION is wrong. Bucket: $import_bucket, object: $img_name, region used: $cos_region."
+			;;
 		403)
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS access denied for bucket/object $import_bucket/$img_name. For OTHERACCOUNT this normally means invalid HMAC keys, wrong bucket region, or missing COS permissions."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS access denied for bucket/object $import_bucket/$img_name in region $cos_region. For OTHERACCOUNT this normally means invalid HMAC keys, wrong bucket region, or missing COS permissions."
 			;;
 		404)
 			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS bucket or object not found: $import_bucket/$img_name in region $cos_region."
@@ -5076,11 +5086,11 @@ case $1 in
     ;;
 
    -imgimport)
-	if [[ $# -lt 7 || $# -gt 8 ]]
+	if [[ $# -lt 8 || $# -gt 9 ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
 	fi
-	img_import "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+	img_import "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
     ;;
 
   -vclonelsall)
