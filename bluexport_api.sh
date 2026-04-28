@@ -25,10 +25,30 @@
 # List all captured images
 #  in all Workspaces:            ./bluexport_api.sh -imglsall
 # Delete image:                  ./bluexport_api.sh -imgdel IMG_NAME
-# Import image from COS:         ./bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT IMGNAME_WS CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
-#      IMGNAME is the COS object filename. IMGNAME_WS is the image catalog name to create in the target workspace.
-#      STORAGE_TYPE must be one of: tier0, tier1, tier3, tier5k.
-#      If OTHERACCOUNT is used, HMACKEYS-JSON-FILE-PATH-NAME is mandatory.
+# Import image from COS:
+#   ./bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
+#
+#   STORAGE_TYPE must be one of:
+#     tier0 | tier1 | tier3 | tier5k
+#
+#   If OTHERACCOUNT is used:
+#     You must provide a JSON file with HMAC keys in the exact format from IBM Cloud COS Service Credentials.
+#
+#   How to obtain HMAC keys:
+#     1. Go to IBM Cloud → Cloud Object Storage
+#     2. Open your COS instance
+#     3. Go to "Service credentials"
+#     4. Open an existing credential or create a new one
+#     5. Ensure HMAC keys are enabled
+#     6. Copy the JSON exactly as shown and save it locally
+#
+#   Required JSON structure:
+#     {
+#         "cos_hmac_keys": {
+#             "access_key_id": "...",
+#             "secret_access_key": "..."
+#         }
+#     }
 #
 # === Cloud Object Storage (COS) ===
 # List buckets for all COS instances (from bluexscrt): 	./bluexport_api.sh -bucketslsall
@@ -366,11 +386,21 @@ help() {
 	echoscreen "List all captured images"
 	echoscreen " in all Workspaces:         ./bluexport_api.sh -imglsall"
 	echoscreen "Delete image:               ./bluexport_api.sh -imgdel IMG_NAME"
-	echoscreen "Import image from COS:      ./bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT IMGNAME_WS CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
-	echoscreen "  IMGNAME is the COS object filename."
-	echoscreen "  IMGNAME_WS is the image catalog name to create in the target workspace."
-	echoscreen "  STORAGE_TYPE: tier0 | tier1 | tier3 | tier5k"
-	echoscreen "  If OTHERACCOUNT is used, HMACKEYS-JSON-FILE-PATH-NAME is mandatory."
+	echoscreen "Import image from COS:"
+	echoscreen "  ./bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMAC_JSON]"
+	echoscreen ""
+	echoscreen "  STORAGE_TYPE:"
+	echoscreen "    tier0 | tier1 | tier3 | tier5k"
+	echoscreen ""
+	echoscreen "  OTHERACCOUNT:"
+	echoscreen "    Requires HMAC JSON file from IBM Cloud COS Service Credentials."
+	echoscreen ""
+	echoscreen "  To get HMAC keys:"
+	echoscreen "    IBM Cloud → COS → Service credentials → open/create → copy JSON"
+	echoscreen ""
+	echoscreen "  JSON must contain:"
+	echoscreen "    .cos_hmac_keys.access_key_id"
+	echoscreen "    .cos_hmac_keys.secret_access_key"
 	echoscreen ""
 	echoscreen "=== === Cloud Object Storage (COS) === ==="
 	echoscreen "List buckets for all COS instances: ./bluexport_api.sh -bucketslsall"
@@ -644,7 +674,7 @@ img_del() {
 }
 
 img_import_api() {
-	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/cos-images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+	curl -X POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/cos-images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
 ## Snapshots
