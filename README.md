@@ -191,6 +191,6 @@ MIT License — free to use, modify, and distribute.
 ## 👤 Author
 **Ricardo Martins**  
 IBM Power Technical Leader @ Blue Chip Portugal  
-IBM Champion 2025 • IBM Influencer 2025
+IBM Champion 2025 | 2026
 ```}
 
