@@ -114,8 +114,8 @@
 #
 # Note: Recurrence "hourly" and "daily" only permits captures to image-catalog.
 #
-# Ricardo Martins - Blue Chip Portugal - 2025-2026
-# IBM Champion 2025|2026
+# Ricardo Martins - IBM Champion 2025|2026
+# Blue Chip Portugal - 2025-2026
 ##########################################################################################
 # Ensure required tools are in PATH (IBM i + Linux safe)
 PATH="/QOpenSys/pkgs/bin:/QOpenSys/usr/bin:/usr/bin:${PATH}"
@@ -480,8 +480,8 @@ help() {
 	echoscreen ""
 	echoscreen "Note: Recurrence \"hourly\" and \"daily\" only permits captures to image-catalog."
 	echoscreen ""
-	echoscreen "Ricardo Martins - Blue Chip Portugal - 2025-2026"
-	echoscreen "IBM Champion 2025|2026"
+	echoscreen "Ricardo Martins - IBM Champion 2025|2026"
+	echoscreen "Blue Chip Portugal - 2025-2026"
 	echoscreen ""
 }
 #### END:FUNCTION - Help  ####
