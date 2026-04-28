@@ -25,7 +25,9 @@
 # List all captured images
 #  in all Workspaces:            ./bluexport_api.sh -imglsall
 # Delete image:                  ./bluexport_api.sh -imgdel IMG_NAME
-# Import image from COS:         ./bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
+# Import image from COS:         ./bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT IMGNAME_WS CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
+#      IMGNAME is the COS object filename. IMGNAME_WS is the image catalog name to create in the target workspace.
+#      STORAGE_TYPE must be one of: tier0, tier1, tier3, tier5k.
 #      If OTHERACCOUNT is used, HMACKEYS-JSON-FILE-PATH-NAME is mandatory.
 #
 # === Cloud Object Storage (COS) ===
@@ -364,7 +366,10 @@ help() {
 	echoscreen "List all captured images"
 	echoscreen " in all Workspaces:         ./bluexport_api.sh -imglsall"
 	echoscreen "Delete image:               ./bluexport_api.sh -imgdel IMG_NAME"
-	echoscreen "Import image from COS:      ./bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
+	echoscreen "Import image from COS:      ./bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT IMGNAME_WS CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
+	echoscreen "  IMGNAME is the COS object filename."
+	echoscreen "  IMGNAME_WS is the image catalog name to create in the target workspace."
+	echoscreen "  STORAGE_TYPE: tier0 | tier1 | tier3 | tier5k"
 	echoscreen "  If OTHERACCOUNT is used, HMACKEYS-JSON-FILE-PATH-NAME is mandatory."
 	echoscreen ""
 	echoscreen "=== === Cloud Object Storage (COS) === ==="
@@ -639,7 +644,7 @@ img_del() {
 }
 
 img_import_api() {
-	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/cos-images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
 ## Snapshots
@@ -4094,12 +4099,20 @@ img_import() {
 	local img_name="$1"
 	local import_bucket="$2"
 	local workspace_to_import="$3"
-	local account_type="$4"
-	local hmac_file="$5"
+	local img_name_ws="$4"
+	local storage_type="$5"
+	local account_type="$6"
+	local hmac_file="$7"
 
-	if [[ -z "$img_name" || -z "$import_bucket" || -z "$workspace_to_import" || -z "$account_type" ]]
+	if [[ -z "$img_name" || -z "$import_bucket" || -z "$workspace_to_import" || -z "$img_name_ws" || -z "$storage_type" || -z "$account_type" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
+	fi
+
+	storage_type=${storage_type,,}
+	if [[ "$storage_type" != "tier0" && "$storage_type" != "tier1" && "$storage_type" != "tier3" && "$storage_type" != "tier5k" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid storage type: $storage_type. Valid values are tier0, tier1, tier3 or tier5k."
 	fi
 
 	account_type=${account_type^^}
@@ -4121,7 +4134,9 @@ img_import() {
 	fi
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Image Import from COS ===" "1"
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image/Object: $img_name" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - COS image/object filename: $img_name" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Target image catalog name: $img_name_ws" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Storage Type: $storage_type" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Bucket: $import_bucket" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Target Workspace: $workspace_to_import" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Account Type: $account_type" "1"
@@ -4154,13 +4169,14 @@ img_import() {
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Could not resolve PowerVS API endpoint for workspace $full_ws_name region $region_api."
 	fi
 
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking if image $img_name already exists in Workspace $full_ws_name..." "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Workspace resolved: $workspace_to_import -> $ws_key ($full_ws_name)." "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking if image $img_name_ws already exists in Workspace $full_ws_name..." "1"
 	local imgs_json existing_img_id
 	imgs_json=$(img_ls 2>>"$log_file")
-	existing_img_id=$(echo "$imgs_json" | jq -r --arg name "$img_name" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file" | head -n1)
+	existing_img_id=$(echo "$imgs_json" | jq -r --arg name "$img_name_ws" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file" | head -n1)
 	if [[ -n "$existing_img_id" && "$existing_img_id" != "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Image $img_name already exists in Workspace $full_ws_name with ID $existing_img_id. Aborting to avoid duplicate import."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image $img_name_ws already exists in Workspace $full_ws_name with ID $existing_img_id. Aborting to avoid duplicate import."
 	fi
 
 	local cos_accesskey cos_secretkey cos_region
@@ -4218,17 +4234,26 @@ img_import() {
 			;;
 	esac
 
+	# Optional image import storage pool can be placed in the secrets JSON under .imageImport.
+	# Example: { "imageImport": { "storagePool": "StoragePool-3" } }
+	local storage_pool
+	storage_pool=$(jq -r '.imageImport.storagePool // empty' "$bluexscrt" 2>>"$log_file")
+
 	ACTIONS=$(jq -n \
-		--arg imageName "$img_name" \
+		--arg imageName "$img_name_ws" \
 		--arg imageFilename "$img_name" \
 		--arg bucketName "$import_bucket" \
 		--arg region "$cos_region" \
 		--arg accessKey "$cos_accesskey" \
 		--arg secretKey "$cos_secretkey" \
-		'{imageName:$imageName,imageFilename:$imageFilename,bucketName:$bucketName,region:$region,accessKey:$accessKey,secretKey:$secretKey}' \
+		--arg storageType "$storage_type" \
+		--arg storagePool "$storage_pool" \
+		'{imageName:$imageName,region:$region,imageFilename:$imageFilename,bucketName:$bucketName,accessKey:$accessKey,secretKey:$secretKey}
+		+ (if $storageType != "" then {storageType:$storageType} else {} end)
+		+ (if $storagePool != "" then {storagePool:$storagePool} else {} end)' \
 		| sed 's/^{//; s/}$//')
 
-	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Calling PowerVS Image Import API for $img_name into Workspace $full_ws_name..." "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Calling PowerVS COS Image Import API for object $img_name as image $img_name_ws into Workspace $full_ws_name..." "1"
 	local import_resp import_rc import_job_id import_error
 	import_resp=$(img_import_api 2>>"$log_file")
 	import_rc=$?
@@ -4240,7 +4265,7 @@ img_import() {
 		then
 			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - PowerVS image import rejected the COS credentials/HMAC keys: $import_error"
 		fi
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error calling PowerVS image import API for $img_name: $import_error"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error calling PowerVS image import API for $img_name_ws from COS object $img_name: $import_error"
 	fi
 
 	import_job_id=$(echo "$import_resp" | jq -r '.jobID // .id // .job.id // .jobReference.id // empty' 2>>"$log_file" | head -n1)
@@ -4250,7 +4275,7 @@ img_import() {
 	else
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image import submitted successfully. Response saved in $log_file" "1"
 	fi
-	abort "`date +%Y-%m-%d_%H:%M:%S` - === Image import request for $img_name submitted successfully to Workspace $full_ws_name. ==="
+	abort "`date +%Y-%m-%d_%H:%M:%S` - === Image import request for COS object $img_name as image $img_name_ws submitted successfully to Workspace $full_ws_name. ==="
 }
 #### END:FUNCTION - Import Image from COS (img_import) ####
 
@@ -5021,11 +5046,11 @@ case $1 in
     ;;
 
    -imgimport)
-	if [[ $# -lt 5 || $# -gt 6 ]]
+	if [[ $# -lt 7 || $# -gt 8 ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
 	fi
-	img_import "$2" "$3" "$4" "$5" "$6"
+	img_import "$2" "$3" "$4" "$5" "$6" "$7" "$8"
     ;;
 
   -vclonelsall)
