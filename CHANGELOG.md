@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- (future changes go here)
+
+## [1.10.0] - 2026-04-28
+
+### Added
+- `-imgimport` flag to import images from IBM Cloud Object Storage into a PowerVS workspace image catalog using the native `/cos-images` API
+- Support for explicit COS bucket region (`BUCKET_REGION`) to correctly target COS endpoints during image import
+- Support for explicit imported image name using `IMGNAME_WS`
+- Support for image import storage tier selection: `tier0`, `tier1`, `tier3`, `tier5k`
+- Support for current-account and cross-account COS image import using `CURRACCOUNT|OTHERACCOUNT`
+- HMAC JSON parsing for cross-account imports using IBM Cloud COS Service Credentials format: `.cos_hmac_keys.access_key_id` and `.cos_hmac_keys.secret_access_key`
+- Validation of HMAC JSON structure with explicit error handling for invalid COS credentials
+- Help text explaining how to obtain HMAC keys from IBM Cloud COS Service Credentials
+
 - Professional repository structure with `.gitignore`, `CONTRIBUTING.md`, and `CHANGELOG.md`
 - Issue and pull request templates
 - `.editorconfig` for consistent code formatting
@@ -71,13 +85,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History Summary
 
-- **1.9.x**: Current stable release with VSI operations and enhanced monitoring
+- **1.10.x**: Image import from COS and repository improvements
+- **1.9.x**: VSI operations and enhanced monitoring
 - **1.2.x**: Configuration management improvements
 - **1.0.x**: Initial release with core functionality
 
 ---
 
 ## Migration Notes
+
+### Upgrading to 1.10.0
+
+No breaking changes. New features are additive.
 
 ### Upgrading to 1.9.0
 
@@ -114,7 +133,8 @@ For issues, questions, or contributions:
 
 ---
 
-[Unreleased]: https://github.com/rqmartins73/bluexport_api/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/rqmartins73/bluexport_api/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/rqmartins73/bluexport_api/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/rqmartins73/bluexport_api/compare/v1.2.0...v1.9.0
 [1.2.0]: https://github.com/rqmartins73/bluexport_api/compare/v1.0.0...v1.2.0
 [1.0.0]: https://github.com/rqmartins73/bluexport_api/releases/tag/v1.0.0

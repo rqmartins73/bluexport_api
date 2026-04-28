@@ -8,7 +8,7 @@ API‑driven automation framework for IBM Cloud Power Virtual Server (PowerVS)
 It centralizes automation for:
 - VSI lifecycle operations
 - Snapshot management (create / update / delete / restore)
-- Captured images (list / delete)
+- Captured images (list / delete / import from COS)
 - Volume clones (create / delete / list)
 - Volume tier changes
 - Global Replication Services (GRS) orchestration
@@ -66,6 +66,9 @@ This will build a complete and valid `bluexscrt_*.json` secrets file that the ma
 ### **Captured Images**
 - List images across all workspaces
 - Delete captured images by name (auto‑workspace resolution)
+- Import images from IBM Cloud Object Storage into a target PowerVS workspace using the native `/cos-images` API
+- Supports current-account COS credentials from the secrets JSON or cross-account HMAC credentials exported from IBM Cloud COS Service Credentials
+- Explicit bucket region and storage tier selection for predictable image imports
 
 ### **Volume Clones**
 - Create volume clones (attached/detached)
@@ -123,6 +126,30 @@ This will build a complete and valid `bluexscrt_*.json` secrets file that the ma
 ```
 ./bluexport_api.sh -imglsall
 ./bluexport_api.sh -imgdel IMAGE_NAME
+./bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
+```
+
+`-imgimport` imports an image file stored in IBM Cloud Object Storage into a PowerVS workspace image catalog.
+
+Parameters:
+- `IMGNAME`: image object filename in the COS bucket
+- `BUCKET`: COS bucket name
+- `BUCKET_REGION`: COS bucket region, for example `eu-es`, `eu-de`, `us-east`
+- `WORKSPACE_TO_IMPORT`: target PowerVS workspace short name or configured workspace display name
+- `IMGNAME_WS`: image name to create in the target PowerVS workspace
+- `STORAGE_TYPE`: one of `tier0`, `tier1`, `tier3`, or `tier5k`
+- `CURRACCOUNT|OTHERACCOUNT`: use `CURRACCOUNT` for COS credentials already present in the bluexport secrets file, or `OTHERACCOUNT` for cross-account COS access
+- `HMACKEYS-JSON-FILE-PATH-NAME`: required only with `OTHERACCOUNT`
+
+For `OTHERACCOUNT`, create or open the IBM Cloud COS service credential with HMAC keys enabled, copy the JSON exactly as shown in the IBM Cloud GUI, and save it locally. The file must contain:
+
+```json
+{
+  "cos_hmac_keys": {
+    "access_key_id": "...",
+    "secret_access_key": "..."
+  }
+}
 ```
 
 ### Volume Clones
