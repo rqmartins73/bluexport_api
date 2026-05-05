@@ -114,6 +114,7 @@
 # Capture excluding ASP2_ & iASPname:
 #                                ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly
 #
+# Test mode (no capture):        ./bluexport_api.sh -ta vsiprd vsiprd_img image-catalog daily
 # Test mode (no capture):        ./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single
 #
 # Note: Recurrence "hourly" and "daily" only permits captures to image-catalog.
@@ -484,6 +485,7 @@ help() {
 	echoscreen "Capture excluding ASP2_ & iASPname:"
 	echoscreen '                            ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly'
 	echoscreen ""
+        echoscreen "Test mode (no capture):     ./bluexport_api.sh -ta vsiprd vsiprd_img image-catalog daily"
 	echoscreen "Test mode (no capture):     ./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single"
 	echoscreen ""
 	echoscreen "Note: Recurrence \"hourly\" and \"daily\" only permits captures to image-catalog."
