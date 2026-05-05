@@ -3,30 +3,30 @@
 # Capture IBM Cloud POWERVS IBM i VSI and Export to COS and/or Image Catalog, manage Snapshots, Volume Clones and GRS Volume Groups.
 #
 # === General ===
-# Changing secret file:         ./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)
-# View secret file in use:      ./bluexport_api.sh -viewscrt
+# Changing secret file:         bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)
+# View secret file in use:      bluexport_api.sh -viewscrt
 #
-# Show help:                    ./bluexport_api.sh -h | --help | -help
-# Show version:                 ./bluexport_api.sh -v | --version
+# Show help:                    bluexport_api.sh -h | --help | -help
+# Show version:                 bluexport_api.sh -v | --version
 #
 # === Capture & Export ===
-# Usage for all volumes:        ./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
-# Usage for excluding volumes:  ./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
-# Usage for monitoring job:     ./bluexport_api.sh -j VSI_NAME IMAGE_NAME
+# Usage for all volumes:        bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
+# Usage for excluding volumes:  bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
+# Usage for monitoring job:     bluexport_api.sh -j VSI_NAME IMAGE_NAME
 #
 # === Snapshots ===
-# Create snapshot:              ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]
-# Update snapshot:              ./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]
-# Delete snapshot:              ./bluexport_api.sh -snapdel  SNAPSHOT_NAME
-# Restore snapshot:             ./bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME
-# List all snapshots (all WS):  ./bluexport_api.sh -snaplsall
+# Create snapshot:              bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]
+# Update snapshot:              bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]
+# Delete snapshot:              bluexport_api.sh -snapdel  SNAPSHOT_NAME
+# Restore snapshot:             bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME
+# List all snapshots (all WS):  bluexport_api.sh -snaplsall
 #
 # === Captured Images ===
 # List all captured images
-#  in all Workspaces:           ./bluexport_api.sh -imglsall
-# Delete image:                 ./bluexport_api.sh -imgdel IMG_NAME
+#  in all Workspaces:           bluexport_api.sh -imglsall
+# Delete image:                 bluexport_api.sh -imgdel IMG_NAME
 # Import image from COS:
-#   ./bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
+#   bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
 #
 #   BUCKET_REGION is the IBM COS S3 endpoint region where the source bucket exists.
 #     Example: eu-es, eu-de, us-east, us-south. Do not use the PowerVS datacenter name here, for example mad02.
@@ -54,68 +54,68 @@
 #     }
 #
 # === Cloud Object Storage (COS) ===
-# List buckets for all COS instances (from bluexscrt): 	./bluexport_api.sh -bucketslsall
-# List objects from a COS bucket:     			./bluexport_api.sh -bucketlsobjs
-# Delete object from a COS bucket:    			./bluexport_api.sh -bucketdelobj
-# Restore object from Archive to COS bucket:		./bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]
+# List buckets for all COS instances (from bluexscrt): 	bluexport_api.sh -bucketslsall
+# List objects from a COS bucket:     			bluexport_api.sh -bucketlsobjs
+# Delete object from a COS bucket:    			bluexport_api.sh -bucketdelobj
+# Restore object from Archive to COS bucket:		bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]
 #
 # === Volume Clones ===
-# Create volume clone:          ./bluexport_api.sh -vclone CLONE_REQUEST_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
-# Delete volume clone:          ./bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes
-# List volume clones (all WS):  ./bluexport_api.sh -vclonelsall
+# Create volume clone:          bluexport_api.sh -vclone CLONE_REQUEST_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
+# Delete volume clone:          bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes
+# List volume clones (all WS):  bluexport_api.sh -vclonelsall
 #
 # === Volume Tier ===
-# Change volume tier:					./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
-# Change volume tier for all volumes attached to a VSI:	./bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO
+# Change volume tier:					bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
+# Change volume tier for all volumes attached to a VSI:	bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO
 #
 #   TIER_TO_CHANGE_TO must be one of:
 #     0 | 1 | 3 | 5k
 #
 # === GRS (Global Replication Services) ===
-# Create GRS Volume Group and onboard auxiliary volumes:  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
-# Delete GRS Volume Group and auxiliary volumes:	  ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
-# Failover GRS Volume Group (activate target):            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]
-# Cancel GRS failover (sync master->aux):                 ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
+# Create GRS Volume Group and onboard auxiliary volumes:  bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
+# Delete GRS Volume Group and auxiliary volumes:	  bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
+# Failover GRS Volume Group (activate target):            bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]
+# Cancel GRS failover (sync master->aux):                 bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
 # Failback GRS Volume Group (sync aux->master
-#      and re-enable replication master->aux):            ./bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME
-# Reverse GRS replication direction (sync aux->master):   ./bluexport_api.sh -grsreversereplica SOURCE_VSI TARGET_VSI VG_NAME
+#      and re-enable replication master->aux):            bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME
+# Reverse GRS replication direction (sync aux->master):   bluexport_api.sh -grsreversereplica SOURCE_VSI TARGET_VSI VG_NAME
 #
 #  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON.
 #  VG_NAME:                        Name for the Volume Group to create on the source workspace.
 #  SOURCE_VOLUMES_NAME:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS).
 #
 # === VSI Operations ==="
-# IPL VSI:                      ./bluexport_api.sh -vsistart VSI_NAME
+# IPL VSI:                      bluexport_api.sh -vsistart VSI_NAME
 #      Start a Virtual Server Instance. VSI must be in SHUTOFF status.
 #
-# VSI Operations:               ./bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE
+# VSI Operations:               bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE
 #      Set IBM i boot/operating mode for a VSI.
 #      BOOT_MODE: a | b | c | d
 #      OPERATING_MODE: normal | manual
 #
-# VSI Tasks:                    ./bluexport_api.sh -vsitask VSI_NAME TASK
+# VSI Tasks:                    bluexport_api.sh -vsitask VSI_NAME TASK
 #      Run an IBM i operation task on a VSI.
 #      TASK: dston | retrydump | consoleservice | iopreset | remotedstoff |
 #            remotedston | iopdump | dumprestart
 #
-# Monitor VSI SRC:             	./bluexport_api.sh -vsisrcmon VSI_NAME  START|SHUTOFF
+# Monitor VSI SRC:             	bluexport_api.sh -vsisrcmon VSI_NAME  START|SHUTOFF
 #      START   -> Monitor until status=ACTIVE and SRC=00000000
 #      SHUTOFF -> Monitor until status=SHUTOFF (SRC ignored)
 #
-# Attach volumes by common name: ./bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME
+# Attach volumes by common name: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME
 #      Attach all volumes in the workspace whose name contains VOLUMES_COMMON_NAME.
 #      VSI must be SHUTOFF. Volumes already attached are skipped.
-# Detach ALL volumes from a VSI: ./bluexport_api.sh -detachvolumes VSI_NAME
+# Detach ALL volumes from a VSI: bluexport_api.sh -detachvolumes VSI_NAME
 #       Detach all volumes currently attached to the VSI. VSI must be SHUTOFF.
 #
 # === Examples ===
-# Capture all volumes:           ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily
-# Capture excluding ASP2_:       ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly
+# Capture all volumes:           bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily
+# Capture excluding ASP2_:       bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly
 # Capture excluding ASP2_ & iASPname:
-#                                ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly
+#                                bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly
 #
-# Test mode (no capture):        ./bluexport_api.sh -ta vsiprd vsiprd_img image-catalog daily
-# Test mode (no capture):        ./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single
+# Test mode (no capture):        bluexport_api.sh -ta vsiprd vsiprd_img image-catalog daily
+# Test mode (no capture):        bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single
 #
 # Note: Recurrence "hourly" and "daily" only permits captures to image-catalog.
 #
@@ -373,30 +373,30 @@ help() {
 	echoscreen "Version: $Version"
 	echoscreen ""
 	echoscreen "=== === General === ==="
-	echoscreen "Changing secret file:       ./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new.json)  (will also ask/update log file path)"
-	echoscreen "View secret file in use:    ./bluexport_api.sh -viewscrt"
+	echoscreen "Changing secret file:       bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new.json)  (will also ask/update log file path)"
+	echoscreen "View secret file in use:    bluexport_api.sh -viewscrt"
 	echoscreen ""
-	echoscreen "Show help:                  ./bluexport_api.sh -h | --help | -help"
-	echoscreen "Show version:               ./bluexport_api.sh -v | --version"
+	echoscreen "Show help:                  bluexport_api.sh -h | --help | -help"
+	echoscreen "Show version:               bluexport_api.sh -v | --version"
 	echoscreen ""
 	echoscreen "=== === Capture & Export === ==="
-	echoscreen "Usage for all volumes:        ./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
-	echoscreen "Usage for excluding volumes:  ./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
-	echoscreen "Usage for monitoring job:     ./bluexport_api.sh -j VSI_NAME IMAGE_NAME"
+	echoscreen "Usage for all volumes:        bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+	echoscreen "Usage for excluding volumes:  bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+	echoscreen "Usage for monitoring job:     bluexport_api.sh -j VSI_NAME IMAGE_NAME"
 	echoscreen ""
 	echoscreen "=== === Snapshots === ==="
-	echoscreen "Create snapshot:            ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]"
-	echoscreen "Update snapshot:            ./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]"
-	echoscreen "Delete snapshot:            ./bluexport_api.sh -snapdel  SNAPSHOT_NAME"
-	echoscreen "Restore snapshot:           ./bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME"
-	echoscreen "List all snapshots(all WS): ./bluexport_api.sh -snaplsall"
+	echoscreen "Create snapshot:            bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]"
+	echoscreen "Update snapshot:            bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]"
+	echoscreen "Delete snapshot:            bluexport_api.sh -snapdel  SNAPSHOT_NAME"
+	echoscreen "Restore snapshot:           bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME"
+	echoscreen "List all snapshots(all WS): bluexport_api.sh -snaplsall"
 	echoscreen ""
 	echoscreen "=== === Captured Images === ==="
 	echoscreen "List all captured images"
-	echoscreen " in all Workspaces:         ./bluexport_api.sh -imglsall"
-	echoscreen "Delete image:               ./bluexport_api.sh -imgdel IMG_NAME"
+	echoscreen " in all Workspaces:         bluexport_api.sh -imglsall"
+	echoscreen "Delete image:               bluexport_api.sh -imgdel IMG_NAME"
 	echoscreen "Import image from COS:"
-	echoscreen "  ./bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMAC_JSON]"
+	echoscreen "  bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMAC_JSON]"
 	echoscreen ""
 	echoscreen "  BUCKET_REGION:"
 	echoscreen "    IBM COS S3 endpoint region where the source bucket exists."
@@ -417,76 +417,76 @@ help() {
 	echoscreen "    .cos_hmac_keys.secret_access_key"
 	echoscreen ""
 	echoscreen "=== === Cloud Object Storage (COS) === ==="
-	echoscreen "List buckets for all COS instances: ./bluexport_api.sh -bucketslsall"
-	echoscreen "List objects from a COS bucket:     ./bluexport_api.sh -bucketlsobjs"
-	echoscreen "Delete object from a COS bucket:    ./bluexport_api.sh -bucketdelobj"
-	echoscreen "Restore object from Archive to COS bucket: ./bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
+	echoscreen "List buckets for all COS instances: bluexport_api.sh -bucketslsall"
+	echoscreen "List objects from a COS bucket:     bluexport_api.sh -bucketlsobjs"
+	echoscreen "Delete object from a COS bucket:    bluexport_api.sh -bucketdelobj"
+	echoscreen "Restore object from Archive to COS bucket: bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
 	echoscreen "  DAYS default is 3."
 	echoscreen "  ARCHIVE_TYPE default is Acelerated"
 	echoscreen ""
 	echoscreen "=== === Volume Clones === ==="
-	echoscreen "Create volume clone:        ./bluexport_api.sh -vclone REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
-	echoscreen "Delete volume clone:        ./bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes"
-	echoscreen "List volume clones(all WS): ./bluexport_api.sh -vclonelsall"
+	echoscreen "Create volume clone:        bluexport_api.sh -vclone REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)"
+	echoscreen "Delete volume clone:        bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes"
+	echoscreen "List volume clones(all WS): bluexport_api.sh -vclonelsall"
 	echoscreen ""
 	echoscreen "=== === Volume Tier === ==="
-	echoscreen "Change volume tier:         		./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
-	echoscreen "Change volume tier (all VSI volumes):	./bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO"
+	echoscreen "Change volume tier:         		bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
+	echoscreen "Change volume tier (all VSI volumes):	bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO"
 	echoscreen ""
 	echoscreen "  TIER_TO_CHANGE_TO:"
 	echoscreen "    0 | 1 | 3 | 5k"
 	echoscreen ""
 	echoscreen "=== === GRS (Global Replication Services) === ==="
 	echoscreen "Create GRS Volume Group and onboard auxiliary volumes:"
-	echoscreen "                            ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+	echoscreen "                            bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	echoscreen "Delete GRS Volume Group and auxiliary volumes:"
-	echoscreen "                            ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+	echoscreen "                            bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	echoscreen "Failover GRS Volume Group (activate target):"
-	echoscreen "                            ./bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
+	echoscreen "                            bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
 	echoscreen "Cancel GRS failover (start from master. Replication master->aux):"
-	echoscreen "                            ./bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI"
+	echoscreen "                            bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI"
 	echoscreen "Failback GRS Volume Group (sync aux->master and re-enable replication master->aux):"
-	echoscreen "                            ./bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME"
+	echoscreen "                            bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME"
 	echoscreen "Reverse GRS replication direction (sync aux->master):"
-	echoscreen "                            ./bluexport_api.sh -grsreversereplica SOURCE_VSI TARGET_VSI VG_NAME"
+	echoscreen "                            bluexport_api.sh -grsreversereplica SOURCE_VSI TARGET_VSI VG_NAME"
 	echoscreen ""
 	echoscreen "  SOURCE_VSI / TARGET_VSI:        Logical PowerVS instance names as defined in your JSON."
 	echoscreen "  VG_NAME:                        Name for the Volume Group to create on the source workspace."
 	echoscreen "  SOURCE_VOLUMES_NAME:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS)."
 	echoscreen ""
 	echoscreen "=== === VSI Operations === ==="
-	echoscreen "IPL VSI:                    ./bluexport_api.sh -vsistart VSI_NAME"
+	echoscreen "IPL VSI:                    bluexport_api.sh -vsistart VSI_NAME"
 	echoscreen "      Start a Virtual Server Instance. VSI must be in SHUTOFF status."
 	echoscreen ""
-	echoscreen "VSI Operations:             ./bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE"
+	echoscreen "VSI Operations:             bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE"
 	echoscreen "      Set IBM i boot/operating mode for a VSI."
 	echoscreen "      BOOT_MODE: a | b | c | d"
 	echoscreen "      OPERATING_MODE: normal | manual"
 	echoscreen ""
-	echoscreen "VSI Tasks:                  ./bluexport_api.sh -vsitask VSI_NAME TASK"
+	echoscreen "VSI Tasks:                  bluexport_api.sh -vsitask VSI_NAME TASK"
 	echoscreen "      Run an IBM i operation task on a VSI."
 	echoscreen "      TASK: dston | retrydump | consoleservice | iopreset | remotedstoff |"
 	echoscreen "            remotedston | iopdump | dumprestart"
 	echoscreen ""
-	echoscreen "Monitor VSI SRC:            ./bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF"
+	echoscreen "Monitor VSI SRC:            bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF"
 	echoscreen "      START   -> Monitor until VSI reaches ACTIVE and SRC 00000000"
 	echoscreen "      SHUTOFF -> Monitor until VSI reaches SHUTOFF (SRC ignored)"
 	echoscreen ""
-	echoscreen "Attach volumes by common name: ./bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME"
+	echoscreen "Attach volumes by common name: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME"
 	echoscreen "      Attach all volumes in the workspace whose name contains VOLUMES_COMMON_NAME."
 	echoscreen "      VSI must be SHUTOFF. Volumes already attached are skipped."
 	echoscreen ""
-	echoscreen "Detach ALL volumes from a VSI: ./bluexport_api.sh -detachvolumes VSI_NAME"
+	echoscreen "Detach ALL volumes from a VSI: bluexport_api.sh -detachvolumes VSI_NAME"
 	echoscreen "      Detach all volumes currently attached to the VSI. VSI must be SHUTOFF."
         echoscreen ""
 	echoscreen "=== === Examples === ==="
-	echoscreen "Capture all volumes:        ./bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
-	echoscreen "Capture excluding ASP2_:    ./bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly"
+	echoscreen "Capture all volumes:        bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
+	echoscreen "Capture excluding ASP2_:    bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly"
 	echoscreen "Capture excluding ASP2_ & iASPname:"
-	echoscreen '                            ./bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly'
+	echoscreen '                            bluexport_api.sh -x "ASP2_ iASPname" vsiprd vsiprd_img both monthly'
 	echoscreen ""
-        echoscreen "Test mode (no capture):     ./bluexport_api.sh -ta vsiprd vsiprd_img image-catalog daily"
-	echoscreen "Test mode (no capture):     ./bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single"
+        echoscreen "Test mode (no capture):     bluexport_api.sh -ta vsiprd vsiprd_img image-catalog daily"
+	echoscreen "Test mode (no capture):     bluexport_api.sh -tx ASP2_ vsiprd vsiprd_img both single"
 	echoscreen ""
 	echoscreen "Note: Recurrence \"hourly\" and \"daily\" only permits captures to image-catalog."
 	echoscreen ""
