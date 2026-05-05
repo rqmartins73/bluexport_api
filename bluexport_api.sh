@@ -3,28 +3,28 @@
 # Capture IBM Cloud POWERVS IBM i VSI and Export to COS and/or Image Catalog, manage Snapshots, Volume Clones and GRS Volume Groups.
 #
 # === General ===
-# Changing secret file:          ./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)
-# View secret file in use:       ./bluexport_api.sh -viewscrt
+# Changing secret file:         ./bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new)
+# View secret file in use:      ./bluexport_api.sh -viewscrt
 #
-# Show help:                     ./bluexport_api.sh -h | --help | -help
-# Show version:                  ./bluexport_api.sh -v | --version
+# Show help:                    ./bluexport_api.sh -h | --help | -help
+# Show version:                 ./bluexport_api.sh -v | --version
 #
 # === Capture & Export ===
-# Usage for all volumes:         ./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
-# Usage for excluding volumes:   ./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
-# Usage for monitoring job:      ./bluexport_api.sh -j VSI_NAME IMAGE_NAME
+# Usage for all volumes:        ./bluexport_api.sh -a VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
+# Usage for excluding volumes:  ./bluexport_api.sh -x volumes_name_to_exclude VSI_Name_to_Capture Capture_Image_Name both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
+# Usage for monitoring job:     ./bluexport_api.sh -j VSI_NAME IMAGE_NAME
 #
 # === Snapshots ===
-# Create snapshot:               ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]
-# Update snapshot:               ./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]
-# Delete snapshot:               ./bluexport_api.sh -snapdel  SNAPSHOT_NAME
-# Restore snapshot:              ./bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME
-# List all snapshots (all WS):   ./bluexport_api.sh -snaplsall
+# Create snapshot:              ./bluexport_api.sh -snapcr   VSI_NAME SNAPSHOT_NAME 0|[DESCRIPTION] 0|[VOLUMES(Comma separated list)]
+# Update snapshot:              ./bluexport_api.sh -snapupd  SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[DESCRIPTION]
+# Delete snapshot:              ./bluexport_api.sh -snapdel  SNAPSHOT_NAME
+# Restore snapshot:             ./bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME
+# List all snapshots (all WS):  ./bluexport_api.sh -snaplsall
 #
 # === Captured Images ===
 # List all captured images
-#  in all Workspaces:            ./bluexport_api.sh -imglsall
-# Delete image:                  ./bluexport_api.sh -imgdel IMG_NAME
+#  in all Workspaces:           ./bluexport_api.sh -imglsall
+# Delete image:                 ./bluexport_api.sh -imgdel IMG_NAME
 # Import image from COS:
 #   ./bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
 #
@@ -60,12 +60,16 @@
 # Restore object from Archive to COS bucket:		./bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]
 #
 # === Volume Clones ===
-# Create volume clone:           ./bluexport_api.sh -vclone CLONE_REQUEST_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
-# Delete volume clone:           ./bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes
-# List volume clones (all WS):   ./bluexport_api.sh -vclonelsall
+# Create volume clone:          ./bluexport_api.sh -vclone CLONE_REQUEST_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) STORAGE_TIER ALL|(Comma separated Volumes name list to clone)
+# Delete volume clone:          ./bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes
+# List volume clones (all WS):  ./bluexport_api.sh -vclonelsall
 #
 # === Volume Tier ===
-# Change volume tier:            ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
+# Change volume tier:           ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
+# Change volume tier for all
+#  volumes attached to a VSI:	./bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO
+#
+#   Applies the tier change to all volumes attached to the specified VSI.
 #
 #   TIER_TO_CHANGE_TO must be one of:
 #     0 | 1 | 3 | 5k
@@ -84,20 +88,20 @@
 #  SOURCE_VOLUMES_NAME:            Common name/prefix to identify source VSI volumes (e.g. IBMiGRS).
 #
 # === VSI Operations ==="
-# IPL VSI:                       ./bluexport_api.sh -vsistart VSI_NAME
+# IPL VSI:                      ./bluexport_api.sh -vsistart VSI_NAME
 #      Start a Virtual Server Instance. VSI must be in SHUTOFF status.
 #
-# VSI Operations:                ./bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE
+# VSI Operations:               ./bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE
 #      Set IBM i boot/operating mode for a VSI.
 #      BOOT_MODE: a | b | c | d
 #      OPERATING_MODE: normal | manual
 #
-# VSI Tasks:                     ./bluexport_api.sh -vsitask VSI_NAME TASK
+# VSI Tasks:                    ./bluexport_api.sh -vsitask VSI_NAME TASK
 #      Run an IBM i operation task on a VSI.
 #      TASK: dston | retrydump | consoleservice | iopreset | remotedstoff |
 #            remotedston | iopdump | dumprestart
 #
-# Monitor VSI SRC:               ./bluexport_api.sh -vsisrcmon VSI_NAME  START|SHUTOFF
+# Monitor VSI SRC:             	./bluexport_api.sh -vsisrcmon VSI_NAME  START|SHUTOFF
 #      START   -> Monitor until status=ACTIVE and SRC=00000000
 #      SHUTOFF -> Monitor until status=SHUTOFF (SRC ignored)
 #
@@ -429,6 +433,9 @@ help() {
 	echoscreen ""
 	echoscreen "=== === Volume Tier === ==="
 	echoscreen "Change volume tier:         ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
+	echoscreen "Change volume tier (all VSI volumes): ./bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO"
+	echoscreen ""
+	echoscreen "  Applies the tier change to all volumes attached to the VSI."
 	echoscreen ""
 	echoscreen "  TIER_TO_CHANGE_TO:"
 	echoscreen "    0 | 1 | 3 | 5k"
