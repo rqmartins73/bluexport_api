@@ -67,6 +67,9 @@
 # === Volume Tier ===
 # Change volume tier:            ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
 #
+#   TIER_TO_CHANGE_TO must be one of:
+#     0 | 1 | 3 | 5k
+#
 # === GRS (Global Replication Services) ===
 # Create GRS Volume Group and onboard auxiliary volumes:  ./bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 # Delete GRS Volume Group and auxiliary volumes:	  ./bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
@@ -426,6 +429,9 @@ help() {
 	echoscreen ""
 	echoscreen "=== === Volume Tier === ==="
 	echoscreen "Change volume tier:         ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
+	echoscreen ""
+	echoscreen "  TIER_TO_CHANGE_TO:"
+	echoscreen "    0 | 1 | 3 | 5k"
 	echoscreen ""
 	echoscreen "=== === GRS (Global Replication Services) === ==="
 	echoscreen "Create GRS Volume Group and onboard auxiliary volumes:"
@@ -4515,6 +4521,11 @@ case $1 in
 	if [ $# -gt 4 ]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
+	fi
+	# Validate STORAGE TIER (vchtier)
+	if [[ "$tier" != "tier0" && "$tier" != "tier1" && "$tier" != "tier3" && "$tier" != "tier5k" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Invalid STORAGE TIER '$tier'. Valid values: 0 | 1 | 3 | 5k"
 	fi
 	IFS=' ' read -r -a volchtier_names <<< "$3"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Common name of volumes to change to tier $tier: ${volchtier_names[*]}" "1"
