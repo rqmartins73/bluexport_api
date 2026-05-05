@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# bluexscrt_config.api
+# bluexscrt_config_api.sh
 #
-# Ricardo Martins - Blue Chip Portugal © 2025-2025
+# Ricardo Martins - Blue Chip Portugal © 2025-2026
 #################################################################
 
 set -euo pipefail
@@ -21,7 +21,7 @@ if [[ "$flag" == "-v" || "$flag" == "--version" ]]; then
 		exit 1
 	fi
 	echo
-	jq -n --arg version "$VERSION" '{tool:"bluexscrt_config.api", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2025"}'
+	jq -n --arg version "$VERSION" '{tool:"bluexscrt_config_api.sh", version:$version, author:"Ricardo Martins", company:"Blue Chip Portugal", license:"MIT", maintained:"2025-2026"}'
 	echo "$(date +%Y-%m-%d_%H:%M:%S)"
 	echo
 	exit 0
@@ -43,40 +43,44 @@ fi
 usage() {
   cat <<EOF
 
-bluexscrt_config.api v$VERSION
+bluexscrt_config_api.sh v$VERSION
 
 Usage:
   $(basename "$0") [option] [args]
 
 Options:
-  -v
-      Show tool version as JSON.
+  -v | --version
+      Show tool version as JSON (tool name, version, author, license).
 
   -createconfig
       Run an interactive wizard to:
-        - create the initial bluexscrt JSON (IBM Cloud API key, COS, SSH user/key)
-        - create or update bluexport_conf.json
+        - create the initial bluexscrt JSON (IBM Cloud API key, COS credentials, SSH user/key)
+        - create or update bluexport_api_conf.json (the main config file used by bluexport_api.sh)
+        - discover Cloud Object Storage instances and populate .cos_instances
         - discover PowerVS workspaces via API and populate .workspaces
-        - discover IBM i LPARs and populate .systems
-        - optionally create the SSH user on the IBM i LPARs and copy the key
+        - discover IBM i LPARs in all workspaces and populate .systems
+        - optionally create the SSH user on the IBM i LPARs and deploy the public key
 
   -dellpar NAME
-      Delete an LPAR (system) named NAME from .systems[] in the JSON config
-      (match is case-insensitive on the "name" field).
+      Delete an LPAR (system) named NAME from .systems[] in the JSON config.
+      The match on "name" is case-insensitive.
 
   -addlpar NAME IP PVM_ID WORKSPACE_SHORT
       Add or update a single LPAR (system) entry in .systems[]:
         NAME            Logical system name (e.g. ibmi75m2)
-        IP              IP address to use (SSH / bluexport)
+        IP              IP address used for SSH and bluexport operations
         PVM_ID          PowerVS pvmInstanceID of the LPAR
-        WORKSPACE_SHORT Workspace key as defined under .workspaces (e.g. WSMAD2)
+        WORKSPACE_SHORT Workspace key as defined under .workspaces in the JSON (e.g. WSMAD2)
 
   -updlpars
-      Discover IBM i LPARs in all configured workspaces (via PowerVS APIs) and:
-        - add new IBM i systems to .systems[]
-        - remove systems that no longer exist
-        - refresh pvmInstanceID and workspace for existing entries
+      Refresh IBM i LPARs and COS instances from IBM Cloud APIs:
+        - discover IBM i LPARs in all configured workspaces
+        - add new IBM i systems to .systems[], remove obsolete ones, refresh pvmInstanceID
+        - refresh .cos_instances from IBM Cloud
       At the end, prints a masked snapshot of the current JSON config.
+
+  -h | --help
+      Show this help.
 
 Examples:
   $(basename "$0") -v
@@ -227,7 +231,7 @@ default_base_url=$base_mad02 # change to your prefered
 #### END: API Environment ###
 
 #### START:FUNCTION - get_base_url_for_workspace ####
-# ===== Derive base_url from workspace CRN =====
+# Derive base_url from workspace CRN
 get_base_url_for_workspace() {
   local ws_key="$1"   # ex: WSFRA1, WSMAD2
   local crn region_raw region_api base_var url
@@ -256,7 +260,7 @@ get_base_url_for_workspace() {
   echo "$url"
   return 0
 }
-#### START:FUNCTION - get_base_url_for_workspace ####
+#### END:FUNCTION - get_base_url_for_workspace ####
 
 #### START:FUNCTION - API Commands ####
 ##  Workspace management aliases
@@ -720,7 +724,7 @@ discover_workspaces_via_powervs() {
 #### START:FUNCTION - run_createconfig ####
 run_createconfig() {
 	echo ""
-	echo "### bluexscrt_config.api - Initial JSON configuration (-createconfig)"
+	echo "### bluexscrt_config_api.sh - Initial JSON configuration (-createconfig)"
 	echo ""
 	local default_json_path="$HOME/bluexscrt_bcce.json"
 	local json_path apikey_input resource_group cos_region acckey seckey bucket vsi_user ssh_key_path default_ssh
@@ -802,7 +806,7 @@ EOF
 	chmod 600 "$json_path"
 	echo "### Created bluexscrt JSON at $json_path"
 
-	# 2) Criar/atualizar bluexport_conf.json
+	# 2) Criar/atualizar bluexport_api_conf.json
 	if [[ ! -f "$conf_file" ]]; then
 		cat > "$conf_file" <<EOF
 {
@@ -826,7 +830,7 @@ EOF
 EOF
 		echo "### Created $conf_file"
 	else
-		read -p "bluexport_conf.json already exists. Update its bluexscrt path to $json_path? (Y/N) " upd
+		read -p "bluexport_api_conf.json already exists. Update its bluexscrt path to $json_path? (Y/N) " upd
 		if [[ "$upd" =~ ^[Yy]$ ]]; then
 			tmp="${conf_file}.tmp"
 			jq --arg path "$json_path" '.bluexscrt = $path' "$conf_file" > "$tmp" && mv "$tmp" "$conf_file"
@@ -1207,6 +1211,11 @@ set_ws_context() {
 #### END:FUNCTION - set_ws_context ####
 
 case "$flag" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+
   -createconfig)
     run_createconfig
     ;;

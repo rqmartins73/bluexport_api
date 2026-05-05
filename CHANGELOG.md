@@ -12,12 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.10.1] - 2026-05-05
 
-### Fixed
+### Fixed (`bluexport_api.sh`)
 - `-vsistart` error message incorrectly referenced the flag as `-startvsi`
 - Config file missing message used `$bluexscrt` (not yet loaded at that point) instead of `$conf_file`, resulting in an empty variable in the output
 - "Iniciating Job Monitorization" corrected to "Initiating Job Monitoring"
 
-### Changed
+### Fixed (`bluexscrt_config_api.sh`)
+- Tool name throughout the file was `bluexscrt_config.api` (dot notation) instead of `bluexscrt_config_api.sh`
+- Copyright year range was `2025-2025`; corrected to `2025-2026`
+- `usage()` and `-createconfig` wizard referred to `bluexport_conf.json`; correct name is `bluexport_api_conf.json`
+- END marker for `get_base_url_for_workspace` function was mistakenly written as START
+
+### Changed (`bluexport_api.sh`)
 - Help and header comment for `-a` / `-x`: clarified that `hourly` and `daily` are only valid with `image-catalog`; documented `-ta` / `-tx` test mode inline
 - Help for `-snapcr` and `-snapupd`: explained meaning of `0` placeholder for optional arguments
 - Help for `-vclonedel`: clarified behaviour of `0` (keep cloned volumes) vs `delete_volumes` (also delete cloned volumes)
@@ -30,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `README.md`: added `-insvchtier` command and `TIER_TO_CHANGE_TO` values to Volume Tier section
 - `README.md`: `-vclone` usage updated to show explicit tier values
 - `CHANGELOG.md`: "Acelerated" typo corrected to "Accelerated" (two occurrences in help and header)
+
+### Changed (`bluexscrt_config_api.sh`)
+- `usage()`: expanded `-v` description; added `-h | --help` entry; clarified that `-createconfig` also discovers COS instances; clarified `-addlpar` `WORKSPACE_SHORT` parameter; documented that `-updlpars` also refreshes `cos_instances`
+- Added `-h | --help` to the `case` dispatcher (previously fell through to `*` with exit 1)
 
 ## [1.10.0] - 2026-04-28
 
