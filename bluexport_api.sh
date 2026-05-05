@@ -4551,6 +4551,11 @@ case $1 in
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME TIER_TO_CHANGE_TO"
 	fi
+	# Validate STORAGE TIER (insvchtier)
+	if [[ "$tier" != "tier0" && "$tier" != "tier1" && "$tier" != "tier3" && "$tier" != "tier5k" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Invalid STORAGE TIER '$tier'. Valid values: 0 | 1 | 3 | 5k"
+	fi
 	vsi=$2
 	vsi_id_bluexscrt
 	check_locally_VSI_exists
