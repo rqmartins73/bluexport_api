@@ -183,7 +183,7 @@ Use `0` as a placeholder when a parameter is not applicable (e.g. no description
 ```
 ./bluexport_api.sh -imglsall
 ./bluexport_api.sh -imgdel IMAGE_NAME
-./bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]
+./bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]
 ```
 
 `-imgimport` imports an image file stored in IBM Cloud Object Storage into a PowerVS workspace image catalog.
@@ -196,7 +196,7 @@ Parameters:
 - `IMGNAME_WS`: image name to create in the target PowerVS workspace
 - `STORAGE_TYPE`: one of `tier0`, `tier1`, `tier3`, or `tier5k`
 - `CURRACCOUNT|OTHERACCOUNT`: use `CURRACCOUNT` for COS credentials already present in the bluexport secrets file, or `OTHERACCOUNT` for cross-account COS access
-- `HMACKEYS-JSON-FILE-PATH-NAME`: required only with `OTHERACCOUNT`
+- `HMAC_JSON_FILE`: full path to the HMAC keys JSON file, required only with `OTHERACCOUNT`
 
 For `OTHERACCOUNT`, create or open the IBM Cloud COS service credential with HMAC keys enabled, copy the JSON exactly as shown in the IBM Cloud GUI, and save it locally. The file must contain:
 
@@ -224,7 +224,7 @@ For `OTHERACCOUNT`, create or open the IBM Cloud COS service credential with HMA
 
 ### Volume Clones
 ```
-./bluexport_api.sh -vclone REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False True|False STORAGE_TIER ALL|VOLUMES
+./bluexport_api.sh -vclone REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False True|False tier0|tier1|tier3|tier5k ALL|VOLUMES
 ./bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes
 ./bluexport_api.sh -vclonelsall
 ```
@@ -235,8 +235,14 @@ For `OTHERACCOUNT`, create or open the IBM Cloud COS service credential with HMA
 
 ### Volume Tier Updates
 ```
+# Change tier for specific volumes (by name pattern)
 ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
+
+# Change tier for ALL volumes attached to a VSI
+./bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO
 ```
+
+- `TIER_TO_CHANGE_TO`: `0 | 1 | 3 | 5k`
 
 ### GRS Operations
 ```
@@ -252,7 +258,7 @@ For `OTHERACCOUNT`, create or open the IBM Cloud COS service credential with HMA
 - `VG_NAME`: name for the Volume Group to create on the source workspace
 - `SOURCE_VOL_PREFIX`: common name/prefix to identify source VSI volumes (e.g. `IBMiGRS`)
 - `-grsfailover ATTACH`: automatically attaches auxiliary volumes to the target VSI after failover
-- `-grscancelfailover`: rolls back a failover and re-establishes primary replication direction
+- `-grscancelfailover`: resyncs from master to auxiliary and reactivates master→auxiliary replication
 
 ---
 

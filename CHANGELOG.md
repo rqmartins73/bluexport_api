@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.10.1] - 2026-05-05
+
+### Fixed
+- `-vsistart` error message incorrectly referenced the flag as `-startvsi`
+- Config file missing message used `$bluexscrt` (not yet loaded at that point) instead of `$conf_file`, resulting in an empty variable in the output
+- "Iniciating Job Monitorization" corrected to "Initiating Job Monitoring"
+
+### Changed
+- Help and header comment for `-a` / `-x`: clarified that `hourly` and `daily` are only valid with `image-catalog`; documented `-ta` / `-tx` test mode inline
+- Help for `-snapcr` and `-snapupd`: explained meaning of `0` placeholder for optional arguments
+- Help for `-vclonedel`: clarified behaviour of `0` (keep cloned volumes) vs `delete_volumes` (also delete cloned volumes)
+- Help for `-vclone`: `STORAGE_TIER` replaced with explicit `tier0|tier1|tier3|tier5k` (distinct from `-vchtier` which accepts `0|1|3|5k`)
+- Help for `-bucketlsobjs` and `-bucketdelobj`: marked as interactive (guided selection)
+- Help for `-restorefromarchive`: documented all `ARCHIVE_TYPE` options (Bulk | Standard | Accelerated) and default values
+- Help for `-grscancelfailover`: rewritten for clarity ("resync from master to aux, reactivate master→aux replication")
+- Help for `-vsistart`: "IPL VSI" expanded to "IPL/Start VSI" with inline note
+- `-imgimport` parameter renamed from `HMACKEYS-JSON-FILE-PATH-NAME` to `HMAC_JSON_FILE` in help, header comment, and README
+- `README.md`: added `-insvchtier` command and `TIER_TO_CHANGE_TO` values to Volume Tier section
+- `README.md`: `-vclone` usage updated to show explicit tier values
+- `CHANGELOG.md`: "Acelerated" typo corrected to "Accelerated" (two occurrences in help and header)
+
 ## [1.10.0] - 2026-04-28
 
 ### Added
@@ -85,7 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History Summary
 
-- **1.10.x**: Image import from COS and repository improvements
+- **1.10.x**: Image import from COS, repository improvements, help and bug fixes
 - **1.9.x**: VSI operations and enhanced monitoring
 - **1.2.x**: Configuration management improvements
 - **1.0.x**: Initial release with core functionality
@@ -133,7 +154,8 @@ For issues, questions, or contributions:
 
 ---
 
-[Unreleased]: https://github.com/rqmartins73/bluexport_api/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/rqmartins73/bluexport_api/compare/v1.10.1...HEAD
+[1.10.1]: https://github.com/rqmartins73/bluexport_api/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/rqmartins73/bluexport_api/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/rqmartins73/bluexport_api/compare/v1.2.0...v1.9.0
 [1.2.0]: https://github.com/rqmartins73/bluexport_api/compare/v1.0.0...v1.2.0
