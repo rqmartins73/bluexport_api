@@ -65,11 +65,8 @@
 # List volume clones (all WS):  ./bluexport_api.sh -vclonelsall
 #
 # === Volume Tier ===
-# Change volume tier:           ./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
-# Change volume tier for all
-#  volumes attached to a VSI:	./bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO
-#
-#   Applies the tier change to all volumes attached to the specified VSI.
+# Change volume tier:					./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
+# Change volume tier for all volumes attached to a VSI:	./bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO
 #
 #   TIER_TO_CHANGE_TO must be one of:
 #     0 | 1 | 3 | 5k
@@ -434,8 +431,6 @@ help() {
 	echoscreen "=== === Volume Tier === ==="
 	echoscreen "Change volume tier:         		./bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
 	echoscreen "Change volume tier (all VSI volumes):	./bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO"
-	echoscreen ""
-	echoscreen "  Applies the tier change to all volumes attached to the VSI."
 	echoscreen ""
 	echoscreen "  TIER_TO_CHANGE_TO:"
 	echoscreen "    0 | 1 | 3 | 5k"
