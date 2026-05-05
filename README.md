@@ -39,11 +39,64 @@ The configuration file contains:
 - Wire authentication for all API calls
 - Map user‑friendly names to system identifiers
 
-If you are installing the tool for the first time, run:
+### Available Flags
+
 ```
 ./bluexscrt_config_api.sh -createconfig
+./bluexscrt_config_api.sh -addlpar NAME IP PVM_ID WORKSPACE_SHORT
+./bluexscrt_config_api.sh -dellpar NAME
+./bluexscrt_config_api.sh -updlpars
+./bluexscrt_config_api.sh -v | --version
+./bluexscrt_config_api.sh -h | --help
 ```
-This will build a complete and valid `bluexscrt_*.json` secrets file that the main script can consume.
+
+#### `-createconfig`
+Runs an interactive wizard that:
+- Creates the initial `bluexscrt_*.json` secrets file (IBM Cloud API key, COS credentials, SSH user/key)
+- Creates or updates `bluexport_api_conf.json` (the main config file used by `bluexport_api.sh`)
+- Discovers Cloud Object Storage instances and populates `.cos_instances`
+- Discovers PowerVS workspaces via API and populates `.workspaces`
+- Discovers IBM i LPARs in all workspaces and populates `.systems`
+- Optionally creates the SSH user on the IBM i LPARs and deploys the public key
+
+**Start here if you are setting up the tool for the first time.**
+
+#### `-addlpar NAME IP PVM_ID WORKSPACE_SHORT`
+Adds or updates a single LPAR entry in `.systems[]` of the secrets file.
+
+| Parameter | Description |
+|-----------|-------------|
+| `NAME` | Logical system name (e.g. `ibmi75m2`) |
+| `IP` | IP address used for SSH and bluexport operations |
+| `PVM_ID` | PowerVS `pvmInstanceID` of the LPAR |
+| `WORKSPACE_SHORT` | Workspace key as defined under `.workspaces` in the JSON (e.g. `WSMAD2`) |
+
+Example:
+```
+./bluexscrt_config_api.sh -addlpar ibmi75m2 172.26.2.5 7ed4ea03-... WSMAD2
+```
+
+#### `-dellpar NAME`
+Removes the LPAR named `NAME` from `.systems[]` in the secrets file. The match on `name` is case‑insensitive.
+
+Example:
+```
+./bluexscrt_config_api.sh -dellpar ibmi75m2
+```
+
+#### `-updlpars`
+Refreshes IBM i LPARs and COS instances from IBM Cloud APIs:
+- Discovers IBM i LPARs in all configured workspaces
+- Adds new systems to `.systems[]`, removes obsolete ones, and refreshes `pvmInstanceID`
+- Refreshes `.cos_instances` from IBM Cloud
+
+Prints a masked snapshot of the current JSON config at the end.
+
+#### `-v | --version`
+Shows tool version as JSON (tool name, version, author, license).
+
+#### `-h | --help`
+Shows the built‑in help.
 
 ---
 
