@@ -134,7 +134,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.10
+Version=1.10.1
 
 conf_file="$HOME/bluexport_api_conf.json"
 
