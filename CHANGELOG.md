@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.10.2] - 2026-05-11
+
+### Fixed
+- `-vsisrcmon`: Added detection for UNKNOWN status during monitoring. When VSI enters UNKNOWN status (e.g., during shutdown while monitoring START, or other abnormal states), monitoring now terminates with an appropriate message indicating the LPAR/VSI is not starting (START mode) or not shutting down properly (SHUTOFF mode)
+
 ## [1.10.1] - 2026-05-05
 
 ### Fixed (`bluexport_api.sh`)

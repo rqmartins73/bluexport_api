@@ -134,7 +134,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.10.1
+Version=1.10.2
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -3681,6 +3681,17 @@ do_vsi_srcmon() {
 		vsi_src=$(echo "$vsi_json" | jq -r '.srcs[0][0].src // "UNKNOWN"' 2>>"$log_file")
 
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name - Status: $vsi_status, SRC: $vsi_src" "1"
+
+		# Check for UNKNOWN status (abnormal state)
+		if [[ "$vsi_status" == "UNKNOWN" ]]
+		then
+			if [[ "$mode_u" == "START" ]]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name entered UNKNOWN status. The LPAR/VSI is not starting. SRC monitoring terminated. ==="
+			else
+				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name entered UNKNOWN status. The LPAR/VSI is not shutting down properly. SRC monitoring terminated. ==="
+			fi
+		fi
 
 		if [[ "$mode_u" == "SHUTOFF" ]]
 		then
