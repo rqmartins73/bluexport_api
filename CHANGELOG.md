@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.12.1] - 2026-08-04
+
+### Fixed (`bluexport_api.sh`)
+- `-a`/capture start: when the capture API rejects the request (e.g. another capture already running on the same VSI), the response has no `.id` field. `jq -r '.id'` was rendering that as the literal string `"null"`, which passed the existing `[[ -z "$job_id" ]]` check, so the script proceeded straight into `job_monitor` polling a job that never existed (10 pointless "HTTP 404" retries before giving up). `ins_cap` now surfaces the HTTP status, and both call sites validate the response and abort immediately with the actual API error message instead. `job_monitor`'s job-id checks also now reject the literal string `"null"` as a defensive second layer.
+
 ## [1.12.0] - 2026-08-04
 
 ### Added (`bluexport_api.sh`)

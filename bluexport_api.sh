@@ -140,7 +140,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.12.0
+Version=1.12.1
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -594,7 +594,33 @@ ins_act() {
 }
 
 ins_cap() {
-	curl -sX POST "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/capture" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+	# Appends the HTTP status code as a trailing line (see job_get for why
+	# this can't be handed back via a global var: command substitution runs
+	# this in a subshell). Callers must check it - the API returns a normal
+	# JSON error body (no "id" field) when e.g. a capture is already running,
+	# and jq would otherwise silently render that as the literal text "null".
+	curl -sS --connect-timeout 30 --max-time 60 -w '\n%{http_code}' -X POST "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/capture" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" 2>>"$log_file"
+}
+
+# Splits an ins_cap() response (body + trailing HTTP-code line), logs the
+# body, and sets $job_id. Returns 1 (and leaves job_id empty) on any failure
+# - non-2xx status, or a body with no real "id" field - instead of letting a
+# missing id silently become the literal string "null". Never calls abort
+# itself: this is invoked directly (not via command substitution) so the
+# caller can abort in its own process.
+parse_cap_response() {
+	local raw="$1" body code api_msg
+	code="${raw##*$'\n'}"
+	body="${raw%$'\n'*}"
+	printf '%s\n' "$body" | tee -a "$log_file" "$job_id_file" >/dev/null
+	job_id=$(printf '%s' "$body" | jq -r '.id // empty' 2>>"$log_file")
+	if [[ -z "$job_id" || "$code" != 2* ]]; then
+		api_msg=$(printf '%s' "$body" | jq -r '.message // .error // .description // .errors[0].message // empty' 2>/dev/null)
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - FAILED to start capture (HTTP ${code:-?}): ${api_msg:-$body}" "1"
+		job_id=""
+		return 1
+	fi
+	return 0
 }
 
 ins_oper() {
@@ -1118,11 +1144,11 @@ job_monitor() {
 	then
         	# Reuse existing job mapping from operid_file: <capture_name> <job_id>
 		job_id=$(awk -v name="$capture_name" '$1 == name {print $2; exit}' "$operid_file")
-		if [[ -z "$job_id" ]]; then
+		if [[ -z "$job_id" || "$job_id" == "null" ]]; then
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - No Job ID found for capture $capture_name in $operid_file"
 		fi
 	else
-		if [[ -z "$job_id" ]]
+		if [[ -z "$job_id" || "$job_id" == "null" ]]
 		then
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - Capturing instance $vsi has failed, see log file!"
 		fi
@@ -6263,7 +6289,8 @@ then
 	else
 		rm $job_id_file
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - ins_cap \"$ACTIONS\"" "1"
-		job_id=$(ins_cap | jq -r '.id' 2>> $log_file | tee -a $log_file $job_id_file)
+		cap_raw=$(ins_cap)
+		parse_cap_response "$cap_raw" || abort "$(date +%Y-%m-%d_%H:%M:%S) - Capture request rejected, see message above."
 	fi
 else
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Executing Capture and Export cloud command... ==" "1"
@@ -6273,7 +6300,8 @@ else
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - ins_cap \"$ACTIONS\"" "1"
 	else
 		rm $job_id_file
-		job_id=$(ins_cap | jq -r '.id' 2>> $log_file | tee -a $log_file $job_id_file)
+		cap_raw=$(ins_cap)
+		parse_cap_response "$cap_raw" || abort "$(date +%Y-%m-%d_%H:%M:%S) - Capture request rejected, see message above."
 
 	fi
 fi
