@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.11.0] - 2026-08-04
+
+### Fixed (`bluexport_api.sh`)
+- `-a`/`-j` job monitoring loop (`job_monitor`) could abort a healthy, in-progress capture/export because the IBM Cloud IAM access token (fetched once at startup, ~3600s TTL) expired mid-poll. The resulting 401 response has no `.status.state` field, which the old code treated as "no job running" and aborted on immediately.
+
+### Added (`bluexport_api.sh`)
+- IAM token retrieval extracted into `get_iam_token()`, now called proactively every 45 minutes from inside `job_monitor` (and reactively on any HTTP 401 from `job_get`) so long-running jobs never hit an expired token
+- `job_monitor` now tolerates transient `job_get` failures (network errors, non-2xx HTTP, unparsable JSON) with up to 10 retries at 30s intervals before aborting, instead of aborting on the first bad response
+- `job_get` now sets connection/max-time timeouts and surfaces the HTTP status code to the caller
+
 ## [1.10.2] - 2026-05-11
 
 ### Fixed

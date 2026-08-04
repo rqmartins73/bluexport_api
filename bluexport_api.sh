@@ -140,7 +140,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.10.2
+Version=1.11.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -323,24 +323,49 @@ then
 	#  authentication
 	header_json="Content-Type: application/json"
 	header_accept="Accept: application/json"
-	echo
-	echoscreen "   ### Retrieving IAM Token..."
-	iam_resp=""
-	if ! iam_resp=$(curl -sS --connect-timeout 30 --max-time 60 -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}"  2>&1)
-	then
-		timestamp=$(date +%F" "%T" "%Z)
-		echoscreen "==== START ======= $timestamp =========" "1"
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $iam_resp" "1"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
-	fi
-	iam_token=$(printf '%s\n' "$iam_resp" | jq -r '.access_token')
-	if [[ -z "$iam_token" || "$iam_token" == "null" ]]
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - IAM token response did not contain access_token. Raw response: $iam_resp"
-	fi
-	echoscreen "   ### IAM Token successfully retrieved!"
-	header_auth="Authorization: Bearer $iam_token"
 	header_xml="Content-Type: application/xml"
+
+	####  START:FUNCTION - Get/Refresh IAM Token  ####
+	# IBM Cloud IAM access tokens expire after ~3600s. Long-running operations
+	# (e.g. capture & export job monitoring) can outlive that TTL, so this is
+	# called again mid-run (see job_monitor) to keep header_auth valid.
+	# Pass "refresh" to return 1 on failure instead of aborting the script.
+	get_iam_token() {
+		local mode="$1" resp token
+		echoscreen "   ### Retrieving IAM Token..."
+		resp=""
+		if ! resp=$(curl -sS --connect-timeout 30 --max-time 60 -X POST "https://iam.cloud.ibm.com/identity/token" -H "Content-Type: application/x-www-form-urlencoded" -H "$header_accept" -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${api_key}"  2>&1)
+		then
+			if [[ "$mode" == "refresh" ]]
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Could not reach iam.cloud.ibm.com while refreshing IAM token, will retry. Response: $resp" "1"
+				return 1
+			fi
+			timestamp=$(date +%F" "%T" "%Z)
+			echoscreen "==== START ======= $timestamp =========" "1"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $resp" "1"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
+		fi
+		token=$(printf '%s\n' "$resp" | jq -r '.access_token')
+		if [[ -z "$token" || "$token" == "null" ]]
+		then
+			if [[ "$mode" == "refresh" ]]
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - IAM token refresh response did not contain access_token, will retry. Raw response: $resp" "1"
+				return 1
+			fi
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - IAM token response did not contain access_token. Raw response: $resp"
+		fi
+		iam_token="$token"
+		header_auth="Authorization: Bearer $iam_token"
+		iam_token_epoch=$(date +%s)
+		echoscreen "   ### IAM Token successfully retrieved!"
+		return 0
+	}
+	####  END:FUNCTION - Get/Refresh IAM Token  ####
+
+	echo
+	get_iam_token
 
 	# Current date (YYYY-MM-DD). Required for Transit Gateway API versioning.
 	version=$(date +%F)
@@ -703,7 +728,12 @@ job_ls() {
 }
 
 job_get() {
-	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/jobs/$JOB_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
+	# Appends the HTTP status code as the last line so callers can tell a
+	# transient/auth failure (e.g. expired IAM token) apart from a real
+	# "job not found". Caller must split it back out (see job_monitor) -
+	# this runs via command substitution, so it cannot hand back a status
+	# via a global variable.
+	curl -sS --connect-timeout 30 --max-time 60 -w '\n%{http_code}' -X GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/jobs/$JOB_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json" 2>>"$log_file"
 }
 
 ## Images
@@ -1078,16 +1108,55 @@ job_monitor() {
   # Check Capture & Export Job Status
 	echo "Job Monitoring of VM Capture $capture_name - Job ID: $job_id" >> "$job_log"
 	operation_before=""
+	job_get_fail_count=0
+	job_get_max_fail=10          # abort only after this many consecutive bad polls
+	token_refresh_secs=2700      # refresh IAM token every 45min, under its ~60min TTL
 	while true
 	do
 		JOB_ID="$job_id"
-		# Get current job JSON once and reuse
-		job_json=$(job_get)
+
+		# Proactively refresh the IAM token before it expires so a long-running
+		# capture/export never hits an auth failure mid-poll.
+		if [[ -n "$iam_token_epoch" ]] && (( $(date +%s) - iam_token_epoch >= token_refresh_secs ))
+		then
+			get_iam_token refresh
+		fi
+
+		# Get current job JSON once and reuse. job_get appends the HTTP code
+		# as a trailing line; split it back out here (must happen in this
+		# process, not inside job_get, since command substitution runs it
+		# in a subshell where a global variable couldn't be read back).
+		job_raw=$(job_get)
+		http_code="${job_raw##*$'\n'}"
+		job_json="${job_raw%$'\n'*}"
+		job_status=$(printf '%s' "$job_json" | jq -r '.status.state // empty' 2>/dev/null)
+
+		# Transient failure: network error, non-2xx HTTP, empty/invalid JSON.
+		# Retry with backoff instead of aborting the whole export outright.
+		if [[ -z "$job_status" ]]
+		then
+			job_get_fail_count=$((job_get_fail_count + 1))
+			echo "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Could not read Job $job_id status (HTTP ${http_code:-?}, attempt $job_get_fail_count/$job_get_max_fail). Response: $job_json" >> "$job_log"
+			if [[ "$http_code" == "401" ]]
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - IAM token was rejected (HTTP 401). Refreshing token..." "1"
+				get_iam_token refresh
+			fi
+			if [[ "$job_get_fail_count" -ge "$job_get_max_fail" ]]
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - FAILED Getting Job ID or no Job Running after $job_get_max_fail consecutive attempts!" "1"
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Check file $job_monitor and $job_log for more details."
+			fi
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Transient error reading Job $job_id status (HTTP ${http_code:-?}). Retrying in 30s ($job_get_fail_count/$job_get_max_fail)..." "1"
+			sleep 30
+			continue
+		fi
+		job_get_fail_count=0
+
 		# Save job output:
 		#  - overwrite $job_monitor with the latest state
 		#  - append to $job_log and $log_file for history
 		printf '%s\n' "$job_json" | tee "$job_monitor" >>"$job_log"
-		job_status=$(jq -r '.status.state // empty'    "$job_monitor")
 		message=$(jq -r '.status.message // empty'     "$job_monitor")
 		operation=$(jq -r '.status.progress // empty'  "$job_monitor")
 		if [[ "$job_status" == "completed" ]]
@@ -1120,10 +1189,6 @@ job_monitor() {
 				echoscreen ""
 			fi
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - Finished Successfully!!"
-		elif [[ -z "$job_status" ]]
-		then
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - FAILED Getting Job ID or no Job Running!" "1"
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - Check file $job_monitor for more details."
 		elif [[ "$job_status" == "queued" ]]
 		then
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Job ID $job_id Status: ${job_status^^}" "1"
