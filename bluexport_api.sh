@@ -140,7 +140,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.11.0
+Version=1.12.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -189,6 +189,29 @@ echoscreen() {
     fi
 }
 #### END:FUNCTION - Echo to log file and screen  ####
+
+#### START:FUNCTION - Spinner while waiting on a poll interval  ####
+# $1 = seconds to wait, $2 = optional label shown next to the spinner.
+# Interactive terminal only: on a non-tty (batch job, redirected output,
+# IBM i submitted job) this is a plain sleep, so no control characters ever
+# end up in logs or spool files.
+spin_wait() {
+    local secs="$1" label="${2:-}" i=0
+    local spin_chars='/-\|'
+    if [[ ! -t 1 ]]
+    then
+        sleep "$secs"
+        return
+    fi
+    while [[ $i -lt $secs ]]
+    do
+        printf '\r  ### %s %s (%ss)   ' "${spin_chars:$((i % 4)):1}" "$label" "$((secs - i))"
+        sleep 1
+        i=$((i + 1))
+    done
+    printf '\r%*s\r' 100 ""
+}
+#### END:FUNCTION - Spinner while waiting on a poll interval  ####
 
 #### START:FUNCTION - Finish vsi_status=$(log file when aborting  ####
 abort() {
@@ -1148,7 +1171,7 @@ job_monitor() {
 				abort "$(date +%Y-%m-%d_%H:%M:%S) - Check file $job_monitor and $job_log for more details."
 			fi
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Transient error reading Job $job_id status (HTTP ${http_code:-?}). Retrying in 30s ($job_get_fail_count/$job_get_max_fail)..." "1"
-			sleep 30
+			spin_wait 30 "Retrying job status check"
 			continue
 		fi
 		job_get_fail_count=0
@@ -1195,7 +1218,7 @@ job_monitor() {
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Message: $message" "1"
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Operation Change... Operation Running Now: ${operation^^}" "1"
 			echo "$(date +%Y-%m-%d_%H:%M:%S) - Running ${operation^^}... Sleeping 60 seconds..." >> "$job_log"
-			sleep 60
+			spin_wait 60 "Running ${operation^^}"
 			operation_before="$operation"
 		elif [[ "$job_status" == "failed" ]]
 		then
@@ -1209,11 +1232,11 @@ job_monitor() {
 	        	       	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Message: $message" "1"
         	        	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Operation Change... Operation Running Now: ${operation^^}" "1"
 	                	echo "$(date +%Y-%m-%d_%H:%M:%S) - Running ${operation^^}... Sleeping 60 seconds..." >> "$job_log"
-		                sleep 60
+		                spin_wait 60 "Running ${operation^^}"
         		        operation_before="$operation"
 			else
         		        echo "$(date +%Y-%m-%d_%H:%M:%S) - Still Running ${operation^^}... Sleeping 60 seconds..." >> "$job_log"
-                		sleep 60
+                		spin_wait 60 "Still running ${operation^^}"
 			fi
 		fi
 	done

@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.12.0] - 2026-08-04
+
+### Added (`bluexport_api.sh`)
+- `job_monitor`'s poll waits (queued/running/still-running/transient-retry) now show a spinner with a countdown on an interactive terminal, so a long capture/export doesn't look stuck during the 30-60s waits between status checks. Falls back to a plain `sleep` (no control characters) when output isn't a tty, so log files and IBM i batch/spool output are unaffected.
+
 ## [1.11.0] - 2026-08-04
 
 ### Fixed (`bluexport_api.sh`)
