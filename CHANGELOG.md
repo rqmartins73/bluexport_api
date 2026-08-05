@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [2.0] - 2026-08-05 (`bluexscrt_config_api.sh`)
+
+### Added
+- LPAR discovery (`-updlpars`, and transitively `-updws`/`-createconfig`) is no longer IBM i-only: every LPAR in every configured workspace is now discovered and classified as `os`: `ibmi` | `aix` | `linux` | `other` (raw API value kept in `osDetail`). Unrecognized `osType` values classify as `other`, never assumed `linux`.
+- `create_vsi_user_from_json` (optional step of `-createconfig`) filters to `os == ibmi` only, since SSH user provisioning via `DSPUSRPRF`/`CRTUSRPRF` is IBM i-only CL; skipped non-IBM i entries are reported by count.
+
+### Changed
+- **Breaking:** `-addlpar` now requires a 5th argument, `OS` (`ibmi|aix|linux|other`). Old 4-argument invocations now fail with a syntax error instead of silently assuming `ibmi`.
+
+### Upgrade notes
+- Run `-updlpars` once after upgrading to backfill `os`/`osDetail` on any `.systems[]` entry that predates this field (until then, such entries are treated as `ibmi` wherever read, since that was the only OS ever stored before).
+
+## [1.13.0] - 2026-08-05 (`bluexport_api.sh`)
+
+### Added
+- `CHGASPACT` (the IBM i ASP-flush before snapshot create, volume clone execute, and image/cloud-storage capture) now only runs when the target LPAR's `os` (from `.systems[]`) is `ibmi`. For `aix`/`linux`/`other` targets, the flush is skipped with a log message, and the IBM i-only ping+SSH+`WRKCFGSTS` iASP-discovery step inside `get_iASP_name` is skipped entirely - no SSH connectivity or key is required for non-IBM i targets in these 3 operations.
+- Purely additive: any installation with only IBM i entries in `.systems[]` sees no behavior change (missing `os` field falls back to `ibmi`).
+
 ## [1.12.2] - 2026-08-05 (`bluexport_api.sh`)
 
 ### Changed

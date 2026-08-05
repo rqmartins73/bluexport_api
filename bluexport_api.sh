@@ -140,7 +140,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.12.2
+Version=1.13.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 

@@ -43,7 +43,7 @@ The configuration file contains:
 
 ```
 ./bluexscrt_config_api.sh -createconfig
-./bluexscrt_config_api.sh -addlpar NAME IP PVM_ID WORKSPACE_SHORT
+./bluexscrt_config_api.sh -addlpar NAME IP PVM_ID WORKSPACE_SHORT OS
 ./bluexscrt_config_api.sh -dellpar NAME
 ./bluexscrt_config_api.sh -updlpars
 ./bluexscrt_config_api.sh -v | --version
@@ -56,12 +56,12 @@ Runs an interactive wizard that:
 - Creates or updates `bluexport_api_conf.json` (the main config file used by `bluexport_api.sh`)
 - Discovers Cloud Object Storage instances and populates `.cos_instances`
 - Discovers PowerVS workspaces via API and populates `.workspaces`
-- Discovers IBM i LPARs in all workspaces and populates `.systems`
-- Optionally creates the SSH user on the IBM i LPARs and deploys the public key
+- Discovers all LPARs (any OS) in all workspaces and populates `.systems`, classifying each as `os`: `ibmi`/`aix`/`linux`/`other`
+- Optionally creates the SSH user on the LPARs classified `os=ibmi` and deploys the public key (SSH provisioning via `CRTUSRPRF` is IBM i-only; non-IBM i entries are skipped and reported by count)
 
 **Start here if you are setting up the tool for the first time.**
 
-#### `-addlpar NAME IP PVM_ID WORKSPACE_SHORT`
+#### `-addlpar NAME IP PVM_ID WORKSPACE_SHORT OS`
 Adds or updates a single LPAR entry in `.systems[]` of the secrets file.
 
 | Parameter | Description |
@@ -70,10 +70,13 @@ Adds or updates a single LPAR entry in `.systems[]` of the secrets file.
 | `IP` | IP address used for SSH and bluexport operations |
 | `PVM_ID` | PowerVS `pvmInstanceID` of the LPAR |
 | `WORKSPACE_SHORT` | Workspace key as defined under `.workspaces` in the JSON (e.g. `WSMAD2`) |
+| `OS` | `ibmi` \| `aix` \| `linux` \| `other` — determines whether operations that flush ASPs (`CHGASPACT`) run for this LPAR (`ibmi` only) |
+
+> **Breaking change (v2.0):** `OS` is now a required 5th argument. The old 4-argument form (`NAME IP PVM_ID WORKSPACE_SHORT`) is no longer accepted and fails with a syntax error.
 
 Example:
 ```
-./bluexscrt_config_api.sh -addlpar ibmi75m2 172.26.2.5 7ed4ea03-... WSMAD2
+./bluexscrt_config_api.sh -addlpar ibmi75m2 172.26.2.5 7ed4ea03-... WSMAD2 ibmi
 ```
 
 #### `-dellpar NAME`
@@ -85,12 +88,14 @@ Example:
 ```
 
 #### `-updlpars`
-Refreshes IBM i LPARs and COS instances from IBM Cloud APIs:
-- Discovers IBM i LPARs in all configured workspaces
-- Adds new systems to `.systems[]`, removes obsolete ones, and refreshes `pvmInstanceID`
+Refreshes LPARs (all OS: `ibmi`/`aix`/`linux`/`other`) and COS instances from IBM Cloud APIs:
+- Discovers all LPARs in all configured workspaces (no longer IBM i-only), classifying each as `os`: `ibmi`/`aix`/`linux`/`other` (the raw API `osType` value is kept in `osDetail`; unrecognized values classify as `other`, never assumed `linux`)
+- Adds new systems to `.systems[]`, removes obsolete ones, and refreshes `pvmInstanceID`/`os`/`osDetail`
 - Refreshes `.cos_instances` from IBM Cloud
 
 Prints a masked snapshot of the current JSON config at the end.
+
+> **Upgrade note (v2.0):** run `-updlpars` once after upgrading to backfill `os`/`osDetail` on any `.systems[]` entry that predates this field — until then, such entries are treated as `ibmi` wherever read, since that was the only OS ever stored before.
 
 #### `-v | --version`
 Shows tool version as JSON (tool name, version, author, license).
@@ -109,6 +114,7 @@ Shows the built‑in help.
   - Note: `hourly` and `daily` only permit captures to `image-catalog`
 - Test mode: validate the capture setup without triggering an actual capture
 - Job monitoring: track a running capture/export job until completion
+- ASP flush (`CHGASPACT`) before capture only runs for LPARs recorded as `os=ibmi` in `.systems[]`; AIX/Linux/other targets skip it automatically (no SSH connectivity or key required for those targets)
 
 ### **VSI Operations**
 - Start VSI (IPL) with monitoring until `ACTIVE / SRC 00000000`
@@ -127,6 +133,7 @@ Shows the built‑in help.
 - Restore snapshot to a VSI (requires VSI in `SHUTOFF`)
 - Restore monitoring until 100%
 - List snapshots across all workspaces
+- ASP flush (`CHGASPACT`) before snapshot create only runs for LPARs recorded as `os=ibmi` in `.systems[]`; AIX/Linux/other targets skip it automatically (no SSH connectivity or key required for those targets)
 
 ### **Captured Images**
 - List images across all workspaces
@@ -147,6 +154,7 @@ Shows the built‑in help.
 - Optional replication awareness
 - Delete clones safely (with optional volume deletion)
 - List all volume clones across all workspaces
+- ASP flush (`CHGASPACT`) before clone execute only runs for LPARs recorded as `os=ibmi` in `.systems[]`; AIX/Linux/other targets skip it automatically (no SSH connectivity or key required for those targets)
 
 ### **Volume Tier Management**
 - Apply tier changes based on volume‑name patterns

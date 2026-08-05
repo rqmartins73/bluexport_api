@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="1.6"
+VERSION="2.0"
 
 conf_file="$HOME/bluexport_api_conf.json"
 
