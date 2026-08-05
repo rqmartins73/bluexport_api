@@ -16,7 +16,7 @@ It centralizes automation for:
 - Cloud Object Storage (COS) operations (list buckets, list/delete objects, archive restore)
 - Global Replication Services (GRS) orchestration (create, delete, failover, failback, reverse)
 
-The script is designed for enterprise environments running IBM i in Hybrid Cloud, HA/DR, and multi‑region deployments.
+The script is designed for enterprise environments running IBM i, AIX, and Linux LPARs in Hybrid Cloud, HA/DR, and multi‑region deployments. ASP-flush operations (`CHGASPACT`) are IBM i-specific and are automatically skipped for AIX/Linux LPARs — see the LPAR discovery section below.
 
 ---
 
@@ -28,7 +28,7 @@ The configuration file contains:
 - IBM Cloud API Key
 - PowerVS Workspace list (CRN, workspace ID, human‑friendly name)
 - Region‑specific API endpoints
-- VSI definitions (workspace, IP, metadata)
+- VSI definitions (workspace, IP, `os`: ibmi|aix|linux|other, `osDetail`, and other metadata)
 - COS (Cloud Object Storage) credentials
 - SSH parameters
 - Optional defaults (log file path, temp file paths, etc.)
