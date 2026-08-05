@@ -1294,6 +1294,12 @@ get_iASP_name() {
 				shutoff=1
 				return
 			fi
+			if [[ "$vsi_os" != "ibmi" ]]
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is $vsi_os - skipping iASP discovery (IBM i-only, not applicable)." "1"
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is in Status: $vsi_status" "1"
+				return
+			fi
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is in Status: $vsi_status" "1"
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Getting $vsi iASP Names locally..." "1"
 			cmd="system 'WRKCFGSTS CFGTYPE(*DEV) CFGD(*ASP)'"
@@ -1304,6 +1310,12 @@ get_iASP_name() {
 			###################################################################
 			if [[ "$vsi_status" != "SHUTOFF" ]]
 			then
+				if [[ "$vsi_os" != "ibmi" ]]
+				then
+					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is $vsi_os - skipping iASP discovery (IBM i-only, not applicable)." "1"
+					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is in Status: $vsi_status" "1"
+					return
+				fi
 				if [[ "$(uname -s)" == "OS400" ]]
 				then
 					PING="system \"PING RMTSYS('$vsi_ip') NBRPKT(1) WAITTIME(3)\""
@@ -1342,7 +1354,7 @@ get_iASP_name() {
 		# COMMON BLOCK — PARSING iASP OUTPUT (LOCAL OR REMOTE)
 		###################################################################
 		iasp_name=$(echo "$iasp_output" | tail -n+4 | head -n-1 | awk '{print $1":"$3}')
-		echo "" > "$iasp_names_file"
+		: > "$iasp_names_file"
 		for line in $iasp_name
 		do
 			line_status=$(echo "$line" | cut -d ":" -f2-)
@@ -1374,11 +1386,17 @@ get_iASP_name() {
 check_locally_VSI_exists() {
 	# Clear job log
 	: > "$job_log"
+	vsi_os=""
 	# Case-insensitive check if VSI exists in JSON
 	if jq -e --arg vsi "$vsi" 'any(.systems[]; (.name | ascii_downcase) == ($vsi | ascii_downcase))' "$bluexscrt" > /dev/null
 	then
 		# Get workspace short name (e.g., WSMAD2) for this VSI (case-insensitive)
 		vsiwsshort=$(jq -r --arg vsi "$vsi" '.systems[]	| select((.name | ascii_downcase) == ($vsi | ascii_downcase)) | .workspace' "$bluexscrt")
+		# Get OS category for this VSI (case-insensitive match on name). Only assigned
+		# here, after existence is confirmed above - missing os field (pre-upgrade
+		# .systems[] entries) falls back to ibmi, the only OS the tool ever stored
+		# before this field existed.
+		vsi_os=$(jq -r --arg vsi "$vsi" '.systems[] | select((.name | ascii_downcase) == ($vsi | ascii_downcase)) | (.os // "ibmi")' "$bluexscrt")
 		# Get workspace CRN for that short name
 		shortnamecrn=$(jq -r --arg ws "$vsiwsshort" '.workspaces[$ws].crn' "$bluexscrt")
 		# Call function that lists VSIs in that workspace (writes to $vsi_list_tmp)
