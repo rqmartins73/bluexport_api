@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="1.5"
+VERSION="1.6"
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -480,14 +480,32 @@ cos_ins_ls() {
 	# pages once PowerVS workspaces/VPC/etc are added, silently dropping COS
 	# instances that land past page 1 if we only ever read the first page.
 	# Follow next_url until exhausted and merge everything into one .resources[].
+	#
+	# Each page's resources are staged into a temp file rather than an
+	# --argjson/command-line argument: a real account's full resource_instances
+	# response (even one page, at limit=100) can be large enough to hit the
+	# OS's ARG_MAX ("Argument list too long"), which killed the whole script
+	# under set -e the first time this was tried.
 	local url="https://resource-controller.cloud.ibm.com/v2/resource_instances?type=service_instance&limit=100"
-	local all_resources="[]" page next
+	local page next tmpdir
+	local -a page_files=()
+
+	tmpdir=$(mktemp -d)
 
 	while [[ -n "$url" ]]; do
-		page=$(curl -sX GET "$url" -H "$header_auth" -H "$header_accept")
+		page=$(curl -sS --connect-timeout 30 --max-time 60 -X GET "$url" -H "$header_auth" -H "$header_accept")
 
-		all_resources=$(jq -n --argjson acc "$all_resources" --argjson page "$page" \
-			'$acc + ($page.resources // [])')
+		# A network/auth hiccup can make curl return an empty body or an HTML/plain-text
+		# error instead of JSON. Validate before touching it with jq, and just stop
+		# paginating with whatever was already collected instead of aborting the script.
+		if ! jq -e . >/dev/null 2>&1 <<<"$page"; then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: cos_ins_ls got a non-JSON response from Resource Controller (network/auth issue?). Raw response (first 200 chars): ${page:0:200}" "1"
+			break
+		fi
+
+		local page_file="$tmpdir/page_${#page_files[@]}.json"
+		jq '.resources // []' <<<"$page" > "$page_file"
+		page_files+=("$page_file")
 
 		next=$(jq -r '.next_url // empty' <<<"$page")
 		if [[ -n "$next" ]]; then
@@ -497,7 +515,13 @@ cos_ins_ls() {
 		fi
 	done
 
-	jq -n --argjson resources "$all_resources" '{resources: $resources}'
+	if (( ${#page_files[@]} == 0 )); then
+		echo '{"resources": []}'
+	else
+		jq -s 'add | {resources: .}' "${page_files[@]}"
+	fi
+
+	rm -rf "$tmpdir"
 }
 
 cos_ls_buckets() {

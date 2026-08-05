@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.6] - 2026-08-05 (`bluexscrt_config_api.sh`)
+
+### Fixed
+- `cos_ins_ls` (introduced in 1.5's pagination fix) crashed `-updlpars`/`-createconfig` outright: it passed each full API page (and a growing accumulator) to `jq` via `--argjson`, which puts the JSON on the process's command-line argument list. A real account's `resource_instances` page (even a single one, at `limit=100`) was large enough to hit the OS's `ARG_MAX` ("Argument list too long"), and under `set -e` that killed the whole script with no visible error (the failing jq's stderr was swallowed into `$log_file` by the caller's redirect). Fixed by staging each page's `.resources[]` into a temp file instead and merging all pages with `jq -s 'add'` (which reads from files, not argv) - reproduced the exact failure with a 3MB synthetic page and confirmed the new approach handles it (and merges correctly across pages) before shipping.
+
 ## [1.5] - 2026-08-05 (`bluexscrt_config_api.sh`)
 
 ### Fixed
