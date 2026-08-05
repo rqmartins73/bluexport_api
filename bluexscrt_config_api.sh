@@ -65,12 +65,14 @@ Options:
       Delete an LPAR (system) named NAME from .systems[] in the JSON config.
       The match on "name" is case-insensitive.
 
-  -addlpar NAME IP PVM_ID WORKSPACE_SHORT
+  -addlpar NAME IP PVM_ID WORKSPACE_SHORT OS
       Add or update a single LPAR (system) entry in .systems[]:
         NAME            Logical system name (e.g. ibmi75m2)
         IP              IP address used for SSH and bluexport operations
         PVM_ID          PowerVS pvmInstanceID of the LPAR
         WORKSPACE_SHORT Workspace key as defined under .workspaces in the JSON (e.g. WSMAD2)
+        OS              ibmi | aix | linux | other - determines whether operations that
+                         flush ASPs (CHGASPACT) run for this LPAR (ibmi only)
 
   -updlpars
       Refresh LPARs (all OS: ibmi/aix/linux/other) and COS instances from IBM Cloud APIs:
@@ -99,7 +101,7 @@ Examples:
   $(basename "$0") -v
   $(basename "$0") -createconfig
   $(basename "$0") -dellpar ibmi75m2
-  $(basename "$0") -addlpar ibmi75m2 172.26.2.5 7ed4ea03-... WSMAD2
+  $(basename "$0") -addlpar ibmi75m2 172.26.2.5 7ed4ea03-... WSMAD2 ibmi
   $(basename "$0") -updlpars
   $(basename "$0") -updws
 EOF
@@ -1469,10 +1471,11 @@ case "$flag" in
     ;;
 
   -addlpar)
-    # Now: NAME IP PVM_ID WORKSPACE_SHORT  (no LPAR label)
-    if [[ $# -ne 5 ]]; then
+    # Now: NAME IP PVM_ID WORKSPACE_SHORT OS
+    if [[ $# -ne 6 ]]; then
       echo "ERROR: Wrong syntax." >&2
-      echo "Usage: $(basename "$0") -addlpar NAME IP PVM_ID WORKSPACE_SHORT" >&2
+      echo "Usage: $(basename "$0") -addlpar NAME IP PVM_ID WORKSPACE_SHORT OS" >&2
+      echo "  OS must be one of: ibmi | aix | linux | other" >&2
       exit 1
     fi
 
@@ -1482,6 +1485,16 @@ case "$flag" in
     lpar_ip="$3"
     lpar_pvmid="$4"
     lpar_ws="$5"
+    lpar_os=$(printf '%s' "$6" | tr '[:upper:]' '[:lower:]')
+
+    case "$lpar_os" in
+      ibmi|aix|linux|other)
+        ;;
+      *)
+        echo "ERROR: Invalid OS '$6'. Must be one of: ibmi | aix | linux | other" >&2
+        exit 1
+        ;;
+    esac
 
     # Upsert system entry (case-insensitive on .name), sem campo "lpar"
     jq_inplace '
@@ -1492,14 +1505,17 @@ case "$flag" in
               "name": $name,
               "ip": $ip,
               "pvmInstanceID": $pvmid,
-              "workspace": $ws
+              "workspace": $ws,
+              "os": $os,
+              "osDetail": ""
             } ]
       )
     ' \
       --arg name  "$lpar_name" \
       --arg ip    "$lpar_ip" \
       --arg pvmid "$lpar_pvmid" \
-      --arg ws    "$lpar_ws"
+      --arg ws    "$lpar_ws" \
+      --arg os    "$lpar_os"
 
     echo ""
     echo "LPAR '$lpar_name' added/updated in $CONFIG_JSON:"
