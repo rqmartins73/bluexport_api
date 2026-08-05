@@ -577,9 +577,15 @@ create_vsi_user_from_json() {
   usr_folder_ssh="$usr_folder/.ssh"
   auth_keys_path="$usr_folder_ssh/authorized_keys"
 
-  mapfile -t systems < <(jq -c '.systems[]?' "$CONFIG_JSON")
+  local skipped_non_ibmi
+  skipped_non_ibmi=$(jq '[.systems[]? | select((.os // "ibmi") != "ibmi")] | length' "$CONFIG_JSON")
+  if (( skipped_non_ibmi > 0 )); then
+    echo "### Skipping $skipped_non_ibmi non-IBM i system(s) in .systems[] (SSH user setup is IBM i-only for now)." | tee -a "$log_file"
+  fi
+
+  mapfile -t systems < <(jq -c '.systems[]? | select((.os // "ibmi") == "ibmi")' "$CONFIG_JSON")
   if (( ${#systems[@]} == 0 )); then
-    echo "### No systems[] defined in $CONFIG_JSON; nothing to do." | tee -a "$log_file"
+    echo "### No IBM i systems[] defined in $CONFIG_JSON; nothing to do." | tee -a "$log_file"
     return 0
   fi
 
