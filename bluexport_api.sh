@@ -1397,6 +1397,10 @@ check_locally_VSI_exists() {
 		# .systems[] entries) falls back to ibmi, the only OS the tool ever stored
 		# before this field existed.
 		vsi_os=$(jq -r --arg vsi "$vsi" '.systems[] | select((.name | ascii_downcase) == ($vsi | ascii_downcase)) | (.os // "ibmi")' "$bluexscrt")
+		if [[ "$vsi_os" == "other" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: VSI $vsi has os=other (unclassified) - ASP flush will be skipped. If this is actually an IBM i LPAR, fix it with: bluexscrt_config_api.sh -addlpar $vsi <ip> <pvmid> <workspace> ibmi" "1"
+		fi
 		# Get workspace CRN for that short name
 		shortnamecrn=$(jq -r --arg ws "$vsiwsshort" '.workspaces[$ws].crn' "$bluexscrt")
 		# Call function that lists VSIs in that workspace (writes to $vsi_list_tmp)

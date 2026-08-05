@@ -58,8 +58,10 @@ Options:
         - create or update bluexport_api_conf.json (the main config file used by bluexport_api.sh)
         - discover Cloud Object Storage instances and populate .cos_instances
         - discover PowerVS workspaces via API and populate .workspaces
-        - discover IBM i LPARs in all workspaces and populate .systems
-        - optionally create the SSH user on the IBM i LPARs and deploy the public key
+        - discover all LPARs (any OS) in all workspaces and populate .systems,
+          classifying each as os=ibmi|aix|linux|other
+        - optionally create the SSH user on the LPARs classified os=ibmi and deploy
+          the public key (non-IBM i entries are skipped and reported by count)
 
   -dellpar NAME
       Delete an LPAR (system) named NAME from .systems[] in the JSON config.
