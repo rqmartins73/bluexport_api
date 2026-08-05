@@ -140,7 +140,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.12.1
+Version=1.12.2
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -205,7 +205,7 @@ spin_wait() {
     fi
     while [[ $i -lt $secs ]]
     do
-        printf '\r  ### %s %s (%ss)   ' "${spin_chars:$((i % 4)):1}" "$label" "$((secs - i))"
+        printf '\r  %s %s (%ss)   ' "${spin_chars:$((i % 4)):1}" "$label" "$((secs - i))"
         sleep 1
         i=$((i + 1))
     done

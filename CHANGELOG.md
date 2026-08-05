@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.12.2] - 2026-08-05 (`bluexport_api.sh`)
+
+### Changed
+- `spin_wait`'s spinner no longer prefixes the rotating character with `###` — cleaner terminal output during job-monitor wait phases.
+
 ## [1.6] - 2026-08-05 (`bluexscrt_config_api.sh`)
 
 ### Fixed
