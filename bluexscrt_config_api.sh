@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="1.3"
+VERSION="1.4"
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -85,6 +85,7 @@ Options:
         - add new workspaces to .workspaces (prompts for a short name, e.g. WSMAD2)
         - refresh crn/name for already-known workspaces (matched by workspace ID)
         - remove workspaces from .workspaces that no longer exist in IBM Cloud
+        - also remove any LPAR in .systems[] left orphaned by a removed workspace
       If any new workspace was found, automatically runs -updlpars at the end
       to populate the LPARs of the new workspace(s).
 
@@ -1257,6 +1258,18 @@ run_updws_api() {
 				[[ -z "$key" ]] && continue
 				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Workspace '$key' no longer exists in IBM Cloud; removing." "1"
 				workspaces_json=$(jq --arg key "$key" 'del(.[$key])' <<<"$workspaces_json")
+
+				# The workspace itself is gone from IBM Cloud, so any LPAR still
+				# pointing at it in .systems[] is orphaned - clean those up too.
+				local orphan_names
+				orphan_names=$(jq -r --arg ws "$key" '.systems[]? | select(.workspace == $ws) | .name' "$CONFIG_JSON")
+				if [[ -n "$orphan_names" ]]; then
+					while IFS= read -r sysname; do
+						[[ -z "$sysname" ]] && continue
+						echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Removing orphaned LPAR '$sysname' (workspace '$key' no longer exists)." "1"
+					done <<<"$orphan_names"
+					jq_inplace '.systems |= map(select(.workspace != $ws))' --arg ws "$key"
+				fi
 			done <<<"$removed_keys"
 		fi
 	fi
