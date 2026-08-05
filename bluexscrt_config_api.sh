@@ -73,11 +73,14 @@ Options:
         WORKSPACE_SHORT Workspace key as defined under .workspaces in the JSON (e.g. WSMAD2)
 
   -updlpars
-      Refresh IBM i LPARs and COS instances from IBM Cloud APIs:
-        - discover IBM i LPARs in all configured workspaces
-        - add new IBM i systems to .systems[], remove obsolete ones, refresh pvmInstanceID
+      Refresh LPARs (all OS: ibmi/aix/linux/other) and COS instances from IBM Cloud APIs:
+        - discover all LPARs in all configured workspaces, classifying each as
+          os=ibmi|aix|linux|other (osDetail keeps the raw API value)
+        - add new systems to .systems[], remove obsolete ones, refresh pvmInstanceID/os/osDetail
         - refresh .cos_instances from IBM Cloud
       At the end, prints a masked snapshot of the current JSON config.
+      Upgrade note: run this once after upgrading to backfill os/osDetail on any
+      pre-existing .systems[] entry that predates this field (treated as ibmi until then).
 
   -updws
       Refresh PowerVS workspaces from IBM Cloud APIs:
@@ -949,7 +952,7 @@ EOF
 #### START:FUNCTION - run_updlpars_api ####
 run_updlpars_api() {
 	get_iam_token
-	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs (IBM i only) ===" "1"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs ===" "1"
 
 	# 0) Refresh cos_instances from IBM Cloud (Cloud Object Storage instances)
 	cos_raw=$(cos_ins_ls 2>>"$log_file")
@@ -966,10 +969,6 @@ run_updlpars_api() {
 		jq --argjson cos "$cos_instances_json" '.cos_instances = $cos' "$CONFIG_JSON" > "$tmp_cos" && mv "$tmp_cos" "$CONFIG_JSON"
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - cos_instances section refreshed from IBM Cloud ($(jq 'length' <<<"$cos_instances_json") instance(s))." "1"
 	else
-		# Distinguish "API returned nothing at all" (auth/permission/pagination issue)
-		# from "API returned resources, but none matched the COS CRN filter" (the
-		# CRN service-name substring may have changed on IBM's side) - both look
-		# identical to the old one-line warning, but need different follow-up.
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: No Cloud Object Storage instances found among ${cos_total:-0} resource instance(s) scanned; cos_instances not updated." "1"
 	fi
 
@@ -1000,43 +999,46 @@ run_updlpars_api() {
 			continue
 		fi
 
-		local ws_ibmi_found=0
+		local ws_found=0
 		local ws_new_count=0
 		local ws_existing_count=0
 
-		# Iterar sobre TODAS as pvmInstances; filtramos IBM i em bash/jq
+		# Iterar sobre TODAS as pvmInstances de todos os OS (ibmi/aix/linux/other)
 		while IFS= read -r inst; do
-			# Decide se é IBM i com base em vários sinais (suporta esquemas antigos e novos)
-			os_flag=$(jq -r '
-				if ((.osType? // "" | ascii_downcase) == "ibmi") then
-					"yes"
-				elif ((.operatingSystem? | type == "string")
-					  and ((.operatingSystem | ascii_downcase) | test("ibmi|v7r[0-9]m[0-9]"; "i"))) then
-					"yes"
-				elif ((.operatingSystem.type? // "" | ascii_downcase) == "ibmi") then
-					"yes"
-				elif .configuration.softwareLicenses.ibmiCSS? == true then
-					"yes"
-				elif .softwareLicenses.ibmiCSS? == true then
-					"yes"
-				else
-					"no"
+			ws_found=1
+
+			# Classificar o OS: ibmi (deteção multi-sinal já existente) / aix / linux (distros
+			# conhecidas) / other (qualquer osType não reconhecido - nunca assumir linux por
+			# eliminação, ver spec 2026-08-05 secção A).
+			os_class=$(jq -r '
+				def is_ibmi:
+					((.osType? // "" | ascii_downcase) == "ibmi")
+					or ((.operatingSystem? | type == "string") and ((.operatingSystem | ascii_downcase) | test("ibmi|v7r[0-9]m[0-9]"; "i")))
+					or ((.operatingSystem.type? // "" | ascii_downcase) == "ibmi")
+					or (.configuration.softwareLicenses.ibmiCSS? == true)
+					or (.softwareLicenses.ibmiCSS? == true);
+				def linux_distros: ["rhel","sles","suse","ubuntu","debian","centos","fedora","rocky","almalinux","oraclelinux"];
+				if is_ibmi then "ibmi"
+				elif ((.osType? // "" | ascii_downcase) == "aix") then "aix"
+				elif ((.osType? // "" | ascii_downcase) as $t | linux_distros | index($t) != null) then "linux"
+				else "other"
 				end
 			' <<<"$inst")
 
-			if [[ "$os_flag" != "yes" ]]; then
-				# não é IBM i, ignoramos
-				continue
-			fi
-
-			ws_ibmi_found=1
+			os_detail=$(jq -r '
+				if ((.operatingSystem? // "" | ascii_downcase) == "unknown" or (.operatingSystem? // "") == "") then
+					(.osType? // "unknown")
+				else
+					.operatingSystem
+				end
+			' <<<"$inst")
 
 			# Nome e ID: suportar tanto serverName/pvmInstanceID como name/id
 			name=$(jq -r '.serverName // .name // "UNKNOWN"' <<<"$inst")
 			pvmid=$(jq -r '.pvmInstanceID // .id // ""'      <<<"$inst")
 
 			if [[ -z "$pvmid" || "$pvmid" == "null" ]]; then
-				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Skipping IBM i instance '$name' in '$ws' (no pvmInstanceID/id)." "1"
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Skipping LPAR '$name' in '$ws' (no pvmInstanceID/id)." "1"
 				continue
 			fi
 
@@ -1046,7 +1048,7 @@ run_updlpars_api() {
 			' <<<"$existing_systems_json")
 
 			if [[ -n "$existing_obj" && "$existing_obj" != "null" ]]; then
-				# Já existe: mantemos o IP anterior, actualizamos ws/pvmid
+				# Já existe: mantemos o IP anterior, actualizamos ws/pvmid/os/osDetail
 				old_ip=$(jq -r '.ip // ""' <<<"$existing_obj")
 				ws_existing_count=$((ws_existing_count + 1))
 
@@ -1055,7 +1057,9 @@ run_updlpars_api() {
 					--arg ip "$old_ip" \
 					--arg pvmid "$pvmid" \
 					--arg ws "$ws" \
-					'{name:$name, ip:$ip, pvmInstanceID:$pvmid, workspace:$ws}')
+					--arg os "$os_class" \
+					--arg osdetail "$os_detail" \
+					'{name:$name, ip:$ip, pvmInstanceID:$pvmid, workspace:$ws, os:$os, osDetail:$osdetail}')
 
 			else
 				ws_new_count=$((ws_new_count + 1))
@@ -1082,16 +1086,16 @@ run_updlpars_api() {
 				ip_count=${#ip_array[@]}
 
 				if (( ip_count == 0 )); then
-					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New IBM i LPAR '$name' in workspace '$ws' has no IP addresses reported by API (storing empty IP)." "1"
+					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New LPAR '$name' in workspace '$ws' has no IP addresses reported by API (storing empty IP)." "1"
 
 				elif (( ip_count == 1 )); then
 					chosen_ip="${ip_array[0]}"
-					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New IBM i LPAR '$name' in workspace '$ws' -> single IP detected: $chosen_ip" "1"
+					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New LPAR '$name' in workspace '$ws' -> single IP detected: $chosen_ip" "1"
 
 				else
 					echoscreen "" "1"
 					echoscreen "============================================================" "1"
-					echoscreen "IBM i LPAR '$name' in workspace '$ws' has multiple IP addresses:" "1"
+					echoscreen "LPAR '$name' in workspace '$ws' has multiple IP addresses:" "1"
 					for (( idx=0; idx<ip_count; idx++ )); do
 						echoscreen "  [$((idx+1))] ${ip_array[$idx]}" "1"
 					done
@@ -1158,7 +1162,7 @@ run_updlpars_api() {
 					done
 
 					chosen_ip="${ip_array[$((choice-1))]}"
-					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Selected IP '$chosen_ip' for IBM i LPAR '$name'." "1"
+					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Selected IP '$chosen_ip' for LPAR '$name'." "1"
 				fi
 
 				system_obj=$(jq -n \
@@ -1166,7 +1170,9 @@ run_updlpars_api() {
 					--arg ip "$chosen_ip" \
 					--arg pvmid "$pvmid" \
 					--arg ws "$ws" \
-					'{name:$name, ip:$ip, pvmInstanceID:$pvmid, workspace:$ws}')
+					--arg os "$os_class" \
+					--arg osdetail "$os_detail" \
+					'{name:$name, ip:$ip, pvmInstanceID:$pvmid, workspace:$ws, os:$os, osDetail:$osdetail}')
 			fi
 
 			# Acrescenta este objecto JSON (numa linha) ao acumulador
@@ -1174,18 +1180,18 @@ run_updlpars_api() {
 
 		done < <(printf '%s\n' "$resp" | jq -c '.pvmInstances[]?')
 
-		if (( ws_ibmi_found == 0 )); then
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> No IBM i instances found in '$ws' (based on osType/operatingSystem/softwareLicenses)." "1"
+		if (( ws_found == 0 )); then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> No LPARs found in '$ws'." "1"
 		elif (( ws_new_count > 0 )); then
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Workspace '$ws': $ws_new_count new IBM i instance(s) added, $ws_existing_count confirmed unchanged." "1"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Workspace '$ws': $ws_new_count new LPAR(s) added, $ws_existing_count confirmed unchanged." "1"
 		else
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Workspace '$ws': $ws_existing_count IBM i instance(s) confirmed, no changes." "1"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Workspace '$ws': $ws_existing_count LPAR(s) confirmed, no changes." "1"
 		fi
 	done
 
 	# Se não conseguimos nada do API, não mexemos no JSON
 	if [[ -z "$all_systems" ]]; then
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: No IBM i systems retrieved from any workspace; keeping existing systems[] as-is." "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: No LPARs retrieved from any workspace; keeping existing systems[] as-is." "1"
 	else
 		# Converte as linhas em array JSON e sobrescreve systems[]
 		systems_json=$(printf '%s\n' "$all_systems" | jq -s '.')
@@ -1193,7 +1199,7 @@ run_updlpars_api() {
 		jq --argjson systems "$systems_json" '.systems = $systems' "$CONFIG_JSON" > "$tmp_file" && \
 			mv "$tmp_file" "$CONFIG_JSON"
 
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Systems updated from IBM Cloud (IBM i only: new LPARs added, obsolete removed)." "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Systems updated from IBM Cloud (all OS: new LPARs added, obsolete removed)." "1"
 	fi
 
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Final (masked) config snapshot:" "1"
