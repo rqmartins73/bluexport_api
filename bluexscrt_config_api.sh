@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="1.2"
+VERSION="1.3"
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -79,6 +79,15 @@ Options:
         - refresh .cos_instances from IBM Cloud
       At the end, prints a masked snapshot of the current JSON config.
 
+  -updws
+      Refresh PowerVS workspaces from IBM Cloud APIs:
+        - discover PowerVS workspaces across all known regions
+        - add new workspaces to .workspaces (prompts for a short name, e.g. WSMAD2)
+        - refresh crn/name for already-known workspaces (matched by workspace ID)
+        - remove workspaces from .workspaces that no longer exist in IBM Cloud
+      If any new workspace was found, automatically runs -updlpars at the end
+      to populate the LPARs of the new workspace(s).
+
   -h | --help
       Show this help.
 
@@ -88,6 +97,7 @@ Examples:
   $(basename "$0") -dellpar ibmi75m2
   $(basename "$0") -addlpar ibmi75m2 172.26.2.5 7ed4ea03-... WSMAD2
   $(basename "$0") -updlpars
+  $(basename "$0") -updws
 EOF
 }
 
@@ -1132,6 +1142,141 @@ run_updlpars_api() {
 }
 #### END:FUNCTION - run_updlpars_api ####
 
+#### START:FUNCTION - run_updws_api ####
+run_updws_api() {
+	get_iam_token
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updws using IBM Cloud APIs ===" "1"
+
+	existing_workspaces_json=$(jq '.workspaces // {}' "$CONFIG_JSON")
+	workspaces_json="$existing_workspaces_json"
+
+	declare -A seen_ids=()
+	new_found=0
+
+	local ALL_BASE_VARS=(
+		base_syd04 base_syd05
+		base_sao1 base_sao4 base_sao5
+		base_mon01 base_tor01
+		base_eu_de_1 base_eu_de_2
+		base_lon04 base_lon06
+		base_che
+		base_tok04 base_osa21
+		base_mad02 base_mad04
+		base_us_east base_wdc06 base_wdc07
+		base_us_south base_dal10 base_dal12 base_dal14
+	)
+
+	for var in "${ALL_BASE_VARS[@]}"; do
+		local url="${!var:-}"
+		[[ -z "$url" ]] && continue
+
+		local resp
+		resp=$(curl -sX GET "$url/v1/workspaces" -H "$header_auth" -H "$header_json")
+
+		if ! printf '%s\n' "$resp" | jq -e '.workspaces[]?' >/dev/null 2>&1; then
+			continue
+		fi
+
+		while IFS= read -r ws; do
+			local name region crn wsid short existing_key
+
+			name=$(jq -r '.name // "UNKNOWN"' <<<"$ws")
+			region=$(jq -r '.location.region // ""' <<<"$ws")
+			crn=$(jq -r '.details.crn // ""' <<<"$ws")
+			wsid=$(jq -r '.id // ""' <<<"$ws")
+
+			[[ -z "$wsid" ]] && continue
+
+			if [[ -n "${seen_ids[$wsid]:-}" ]]; then
+				continue
+			fi
+			seen_ids["$wsid"]=1
+
+			existing_key=$(jq -r --arg id "$wsid" '
+				to_entries[]? | select(.value.id == $id) | .key
+			' <<<"$existing_workspaces_json" | head -1)
+
+			if [[ -n "$existing_key" ]]; then
+				# Already known: refresh crn/name under the same short key
+				workspaces_json=$(jq --arg key "$existing_key" --arg crn "$crn" --arg id "$wsid" --arg nm "$name" \
+					'.[$key] = {crn:$crn, id:$id, name:$nm}' <<<"$workspaces_json")
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Workspace '$name' ($existing_key) refreshed." "1"
+			else
+				echo ""
+				echo "New workspace found:"
+				echo "  Name  : $name"
+				echo "  Region: $region"
+				echo "  CRN   : $crn"
+				echo "  ID    : $wsid"
+
+				short=""
+				while :; do
+					printf "Enter short name for this workspace (e.g. WSMAD2): " > /dev/tty
+
+					if ! read -r short < /dev/tty; then
+						echo "" > /dev/tty
+						echo "### No input received for workspace '$name'; skipping." > /dev/tty
+						short=""
+						break
+					fi
+
+					if [[ -n "$short" ]]; then
+						break
+					fi
+
+					echo "Short name cannot be empty." > /dev/tty
+				done
+
+				if [[ -z "$short" ]]; then
+					continue
+				fi
+
+				workspaces_json=$(jq --arg key "$short" --arg crn "$crn" --arg id "$wsid" --arg nm "$name" \
+					'. + {($key): {crn:$crn, id:$id, name:$nm}}' <<<"$workspaces_json")
+
+				new_found=1
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> New workspace '$name' added as '$short'." "1"
+			fi
+		done < <(printf '%s\n' "$resp" | jq -c '.workspaces[]?')
+	done
+
+	# Remove workspaces that no longer exist in IBM Cloud. Only when at least one
+	# workspace was actually returned by an endpoint - otherwise a transient API/network
+	# failure across every region would wipe out .workspaces entirely.
+	if (( ${#seen_ids[@]} == 0 )); then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: No workspaces returned by any IBM Cloud PowerVS endpoint; keeping existing workspaces as-is (no additions/removals)." "1"
+	else
+		local seen_json removed_keys
+		seen_json=$(printf '%s\n' "${!seen_ids[@]}" | jq -R . | jq -s .)
+		removed_keys=$(jq -r --argjson seen "$seen_json" '
+			to_entries[] | select([.value.id] | inside($seen) | not) | .key
+		' <<<"$workspaces_json")
+
+		if [[ -n "$removed_keys" ]]; then
+			while IFS= read -r key; do
+				[[ -z "$key" ]] && continue
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Workspace '$key' no longer exists in IBM Cloud; removing." "1"
+				workspaces_json=$(jq --arg key "$key" 'del(.[$key])' <<<"$workspaces_json")
+			done <<<"$removed_keys"
+		fi
+	fi
+
+	tmp_cfg="${CONFIG_JSON}.tmp"
+	jq --argjson ws "$workspaces_json" '.workspaces = $ws' "$CONFIG_JSON" > "$tmp_cfg" && mv "$tmp_cfg" "$CONFIG_JSON"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Workspaces section updated in $CONFIG_JSON." "1"
+
+	if (( new_found == 1 )); then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - New workspace(s) detected - running -updlpars to populate their LPARs..." "1"
+		run_updlpars_api
+	else
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Final (masked) config snapshot:" "1"
+		print_masked_config
+	fi
+
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -updws finished." "1"
+}
+#### END:FUNCTION - run_updws_api ####
+
 #### START:FUNCTION - vsi_exists_in_cloud ####
 vsi_exists_in_cloud() {
     local ws="$1"           # exemplo: WSMAD2
@@ -1285,6 +1430,11 @@ case "$flag" in
   -updlpars)
         ensure_config_exists
         run_updlpars_api
+        ;;
+
+  -updws)
+        ensure_config_exists
+        run_updws_api
         ;;
 
   *)

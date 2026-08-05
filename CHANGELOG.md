@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.3] - 2026-08-05 (`bluexscrt_config_api.sh`)
+
+### Added
+- `-updws` flag: refreshes PowerVS workspaces from IBM Cloud APIs, mirroring `-updlpars`. Discovers workspaces across all known regions, adds new ones (prompting for a short name), refreshes crn/name for already-known workspaces (matched by workspace ID, so the existing short-name key is preserved), and removes workspaces from `.workspaces` that no longer exist in IBM Cloud. As a safety guard, removal is skipped entirely if no workspace at all was returned by any endpoint (avoids wiping `.workspaces` on a transient API/network failure). If any new workspace was found, automatically runs `-updlpars` at the end to populate the new workspace's LPARs.
+
 ## [1.12.1] - 2026-08-04
 
 ### Fixed (`bluexport_api.sh`)
