@@ -1354,7 +1354,7 @@ get_iASP_name() {
 		# COMMON BLOCK — PARSING iASP OUTPUT (LOCAL OR REMOTE)
 		###################################################################
 		iasp_name=$(echo "$iasp_output" | tail -n+4 | head -n-1 | awk '{print $1":"$3}')
-		: > "$iasp_names_file"
+		echo "" > "$iasp_names_file"
 		for line in $iasp_name
 		do
 			line_status=$(echo "$line" | cut -d ":" -f2-)
