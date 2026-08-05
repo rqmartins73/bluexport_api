@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.5] - 2026-08-05 (`bluexscrt_config_api.sh`)
+
+### Fixed
+- `cos_ins_ls`: the Resource Controller "list resource instances" call only ever read page 1 (API default page size is small), so any Cloud Object Storage instance sitting past the first page was silently invisible to `.cos_instances` refresh - looked identical to "account has zero COS instances". Now paginates through `next_url` (with `limit=100`) until exhausted and merges every page before filtering by CRN.
+- `run_updlpars_api` / `-createconfig`: the "No Cloud Object Storage instances found" warning now also reports how many resource instances were actually scanned, to distinguish a real "API/permission problem, nothing came back at all" from "resources came back, but none matched the `:cloud-object-storage:` CRN filter" (e.g. if IBM ever renames the CRN service segment).
+
+### Changed
+- `run_updlpars_api`: per-workspace log line no longer stays silent when a workspace's IBM i LPARs are unchanged. Now explicitly reports `"Workspace 'X': N IBM i instance(s) confirmed, no changes."` (or `"N new IBM i instance(s) added, M confirmed unchanged."` when something new was found), instead of leaving it ambiguous whether the run actually did anything for that workspace.
+
 ## [1.4] - 2026-08-05 (`bluexscrt_config_api.sh`)
 
 ### Added

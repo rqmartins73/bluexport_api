@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="1.4"
+VERSION="1.5"
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -474,7 +474,30 @@ object_delete() {
 }
 
 cos_ins_ls() {
-	curl -sX GET https://resource-controller.cloud.ibm.com/v2/resource_instances?type=service_instance -H "$header_auth" -H "$header_accept"
+	# The Resource Controller "list resource instances" API paginates (default
+	# page size is small - 10). Scanning ALL service instances in the account
+	# (no resource_id filter, unlike rc_list_powervs) can easily span several
+	# pages once PowerVS workspaces/VPC/etc are added, silently dropping COS
+	# instances that land past page 1 if we only ever read the first page.
+	# Follow next_url until exhausted and merge everything into one .resources[].
+	local url="https://resource-controller.cloud.ibm.com/v2/resource_instances?type=service_instance&limit=100"
+	local all_resources="[]" page next
+
+	while [[ -n "$url" ]]; do
+		page=$(curl -sX GET "$url" -H "$header_auth" -H "$header_accept")
+
+		all_resources=$(jq -n --argjson acc "$all_resources" --argjson page "$page" \
+			'$acc + ($page.resources // [])')
+
+		next=$(jq -r '.next_url // empty' <<<"$page")
+		if [[ -n "$next" ]]; then
+			url="https://resource-controller.cloud.ibm.com${next}"
+		else
+			url=""
+		fi
+	done
+
+	jq -n --argjson resources "$all_resources" '{resources: $resources}'
 }
 
 cos_ls_buckets() {
@@ -866,20 +889,20 @@ EOF
 	header_json="Content-Type: application/json"
 	header_accept="Accept: application/json"
 	# 5a) Descobrir instâncias Cloud Object Storage
-	cos_instances_json=$(
-		cos_ins_ls | jq '
-			[.resources[]
-				| select(.crn | contains(":cloud-object-storage:"))
-				| {name, guid, crn}]
-			| reduce .[] as $i ({}; .[$i.name] = {guid: $i.guid, crn: $i.crn})
-		'
-	)
+	cos_raw=$(cos_ins_ls)
+	cos_total=$(jq '[.resources[]?] | length' <<<"$cos_raw" 2>/dev/null)
+	cos_instances_json=$(jq '
+		[.resources[]?
+			| select(.crn | contains(":cloud-object-storage:"))
+			| {name, guid, crn}]
+		| reduce .[] as $i ({}; .[$i.name] = {guid: $i.guid, crn: $i.crn})
+	' <<<"$cos_raw")
 	if [[ -n "$cos_instances_json" && "$cos_instances_json" != "{}" ]]; then
 		tmp_cos="${json_path}.tmp"
 		jq --argjson cos "$cos_instances_json" '.cos_instances = $cos' "$json_path" > "$tmp_cos" && mv "$tmp_cos" "$json_path"
-		echo "### Added cos_instances section to $json_path"
+		echo "### Added cos_instances section to $json_path ($(jq 'length' <<<"$cos_instances_json") instance(s))"
 	else
-		echo "### WARNING: No Cloud Object Storage instances found (cos_instances not added)." | tee -a "$log_file"
+		echo "### WARNING: No Cloud Object Storage instances found among ${cos_total:-0} resource instance(s) scanned (cos_instances not added)." | tee -a "$log_file"
 	fi
 	# 5) Descobrir workspaces PowerVS
 	if discover_workspaces_via_powervs; then
@@ -905,21 +928,25 @@ run_updlpars_api() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting -updlpars using IBM Cloud APIs (IBM i only) ===" "1"
 
 	# 0) Refresh cos_instances from IBM Cloud (Cloud Object Storage instances)
-	cos_instances_json=$(
-		cos_ins_ls 2>>"$log_file" | jq '
-			[.resources[]
-				| select(.crn | contains(":cloud-object-storage:"))
-				| {name, guid, crn}]
-			| reduce .[] as $i ({}; .[$i.name] = {guid: $i.guid, crn: $i.crn})
-		'
-	)
+	cos_raw=$(cos_ins_ls 2>>"$log_file")
+	cos_total=$(jq '[.resources[]?] | length' <<<"$cos_raw" 2>/dev/null)
+	cos_instances_json=$(jq '
+		[.resources[]?
+			| select(.crn | contains(":cloud-object-storage:"))
+			| {name, guid, crn}]
+		| reduce .[] as $i ({}; .[$i.name] = {guid: $i.guid, crn: $i.crn})
+	' <<<"$cos_raw")
 
 	if [[ -n "$cos_instances_json" && "$cos_instances_json" != "{}" ]]; then
 		tmp_cos="${CONFIG_JSON}.tmp"
 		jq --argjson cos "$cos_instances_json" '.cos_instances = $cos' "$CONFIG_JSON" > "$tmp_cos" && mv "$tmp_cos" "$CONFIG_JSON"
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - cos_instances section refreshed from IBM Cloud." "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - cos_instances section refreshed from IBM Cloud ($(jq 'length' <<<"$cos_instances_json") instance(s))." "1"
 	else
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: No Cloud Object Storage instances found; cos_instances not updated." "1"
+		# Distinguish "API returned nothing at all" (auth/permission/pagination issue)
+		# from "API returned resources, but none matched the COS CRN filter" (the
+		# CRN service-name substring may have changed on IBM's side) - both look
+		# identical to the old one-line warning, but need different follow-up.
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: No Cloud Object Storage instances found among ${cos_total:-0} resource instance(s) scanned; cos_instances not updated." "1"
 	fi
 
 	# Load current systems[] from JSON (to detect existing vs new)
@@ -950,6 +977,8 @@ run_updlpars_api() {
 		fi
 
 		local ws_ibmi_found=0
+		local ws_new_count=0
+		local ws_existing_count=0
 
 		# Iterar sobre TODAS as pvmInstances; filtramos IBM i em bash/jq
 		while IFS= read -r inst; do
@@ -995,6 +1024,7 @@ run_updlpars_api() {
 			if [[ -n "$existing_obj" && "$existing_obj" != "null" ]]; then
 				# Já existe: mantemos o IP anterior, actualizamos ws/pvmid
 				old_ip=$(jq -r '.ip // ""' <<<"$existing_obj")
+				ws_existing_count=$((ws_existing_count + 1))
 
 				system_obj=$(jq -n \
 					--arg name "$name" \
@@ -1004,6 +1034,7 @@ run_updlpars_api() {
 					'{name:$name, ip:$ip, pvmInstanceID:$pvmid, workspace:$ws}')
 
 			else
+				ws_new_count=$((ws_new_count + 1))
 				# LPAR novo: decidir IP (com escolha se houver mais do que um)
 				# Suportar:
 				#  - addresses[].ipAddress/ip
@@ -1121,6 +1152,10 @@ run_updlpars_api() {
 
 		if (( ws_ibmi_found == 0 )); then
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> No IBM i instances found in '$ws' (based on osType/operatingSystem/softwareLicenses)." "1"
+		elif (( ws_new_count > 0 )); then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Workspace '$ws': $ws_new_count new IBM i instance(s) added, $ws_existing_count confirmed unchanged." "1"
+		else
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - -> Workspace '$ws': $ws_existing_count IBM i instance(s) confirmed, no changes." "1"
 		fi
 	done
 
