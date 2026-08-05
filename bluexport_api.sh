@@ -1465,7 +1465,12 @@ flush_asps() {
 
 ####  START:FUNCTION - Do the Snapshot Create  ####
 do_snap_create() {
-	flush_asps
+	if [[ "$vsi_os" == "ibmi" ]]
+	then
+		flush_asps
+	else
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is $vsi_os - CHGASPACT not applicable, skipping ASP flush." "1"
+	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Snapshot $snap_name of Instance $vsi with volumes $volumes_to_echo" "1"
 	# Construir lista de volumeIDs (se tiveres indicado volumes; se não, o serviço decide)
 	local json_ids=""
@@ -1745,10 +1750,15 @@ do_snap_delete() {
 
 ####  START:FUNCTION - Do the Volume Clone Execute ####
 do_volume_clone_execute() {
-	# Flush ASPs na origem antes de executar o clone
+	# Flush ASPs na origem antes de executar o clone (IBM i only)
 	if [[ $shutoff == "0" ]]
 	then
-		flush_asps
+		if [[ "$vsi_os" == "ibmi" ]]
+		then
+			flush_asps
+		else
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is $vsi_os - CHGASPACT not applicable, skipping ASP flush." "1"
+		fi
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Volume Clone with name $vclone_name ..." "1"
 	if [[ -z "$vclone_id" ]]; then
@@ -6289,7 +6299,12 @@ echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes Name Captured: $volumes_name" "1
 ####  START: Flush ASPs and iASP Memory to Disk  ####
 if [ $shutoff -eq 0 ]
 then
-	flush_asps
+	if [[ "$vsi_os" == "ibmi" ]]
+	then
+		flush_asps
+	else
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi is $vsi_os - CHGASPACT not applicable, skipping ASP flush." "1"
+	fi
 else
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Skipping Flushing Memory to Disk..." "1"
 fi
