@@ -1026,10 +1026,14 @@ run_updlpars_api() {
 			' <<<"$inst")
 
 			os_detail=$(jq -r '
-				if ((.operatingSystem? // "" | ascii_downcase) == "unknown" or (.operatingSystem? // "") == "") then
-					(.osType? // "unknown")
+				if ((.operatingSystem? | type) == "string") then
+					(if ((.operatingSystem | ascii_downcase) == "unknown" or .operatingSystem == "") then
+						(.osType? // "unknown")
+					else
+						.operatingSystem
+					end)
 				else
-					.operatingSystem
+					(.osType? // "unknown")
 				end
 			' <<<"$inst")
 
