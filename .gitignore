@@ -3,6 +3,8 @@ bluexscrt*.json
 *_secrets.json
 *_config.json
 bluexport_api_conf.json
+*hmac*.json
+!hmac_keys_example.json
 
 # Log Files
 *.log

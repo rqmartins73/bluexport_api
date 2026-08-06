@@ -272,7 +272,7 @@ For `OTHERACCOUNT`, create or open the IBM Cloud COS service credential with HMA
 }
 ```
 
-An example file with this structure is provided at `hmac_keys_example.json` in the repo root - copy it and fill in your keys.
+An example file with this structure is provided at `hmac_keys_example.json` in the repo root - copy it to a file **outside this repository** (or at minimum a gitignored path) and fill in your keys. Never commit real HMAC credentials.
 
 Both `-imgimport` and `-imgexport` monitor their PowerVS job to completion and exit non-zero on failure, including when another import/export operation is already running in the target workspace (PowerVS only allows one at a time per workspace).
 

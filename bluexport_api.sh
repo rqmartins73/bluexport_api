@@ -63,7 +63,8 @@
 #
 #   BUCKET_REGION is the IBM COS S3 endpoint region where the destination bucket exists.
 #   Same HMAC JSON file format as -imgimport for OTHERACCOUNT (see above, or copy
-#   hmac_keys_example.json in this repo and fill in your keys).
+#   hmac_keys_example.json to a file outside this repository, or at minimum a
+#   gitignored path, and fill in your keys - never commit real HMAC credentials).
 #   Both -imgimport and -imgexport monitor their PowerVS job to completion and exit
 #   non-zero on failure (including if another import/export is already running in the
 #   target workspace - PowerVS only allows one at a time per workspace).
@@ -500,7 +501,8 @@ help() {
 	echoscreen ""
 	echoscreen "  OTHERACCOUNT:"
 	echoscreen "    Same HMAC JSON file format as -imgimport - copy hmac_keys_example.json"
-	echoscreen "    in this repo and fill in your keys."
+	echoscreen "    to a file outside this repository (or at minimum a gitignored path)"
+	echoscreen "    and fill in your keys. Never commit real HMAC credentials."
 	echoscreen ""
 	echoscreen "  Both -imgimport and -imgexport monitor the PowerVS job to completion and"
 	echoscreen "  exit non-zero on failure, including if another import/export operation is"
@@ -1307,8 +1309,8 @@ job_monitor() {
 # Same polling/retry logic as job_monitor() (proven in production for captures), but
 # without anything capture-specific (no capture_name/vsi/destination, no delete_previous_img,
 # no operid_file reuse, no per-capture permanent log file) - job_monitor() itself is left
-# untouched. Exits 0 on success, 1 on failure (job failed, or transient-failure retries
-# exhausted) - unlike abort()'s historical default, callers can check $? after this.
+# untouched. Exits the process 0 on success, 1 on failure (via abort()) - this function
+# never returns to its caller.
 wait_for_job() {
 	local job_id="$1"
 	local label="$2"
@@ -4592,6 +4594,7 @@ img_import() {
 	head_body="/tmp/bluexport_imgimport_head_$$.out"
 	if [[ "$account_type" == "OTHERACCOUNT" ]]
 	then
+		curl --help all 2>/dev/null | grep -q -- '--aws-sigv4' || abort "$(date +%Y-%m-%d_%H:%M:%S) - This system's curl does not support --aws-sigv4 (requires curl 7.75+, used for the OTHERACCOUNT COS bucket/object pre-check). On IBM i PASE, install a newer curl via yum/dnf from /QOpenSys/pkgs, or use the CURRACCOUNT bearer-auth path instead." 1
 		head_http=$(curl -sS -o "$head_body" -w "%{http_code}" --connect-timeout 30 --max-time 120 --aws-sigv4 "aws:amz:${cos_region}:s3" --user "${cos_accesskey}:${cos_secretkey}" -I "$cos_endpoint" 2>>"$log_file")
 	else
 		head_http=$(curl -sS -o "$head_body" -w "%{http_code}" --connect-timeout 30 --max-time 120 -I "$cos_endpoint" -H "$header_auth" 2>>"$log_file")
@@ -4784,6 +4787,7 @@ img_export() {
 	local cos_endpoint head_http head_body
 	cos_endpoint="https://s3.${cos_region}.cloud-object-storage.appdomain.cloud/${bucket_root}"
 	head_body="/tmp/bluexport_imgexport_head_$$.out"
+	curl --help all 2>/dev/null | grep -q -- '--aws-sigv4' || abort "$(date +%Y-%m-%d_%H:%M:%S) - This system's curl does not support --aws-sigv4 (requires curl 7.75+, used for the COS bucket pre-check). On IBM i PASE, install a newer curl via yum/dnf from /QOpenSys/pkgs." 1
 	head_http=$(curl -sS -o "$head_body" -w "%{http_code}" --connect-timeout 30 --max-time 120 --aws-sigv4 "aws:amz:${cos_region}:s3" --user "${cos_accesskey}:${cos_secretkey}" -I "$cos_endpoint" 2>>"$log_file")
 	cat "$head_body" >> "$log_file" 2>/dev/null
 	rm -f "$head_body"
@@ -4795,7 +4799,7 @@ img_export() {
 			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS bucket validation was redirected. This usually means BUCKET_REGION is wrong. Bucket: $bucket_root, region used: $cos_region." 1
 			;;
 		403)
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS access denied for bucket $bucket_root in region $cos_region. This normally means invalid HMAC keys, wrong bucket region, or missing COS permissions." 1
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS access denied for bucket $bucket_root in region $cos_region. This normally means invalid HMAC keys, wrong bucket region, or missing COS permissions. Note: this pre-check requires bucket-level read (HeadBucket); a COS credential scoped only to object write will 403 here even though the export itself would succeed." 1
 			;;
 		404)
 			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS bucket not found: $bucket_root in region $cos_region." 1
@@ -5624,7 +5628,7 @@ case $1 in
    -imgimport)
 	if [[ $# -lt 8 || $# -gt 9 ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]" 1
 	fi
 	img_import "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
     ;;
