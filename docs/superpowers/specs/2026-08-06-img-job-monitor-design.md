@@ -15,37 +15,66 @@ Mirrors `img_import_api()` / `img_export_api()`'s existing shape (same headers, 
 
 Both use `-H "$header_auth" -H "CRN: $CRN" -H "$header_json"` like their POST counterparts, no request body.
 
-**Known unknown:** the exact response body schema was not confirmed against live documentation (the IBM API reference page is a heavy client-rendered SPA that could not be scraped). The response is assumed to be the same `Job` resource shape already used by the unified jobs queue (`status.state`, `status.message`, `status.progress`, and a job-id field reachable via the existing fallback chain `.jobID // .id // .job.id // .jobReference.id`) — this is the same resource family (IBM's own docs describe both the "Ongoing job status dialog" and these "last job" endpoints in identical terms). This will be verified against the real API during implementation/testing (Task-6-style, same as the `-imgexport` plan's undocumented 409 behavior) and the jq extraction adjusted if reality differs.
+**Confirmed response schema** (user verified against the official API reference): both endpoints return a `Job` resource:
+
+```json
+{
+  "id": "...",
+  "operation": {
+    "action": "imageImport",
+    "id": "...",
+    "target": "image"
+  },
+  "status": {
+    "message": "...",
+    "progress": "...",
+    "state": "running"
+  }
+}
+```
+
+No `imageName`/`targetImageName`/`name` field is present in this schema. Both endpoints' official documentation also explicitly lists `400`, `401`, `403`, `404`, and `500` as possible HTTP status codes — see Section C for how each is handled.
 
 ## B. New orchestration functions
 
-### `img_import_monitor(WORKSPACE, [IMAGE_NAME])`
+### `img_import_monitor(WORKSPACE)`
 
 1. Resolve `WORKSPACE` (short name or full name, case-insensitive) to `CRN`/`CLOUD_INSTANCE_ID`/`base_url`/`full_ws_name` — reuses (copies, not extracts — consistent with this file's existing mirror-don't-abstract convention) the resolution block already in `img_import()` (workspace-key lookup via `jq` over `.workspaces`, CRN/ID/base_url derivation). Aborts (exit 1) if the workspace isn't found or is missing CRN/ID/base_url, same messages as the existing block.
 2. Calls `img_import_status_api()`, captures HTTP status same way Task 3 established (`"${raw##*$'\n'}"` / `"${raw%$'\n'*}"`).
-3. If the HTTP status is not 2xx, the body is empty, or the body parses but has no `.status.state` field: abort (exit 1) with `"No import job history found for workspace $full_ws_name."`
-4. Extracts the job ID via the established fallback chain.
-5. If `IMAGE_NAME` was given: best-effort, non-blocking check — if the response has a plausible target-image-name field (try `.imageName // .targetImageName // .name // empty`) and it doesn't case-insensitively match `IMAGE_NAME`, log a warning to the screen and log file (`"WARNING - the last import job's target image name ('X') does not match the name you gave ('Y') - monitoring it anyway, since this is the only import job on record for this workspace."`) but continue — never aborts on a name mismatch, since the API only ever tracks one (the most recent) import job per workspace regardless of name.
+3. Dispatches on HTTP status per Section C. Only `404` (or a `200` with an empty/job-less body) means "no history" — every other non-2xx gets its own specific message.
+4. Extracts the job ID: `.id // .jobID // .job.id // .jobReference.id // empty` (confirmed schema field `.id` tried first, fallbacks kept as defensive belt-and-braces for the other resource types that reuse this pattern elsewhere in the file).
+5. Logs `"Last image import job found: $job_id"` and `"Status: $job_state"` (from `.status.state`) before attaching the monitor.
 6. Calls `wait_for_job "$job_id" "Image import job for workspace $full_ws_name"`.
 
 ### `img_export_monitor(IMAGE_NAME)`
 
 1. Resolves `IMAGE_NAME` to `IMAGE_ID` by searching every workspace in `$allws` — reuses the same search-loop pattern already established in `img_export()` / `do_img_delete()` (iterate workspaces, resolve CRN/CLOUD_INSTANCE_ID/base_url per workspace, `img_ls`, exact-name match, first match wins, `break`). Aborts (exit 1) with `"Image with name $img_name not found in any Workspace."` if no match, same as `img_export()`.
 2. Calls `img_export_status_api()`, captures HTTP status.
-3. Same "no job history" detection as import: abort (exit 1) with `"No export job history found for image $img_name."`
-4. Extracts job ID via the fallback chain.
+3. Same status dispatch as import (Section C).
+4. Extracts job ID via the same fallback chain, logs the same "Last ... job found" / "Status: ..." pair.
 5. Calls `wait_for_job "$job_id" "Image export job for image $img_name"`.
 
-## C. "No job history" detection
+## C. HTTP status dispatch (both endpoints — official docs list 400/401/403/404/500)
 
-Three independent conditions, any one of which triggers the abort described above — deliberately conservative given the schema is unconfirmed:
-- HTTP status is not `2xx`.
-- Response body is empty.
-- Response body is valid JSON but `.status.state` is null/absent.
+Collapsing every non-2xx into a single "no job history" message is explicitly wrong (caught in spec review) — a 401/403/500 would be misreported to the user as "this workspace/image has never had a job," which is actively misleading for diagnosis. Each status gets its own message, all aborting with exit 1 except the true "no history" case:
+
+| Status | Meaning | Message |
+|---|---|---|
+| `404` | No job history for this workspace/image | `"No import/export job history found for <workspace/image>."` |
+| `200` with empty/job-less body | Same as 404 — some APIs return 200 with an empty object instead of 404 | Same "no job history" message |
+| `400` | Invalid request | `"Invalid request while retrieving the last import/export job."` |
+| `401` | IAM token invalid/expired | `"Authentication failed while retrieving the last import/export job."` |
+| `403` | Not authorized | `"Not authorized to retrieve the last import/export job."` |
+| `500` | PowerVS service error | `"PowerVS service error while retrieving the last import/export job."` |
+| any other non-2xx | Unclassified | `"Failed to retrieve the last import/export job, HTTP status <code>."` |
+
+All messages end with exit code 1 via `abort(..., 1)`.
+
+**Precise "200 empty/job-less" condition** (to remove ambiguity for implementation): a `200` response is treated as "no job history" if the body is empty, OR is valid JSON but `.id` and `.status.state` are both null/absent. A `200` with a populated `.id`/`.status.state` proceeds normally (job found).
 
 ## D. Flags
 
-- `-ji WORKSPACE [IMAGE_NAME]` — `IMAGE_NAME` optional, used only for the best-effort mismatch warning in B.1.5.
+- `-ji WORKSPACE` — the confirmed schema has no image-name field on the Job resource, so an optional `IMAGE_NAME` argument would have no real value (it could never be validated against anything) and risks documentation implying a check that doesn't happen. Dropped per spec review; the endpoint is workspace-scoped only, so `WORKSPACE` alone is sufficient and unambiguous.
 - `-je IMAGE_NAME` — always searches every workspace; no workspace argument (deliberately, to avoid the risk of the user mistyping/misremembering the workspace and silently searching the wrong scope).
 
 Argument-count validation in both case-dispatch blocks aborts with exit 1 (consistent with the `-imgimport`/`-imgexport` fix from the prior plan).
@@ -56,10 +85,11 @@ No changes to `wait_for_job()`. Both new orchestration functions call it exactly
 
 ## F. Documentation
 
-- Header comment block: new "Monitor an existing import/export job" section next to the existing import/export documentation.
-- `help()`: new entries for `-ji`/`-je`, same plain-text/5250-safe conventions as the rest of the file.
+- Header comment block: new "Monitor an existing import/export job" section next to the existing import/export documentation, with the exact `-ji`/`-je` syntax.
+- `help()`: new entries for `-ji`/`-je` — both the general help listing and the command-specific syntax line, same plain-text/5250-safe conventions as the rest of the file.
 - `README.md`: new subsection under the existing image import/export documentation.
 - `CHANGELOG.md`: new entry under `### Added`.
+- After implementation is complete and verified: update project memory (this is a standing session convention, not code) to record the `-ji`/`-je` feature the same way the `-imgexport` work was recorded.
 
 ## G. Versioning
 
