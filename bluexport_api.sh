@@ -215,7 +215,7 @@ spin_wait() {
 
 #### START:FUNCTION - Finish vsi_status=$(log file when aborting  ####
 abort() {
-        echo $1 >> $log_file
+        echo "$1" >> "$log_file"
         if [ -t 1 ]
         then
                 echo ""
@@ -224,7 +224,7 @@ abort() {
         fi
         timestamp=$(date +%F" "%T" "%Z)
         eval echo $end_log_file >> $log_file
-        exit 0
+        exit "${2:-0}"
 }
 #### END:FUNCTION - Finish log file when aborting  ####
 
@@ -4322,6 +4322,29 @@ do_img_delete() {
 	abort "`date +%Y-%m-%d_%H:%M:%S` - === Image $img_name (ID $IMAGE_ID) deleted successfully from Workspace $found_ws_name. ==="
 }
 #### END:FUNCTION - Delete Image (do_img_delete) ####
+
+####  START:FUNCTION - Load HMAC keys from a COS Service Credentials JSON file (OTHERACCOUNT)  ####
+# load_hmac_keys HMAC_JSON_FILE
+#   Reads .cos_hmac_keys.access_key_id / .cos_hmac_keys.secret_access_key from the given
+#   JSON file (exact format IBM Cloud COS "Service credentials" gives you) and sets the
+#   globals hmac_access_key / hmac_secret_key. Aborts (exit 1) on any parse failure or
+#   missing field, instead of leaving the caller with silently empty keys.
+load_hmac_keys() {
+	local hmac_file="$1"
+	hmac_access_key=""
+	hmac_secret_key=""
+	if ! jq -e . "$hmac_file" >/dev/null 2>&1
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - HMAC keys JSON file $hmac_file is not valid JSON. Aborting..." 1
+	fi
+	hmac_access_key=$(jq -r '.cos_hmac_keys.access_key_id // empty' "$hmac_file")
+	hmac_secret_key=$(jq -r '.cos_hmac_keys.secret_access_key // empty' "$hmac_file")
+	if [[ -z "$hmac_access_key" || -z "$hmac_secret_key" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - HMAC keys JSON file $hmac_file is missing .cos_hmac_keys.access_key_id or .cos_hmac_keys.secret_access_key. Aborting..." 1
+	fi
+}
+####  END:FUNCTION - Load HMAC keys from a COS Service Credentials JSON file (OTHERACCOUNT)  ####
 
 #### START:FUNCTION - Import Image from COS (img_import) ####
 img_import() {
