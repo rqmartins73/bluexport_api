@@ -795,7 +795,7 @@ img_del() {
 }
 
 img_import_api() {
-	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/cos-images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/cos-images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
 }
 
 ## Snapshots
@@ -4458,37 +4458,37 @@ img_import() {
 
 	if [[ -z "$img_name" || -z "$import_bucket" || -z "$import_bucket_region" || -z "$workspace_to_import" || -z "$img_name_ws" || -z "$storage_type" || -z "$account_type" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]" 1
 	fi
 
 	import_bucket_region=${import_bucket_region,,}
 	if ! echo "$import_bucket_region" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid BUCKET_REGION: $import_bucket_region. Use the IBM COS S3 endpoint region, for example eu-es, eu-de, us-east or us-south."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid BUCKET_REGION: $import_bucket_region. Use the IBM COS S3 endpoint region, for example eu-es, eu-de, us-east or us-south." 1
 	fi
 
 	storage_type=${storage_type,,}
 	if [[ "$storage_type" != "tier0" && "$storage_type" != "tier1" && "$storage_type" != "tier3" && "$storage_type" != "tier5k" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid storage type: $storage_type. Valid values are tier0, tier1, tier3 or tier5k."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid storage type: $storage_type. Valid values are tier0, tier1, tier3 or tier5k." 1
 	fi
 
 	account_type=${account_type^^}
 	if [[ "$account_type" != "CURRACCOUNT" && "$account_type" != "OTHERACCOUNT" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid account type: $account_type. Valid values are CURRACCOUNT or OTHERACCOUNT."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid account type: $account_type. Valid values are CURRACCOUNT or OTHERACCOUNT." 1
 	fi
 	if [[ "$account_type" == "CURRACCOUNT" && -n "$hmac_file" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! HMACKEYS-JSON-FILE-PATH-NAME is only valid with OTHERACCOUNT."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! HMACKEYS-JSON-FILE-PATH-NAME is only valid with OTHERACCOUNT." 1
 	fi
 	if [[ "$account_type" == "OTHERACCOUNT" && -z "$hmac_file" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - HMACKEYS-JSON-FILE-PATH-NAME is mandatory when using OTHERACCOUNT."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - HMACKEYS-JSON-FILE-PATH-NAME is mandatory when using OTHERACCOUNT." 1
 	fi
 	if [[ "$account_type" == "OTHERACCOUNT" && ! -f "$hmac_file" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - HMAC keys JSON file $hmac_file not found. Aborting..."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - HMAC keys JSON file $hmac_file not found. Aborting..." 1
 	fi
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Image Import from COS ===" "1"
@@ -4509,7 +4509,7 @@ img_import() {
 	' "$bluexscrt" 2>>"$log_file" | head -n1)
 	if [[ -z "$ws_key" || "$ws_key" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Workspace $workspace_to_import not found in $bluexscrt. Use the workspace short name or full workspace name from your JSON."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Workspace $workspace_to_import not found in $bluexscrt. Use the workspace short name or full workspace name from your JSON." 1
 	fi
 
 	CRN=$(jq -r --arg ws "$ws_key" '.workspaces[$ws].crn' "$bluexscrt")
@@ -4517,7 +4517,7 @@ img_import() {
 	full_ws_name=$(jq -r --arg ws "$ws_key" '.workspaces[$ws].name // $ws' "$bluexscrt")
 	if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Workspace $ws_key ($full_ws_name) missing CRN or ID in $bluexscrt. Aborting..."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Workspace $ws_key ($full_ws_name) missing CRN or ID in $bluexscrt. Aborting..." 1
 	fi
 
 	region_api=$(echo "$CRN" | sed -n 's/.*power-iaas:\([^:]*\):.*/\1/p' | tr '-' '_')
@@ -4525,7 +4525,7 @@ img_import() {
 	base_url="${!base_url_var}"
 	if [[ -z "$base_url" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Could not resolve PowerVS API endpoint for workspace $full_ws_name region $region_api."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Could not resolve PowerVS API endpoint for workspace $full_ws_name region $region_api." 1
 	fi
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Workspace resolved: $workspace_to_import -> $ws_key ($full_ws_name)." "1"
@@ -4535,7 +4535,7 @@ img_import() {
 	existing_img_id=$(echo "$imgs_json" | jq -r --arg name "$img_name_ws" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file" | head -n1)
 	if [[ -n "$existing_img_id" && "$existing_img_id" != "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Image $img_name_ws already exists in Workspace $full_ws_name with ID $existing_img_id. Aborting to avoid duplicate import."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image $img_name_ws already exists in Workspace $full_ws_name with ID $existing_img_id. Aborting to avoid duplicate import." 1
 	fi
 
 	local cos_accesskey cos_secretkey cos_region
@@ -4553,9 +4553,9 @@ img_import() {
 	then
 		if [[ "$account_type" == "OTHERACCOUNT" ]]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Missing COS HMAC accessKey/secretKey. Check $hmac_file."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Missing COS HMAC accessKey/secretKey. Check $hmac_file." 1
 		else
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Missing COS HMAC accessKey/secretKey. Check $bluexscrt."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Missing COS HMAC accessKey/secretKey. Check $bluexscrt." 1
 		fi
 	fi
 	local cos_endpoint head_http head_body
@@ -4574,16 +4574,16 @@ img_import() {
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - COS bucket/object check OK: $import_bucket/$img_name in region $cos_region." "1"
 			;;
 		301|302|307|308)
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS bucket/object validation was redirected. This usually means BUCKET_REGION is wrong. Bucket: $import_bucket, object: $img_name, region used: $cos_region."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS bucket/object validation was redirected. This usually means BUCKET_REGION is wrong. Bucket: $import_bucket, object: $img_name, region used: $cos_region." 1
 			;;
 		403)
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS access denied for bucket/object $import_bucket/$img_name in region $cos_region. For OTHERACCOUNT this normally means invalid HMAC keys, wrong bucket region, or missing COS permissions."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS access denied for bucket/object $import_bucket/$img_name in region $cos_region. For OTHERACCOUNT this normally means invalid HMAC keys, wrong bucket region, or missing COS permissions." 1
 			;;
 		404)
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS bucket or object not found: $import_bucket/$img_name in region $cos_region."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS bucket or object not found: $import_bucket/$img_name in region $cos_region." 1
 			;;
 		*)
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Unable to validate COS bucket/object $import_bucket/$img_name. HTTP status: $head_http."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Unable to validate COS bucket/object $import_bucket/$img_name. HTTP status: $head_http." 1
 			;;
 	esac
 
@@ -4607,28 +4607,34 @@ img_import() {
 		| sed 's/^{//; s/}$//')
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Calling PowerVS COS Image Import API for object $img_name as image $img_name_ws into Workspace $full_ws_name..." "1"
-	local import_resp import_rc import_job_id import_error
-	import_resp=$(img_import_api 2>>"$log_file")
+	local import_raw import_http_code import_resp import_rc import_job_id import_error
+	import_raw=$(img_import_api 2>>"$log_file")
 	import_rc=$?
+	import_http_code="${import_raw##*$'\n'}"
+	import_resp="${import_raw%$'\n'*}"
 	echo "$import_resp" >> "$log_file"
-	if [ $import_rc -ne 0 ] || echo "$import_resp" | jq -e '.code? != null or .error? != null or .errors? != null' >/dev/null 2>&1
+	if [ "$import_rc" -ne 0 ] || [[ ! "$import_http_code" =~ ^2[0-9][0-9]$ ]] || echo "$import_resp" | jq -e '.code? != null or .error? != null or .errors? != null' >/dev/null 2>&1
 	then
 		import_error=$(echo "$import_resp" | jq -r '.message // .error // (.errors[0].message?) // .description // "Unknown error"' 2>/dev/null)
+		if [[ "$import_http_code" == "409" ]] || echo "$import_error $import_resp" | grep -Eiq 'already running|in progress|conflict'
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Another import/export operation is already running in this workspace. Wait for it to complete before starting a new one." 1
+		fi
 		if echo "$import_error $import_resp" | grep -Eiq 'hmac|access.?key|secret.?key|signature|credential|forbidden|not authorized|access denied'
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - PowerVS image import rejected the COS credentials/HMAC keys: $import_error"
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - PowerVS image import rejected the COS credentials/HMAC keys: $import_error" 1
 		fi
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error calling PowerVS image import API for $img_name_ws from COS object $img_name: $import_error"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error calling PowerVS image import API for $img_name_ws from COS object $img_name: $import_error" 1
 	fi
 
 	import_job_id=$(echo "$import_resp" | jq -r '.jobID // .id // .job.id // .jobReference.id // empty' 2>>"$log_file" | head -n1)
 	if [[ -n "$import_job_id" ]]
 	then
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image import submitted successfully. Job ID: $import_job_id" "1"
+		wait_for_job "$import_job_id" "Image import of $img_name_ws"
 	else
-		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image import submitted successfully. Response saved in $log_file" "1"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image import submitted, but no Job ID was returned by the API. Response saved in $log_file. Check the Boot images page or -imglsall to confirm it completed." 1
 	fi
-	abort "`date +%Y-%m-%d_%H:%M:%S` - === Image import request for COS object $img_name as image $img_name_ws submitted successfully to Workspace $full_ws_name. ==="
 }
 #### END:FUNCTION - Import Image from COS (img_import) ####
 
