@@ -833,6 +833,10 @@ img_import_status_api() {
 	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/cos-images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -w '\n%{http_code}'
 }
 
+img_export_status_api() {
+	curl -sX GET $base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/images/$IMAGE_ID/export -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -w '\n%{http_code}'
+}
+
 ## Snapshots
 snap_ls() {
 	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
@@ -4952,6 +4956,120 @@ img_export() {
 }
 ####  END:FUNCTION - Export Image to COS (img_export) ####
 
+####  START:FUNCTION - Monitor Existing Image Export Job (img_export_monitor) ####
+# img_export_monitor IMAGE_NAME
+#   Re-attaches monitoring to the last export job PowerVS has on record for the given
+#   image, without resubmitting anything. Uses PowerVS's "get last image export job"
+#   endpoint (image-scoped, unlike import's workspace-scoped equivalent) - resolves
+#   IMAGE_NAME to an IMAGE_ID by searching every workspace, same pattern as img_export().
+img_export_monitor() {
+	local img_name="$1"
+
+	if [[ -z "$img_name" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -je IMAGE_NAME" 1
+	fi
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Looking up last export job for image $img_name ===" "1"
+
+	read -r -a allws_array <<< "$allws"
+	local IMAGE_ID="" found_ws="" found_ws_name=""
+	for ws in "${allws_array[@]}"
+	do
+		CRN=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$bluexscrt")
+		full_ws_name=$(jq -r --arg ws "$ws" '.workspaces[$ws].name' "$bluexscrt" 2>>"$log_file")
+		if [[ -z "$full_ws_name" || "$full_ws_name" == "null" ]]; then full_ws_name="$ws"; fi
+		if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping." "1"
+			continue
+		fi
+		region_api=$(echo "$CRN" | sed -n 's/.*power-iaas:\([^:]*\):.*/\1/p' | tr '-' '_')
+		if [[ -z "$region_api" ]]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Could not parse region from CRN $CRN for workspace $full_ws_name, skipping." "1"
+			continue
+		fi
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking for Image $img_name in Workspace $full_ws_name..." "1"
+		local imgs_json
+		imgs_json=$(img_ls 2>>"$log_file")
+		if [[ -z "$imgs_json" ]]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Could not retrieve image list via API in workspace $full_ws_name, skipping." "1"
+			continue
+		fi
+		IMAGE_ID=$(echo "$imgs_json" | jq -r --arg name "$img_name" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file" | head -n1)
+		if [[ -n "$IMAGE_ID" && "$IMAGE_ID" != "null" ]]
+		then
+			found_ws="$ws"
+			found_ws_name="$full_ws_name"
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image $img_name found in Workspace $found_ws_name with ID: $IMAGE_ID" "1"
+			break
+		fi
+	done
+	if [[ -z "$IMAGE_ID" || "$IMAGE_ID" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image with name $img_name not found in any Workspace." 1
+	fi
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Retrieving last image export job for image $img_name..." "1"
+
+	local status_raw status_http_code status_resp job_id job_state
+	status_raw=$(img_export_status_api 2>>"$log_file")
+	status_http_code="${status_raw##*$'\n'}"
+	status_resp="${status_raw%$'\n'*}"
+	echo "$status_resp" >> "$log_file"
+
+	case "$status_http_code" in
+		2*)
+			if [[ -z "$status_resp" ]]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - No export job history found for image $img_name." 1
+			fi
+			if ! printf '%s' "$status_resp" | jq -e . >/dev/null 2>&1
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid response received while retrieving the last export job for image $img_name. Check $log_file." 1
+			fi
+			job_id=$(printf '%s' "$status_resp" | jq -r '.id // .jobID // .job.id // .jobReference.id // empty' 2>/dev/null)
+			job_state=$(printf '%s' "$status_resp" | jq -r '.status.state // empty' 2>/dev/null)
+			if [[ -z "$job_id" && -z "$job_state" ]]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - No export job history found for image $img_name." 1
+			elif [[ -z "$job_id" ]]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - Export job history was returned, but the response did not include a Job ID. Check $log_file." 1
+			fi
+			;;
+		404)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - No export job history found for image $img_name." 1
+			;;
+		400)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid request while retrieving the last export job for image $img_name." 1
+			;;
+		401)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Authentication failed while retrieving the last export job for image $img_name." 1
+			;;
+		403)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Not authorized to retrieve the last export job for image $img_name." 1
+			;;
+		500)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - PowerVS service error while retrieving the last export job for image $img_name." 1
+			;;
+		*)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Failed to retrieve the last export job for image $img_name, HTTP status $status_http_code." 1
+			;;
+	esac
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Last image export job found: $job_id" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Status: $job_state" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Attaching monitor..." "1"
+	wait_for_job "$job_id" "Image export job for image $img_name"
+}
+####  END:FUNCTION - Monitor Existing Image Export Job ####
+
        ####  END - FUNCTIONS  ####
 
 ####  START: Iniciate Log and Validate Arguments  ####
@@ -5750,6 +5868,14 @@ case $1 in
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -ji WORKSPACE" 1
 	fi
 	img_import_monitor "$2"
+    ;;
+
+   -je)
+	if [[ $# -ne 2 ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -je IMAGE_NAME" 1
+	fi
+	img_export_monitor "$2"
     ;;
 
   -vclonelsall)
