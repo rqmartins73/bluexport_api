@@ -798,6 +798,10 @@ img_import_api() {
 	curl -sX POST $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/cos-images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
 }
 
+img_export_api() {
+	curl -sX POST $base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/images/$IMAGE_ID/export -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
+}
+
 ## Snapshots
 snap_ls() {
 	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
@@ -4638,6 +4642,184 @@ img_import() {
 }
 #### END:FUNCTION - Import Image from COS (img_import) ####
 
+####  START:FUNCTION - Export Image to COS (img_export) ####
+img_export() {
+	local img_name="$1"
+	local export_bucket="$2"
+	local export_bucket_region="$3"
+	local account_type="$4"
+	local hmac_file="$5"
+
+	if [[ -z "$img_name" || -z "$export_bucket" || -z "$export_bucket_region" || -z "$account_type" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgexport IMGNAME BUCKET BUCKET_REGION CURRACCOUNT|OTHERACCOUNT [HMACKEYS-JSON-FILE-PATH-NAME]" 1
+	fi
+
+	export_bucket_region=${export_bucket_region,,}
+	if ! echo "$export_bucket_region" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid BUCKET_REGION: $export_bucket_region. Use the IBM COS S3 endpoint region, for example eu-es, eu-de, us-east or us-south." 1
+	fi
+
+	account_type=${account_type^^}
+	if [[ "$account_type" != "CURRACCOUNT" && "$account_type" != "OTHERACCOUNT" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid account type: $account_type. Valid values are CURRACCOUNT or OTHERACCOUNT." 1
+	fi
+	if [[ "$account_type" == "CURRACCOUNT" && -n "$hmac_file" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! HMACKEYS-JSON-FILE-PATH-NAME is only valid with OTHERACCOUNT." 1
+	fi
+	if [[ "$account_type" == "OTHERACCOUNT" && -z "$hmac_file" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - HMACKEYS-JSON-FILE-PATH-NAME is mandatory when using OTHERACCOUNT." 1
+	fi
+	if [[ "$account_type" == "OTHERACCOUNT" && ! -f "$hmac_file" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - HMAC keys JSON file $hmac_file not found. Aborting..." 1
+	fi
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Image Export to COS ===" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image to export: $img_name" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Target Bucket: $export_bucket" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Target Bucket Region: $export_bucket_region" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Account Type: $account_type" "1"
+
+	# Procurar a imagem por nome em todas as workspaces (mesmo padrão do do_img_delete)
+	read -r -a allws_array <<< "$allws"
+	local IMAGE_ID="" found_ws="" found_ws_name=""
+	for ws in "${allws_array[@]}"
+	do
+		CRN=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$bluexscrt")
+		full_ws_name=$(jq -r --arg ws "$ws" '.workspaces[$ws].name' "$bluexscrt" 2>>"$log_file")
+		if [[ -z "$full_ws_name" || "$full_ws_name" == "null" ]]; then full_ws_name="$ws"; fi
+		if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping." "1"
+			continue
+		fi
+		region_api=$(echo "$CRN" | sed -n 's/.*power-iaas:\([^:]*\):.*/\1/p' | tr '-' '_')
+		if [[ -z "$region_api" ]]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Could not parse region from CRN $CRN for workspace $full_ws_name, skipping." "1"
+			continue
+		fi
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking for Image $img_name in Workspace $full_ws_name..." "1"
+		local imgs_json
+		imgs_json=$(img_ls 2>>"$log_file")
+		if [[ -z "$imgs_json" ]]
+		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Could not retrieve image list via API in workspace $full_ws_name, skipping." "1"
+			continue
+		fi
+		IMAGE_ID=$(echo "$imgs_json" | jq -r --arg name "$img_name" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file" | head -n1)
+		if [[ -n "$IMAGE_ID" && "$IMAGE_ID" != "null" ]]
+		then
+			found_ws="$ws"
+			found_ws_name="$full_ws_name"
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image $img_name found in Workspace $found_ws_name with ID: $IMAGE_ID" "1"
+			break
+		fi
+	done
+	if [[ -z "$IMAGE_ID" || "$IMAGE_ID" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image with name $img_name not found in any Workspace." 1
+	fi
+
+	local cos_accesskey cos_secretkey cos_region
+	cos_region="$export_bucket_region"
+	if [[ "$account_type" == "CURRACCOUNT" ]]
+	then
+		cos_accesskey="$accesskey"
+		cos_secretkey="$secretkey"
+	else
+		load_hmac_keys "$hmac_file"
+		cos_accesskey="$hmac_access_key"
+		cos_secretkey="$hmac_secret_key"
+	fi
+	if [[ -z "$cos_accesskey" || -z "$cos_secretkey" || "$cos_accesskey" == "null" || "$cos_secretkey" == "null" ]]
+	then
+		if [[ "$account_type" == "OTHERACCOUNT" ]]
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Missing COS HMAC accessKey/secretKey. Check $hmac_file." 1
+		else
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Missing COS HMAC accessKey/secretKey. Check $bluexscrt." 1
+		fi
+	fi
+
+	# Pré-validar a bucket de destino (só a bucket em si - o objecto ainda não existe,
+	# o nome final é decidido pela API). Ignora qualquer prefixo/pasta em BUCKET.
+	# Usa SEMPRE --aws-sigv4 com as mesmas credenciais que vão para o payload do PowerVS
+	# (nunca IAM bearer, mesmo em CURRACCOUNT), para que este pré-check valide mesmo as
+	# HMAC keys que importam - ver spec 2026-08-06, correcção D.4.
+	local bucket_root="${export_bucket%%/*}"
+	local cos_endpoint head_http head_body
+	cos_endpoint="https://s3.${cos_region}.cloud-object-storage.appdomain.cloud/${bucket_root}"
+	head_body="/tmp/bluexport_imgexport_head_$$.out"
+	head_http=$(curl -sS -o "$head_body" -w "%{http_code}" --connect-timeout 30 --max-time 120 --aws-sigv4 "aws:amz:${cos_region}:s3" --user "${cos_accesskey}:${cos_secretkey}" -I "$cos_endpoint" 2>>"$log_file")
+	cat "$head_body" >> "$log_file" 2>/dev/null
+	rm -f "$head_body"
+	case "$head_http" in
+		200|204)
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - COS bucket check OK: $bucket_root in region $cos_region." "1"
+			;;
+		301|302|307|308)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS bucket validation was redirected. This usually means BUCKET_REGION is wrong. Bucket: $bucket_root, region used: $cos_region." 1
+			;;
+		403)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS access denied for bucket $bucket_root in region $cos_region. This normally means invalid HMAC keys, wrong bucket region, or missing COS permissions." 1
+			;;
+		404)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - COS bucket not found: $bucket_root in region $cos_region." 1
+			;;
+		*)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Unable to validate COS bucket $bucket_root. HTTP status: $head_http." 1
+			;;
+	esac
+
+	ACTIONS=$(jq -n \
+		--arg bucketName "$export_bucket" \
+		--arg region "$cos_region" \
+		--arg accessKey "$cos_accesskey" \
+		--arg secretKey "$cos_secretkey" \
+		'{bucketName:$bucketName,region:$region,accessKey:$accessKey,secretKey:$secretKey}' \
+		| sed 's/^{//; s/}$//')
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Calling PowerVS Image Export API for $img_name (ID $IMAGE_ID) from Workspace $found_ws_name to bucket $export_bucket..." "1"
+	local export_raw export_http_code export_resp export_rc export_error export_job_id
+	export_raw=$(img_export_api 2>>"$log_file")
+	export_rc=$?
+	export_http_code="${export_raw##*$'\n'}"
+	export_resp="${export_raw%$'\n'*}"
+	printf '%s\n' "$export_resp" >> "$log_file"
+	if [ "$export_rc" -ne 0 ] || [[ ! "$export_http_code" =~ ^2[0-9][0-9]$ ]] || printf '%s' "$export_resp" | jq -e '.code? != null or .error? != null or .errors? != null' >/dev/null 2>&1
+	then
+		export_error=$(printf '%s' "$export_resp" | jq -r '.message // .error // (.errors[0].message?) // .description // "Unknown error"' 2>/dev/null)
+		if [[ "$export_http_code" == "409" ]] || echo "$export_error $export_resp" | grep -Eiq 'already running|in progress|conflict'
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Another import/export operation is already running in this workspace. Wait for it to complete before starting a new one." 1
+		fi
+		if echo "$export_error $export_resp" | grep -Eiq 'hmac|access.?key|secret.?key|signature|credential|forbidden|not authorized|access denied'
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - PowerVS image export rejected the COS credentials/HMAC keys: $export_error" 1
+		fi
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error calling PowerVS image export API for $img_name: $export_error" 1
+	fi
+
+	export_job_id=$(printf '%s' "$export_resp" | jq -r '.jobID // .id // .job.id // .jobReference.id // empty' 2>>"$log_file" | head -n1)
+	if [[ -n "$export_job_id" ]]
+	then
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image export submitted successfully. Job ID: $export_job_id" "1"
+		wait_for_job "$export_job_id" "Image export of $img_name to bucket $export_bucket"
+	else
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image export submitted, but no Job ID was returned by the API. Response saved in $log_file. Check the Boot images page or -imglsall to confirm it completed." 1
+	fi
+}
+####  END:FUNCTION - Export Image to COS (img_export) ####
+
        ####  END - FUNCTIONS  ####
 
 ####  START: Iniciate Log and Validate Arguments  ####
@@ -5420,6 +5602,14 @@ case $1 in
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]"
 	fi
 	img_import "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
+    ;;
+
+   -imgexport)
+	if [[ $# -lt 5 || $# -gt 6 ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgexport IMGNAME BUCKET BUCKET_REGION CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]" 1
+	fi
+	img_export "$2" "$3" "$4" "$5" "$6"
     ;;
 
   -vclonelsall)
