@@ -143,6 +143,7 @@ Shows the built‑in help.
 - Supports current-account COS credentials from the secrets JSON or cross-account HMAC credentials exported from IBM Cloud COS Service Credentials
 - Explicit bucket region and storage tier selection for predictable image imports
 - Both import and export monitor their PowerVS job to completion and exit non-zero on failure
+- Re-attach monitoring to an already-running import/export job without resubmitting (no local job-ID storage; works from a different machine)
 
 ### **Cloud Object Storage (COS)**
 - List all buckets across all COS instances defined in the secrets file
