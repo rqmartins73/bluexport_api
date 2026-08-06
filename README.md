@@ -139,8 +139,10 @@ Shows the built‑in help.
 - List images across all workspaces
 - Delete captured images by name (auto‑workspace resolution)
 - Import images from IBM Cloud Object Storage into a target PowerVS workspace using the native `/cos-images` API
+- Export images from a workspace's image catalog to IBM Cloud Object Storage (auto‑workspace resolution, same as delete)
 - Supports current-account COS credentials from the secrets JSON or cross-account HMAC credentials exported from IBM Cloud COS Service Credentials
 - Explicit bucket region and storage tier selection for predictable image imports
+- Both import and export monitor their PowerVS job to completion and exit non-zero on failure
 
 ### **Cloud Object Storage (COS)**
 - List all buckets across all COS instances defined in the secrets file
@@ -269,6 +271,23 @@ For `OTHERACCOUNT`, create or open the IBM Cloud COS service credential with HMA
   }
 }
 ```
+
+An example file with this structure is provided at `hmac_keys_example.json` in the repo root - copy it and fill in your keys.
+
+Both `-imgimport` and `-imgexport` monitor their PowerVS job to completion and exit non-zero on failure, including when another import/export operation is already running in the target workspace (PowerVS only allows one at a time per workspace).
+
+```
+./bluexport_api.sh -imgexport IMGNAME BUCKET BUCKET_REGION CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]
+```
+
+`-imgexport` exports an image from a PowerVS workspace image catalog to a file in IBM Cloud Object Storage - the reverse of `-imgimport`.
+
+Parameters:
+- `IMGNAME`: name of the image to export, resolved by name and searched across every configured workspace (same lookup as `-imgdel`)
+- `BUCKET`: COS bucket name
+- `BUCKET_REGION`: COS bucket region (e.g. `eu-es`, `eu-de`, `us-east`). Do **not** use the PowerVS datacenter name (e.g. `mad02`)
+- `CURRACCOUNT|OTHERACCOUNT`: use `CURRACCOUNT` for COS credentials already present in the bluexport secrets file, or `OTHERACCOUNT` for cross-account COS access
+- `HMAC_JSON_FILE`: full path to the HMAC keys JSON file, required only with `OTHERACCOUNT` (same format as `-imgimport`, see above)
 
 ### Cloud Object Storage (COS)
 ```

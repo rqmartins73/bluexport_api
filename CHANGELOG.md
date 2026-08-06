@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.14.0] - 2026-08-06 (`bluexport_api.sh`)
+
+### Added
+- `-imgexport IMGNAME BUCKET BUCKET_REGION CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]`: export a boot image from a workspace's image catalog to a COS bucket, mirroring `-imgimport` in reverse (image resolved by name, searched across every workspace, same as `-imgdel`). Supports cross-account export via HMAC keys, same JSON format as `-imgimport` (see new `hmac_keys_example.json`).
+- `wait_for_job()`: new generic PowerVS job poller (copies `job_monitor()`'s proven polling/retry logic without any capture-specific behavior) now backs both `-imgimport` and `-imgexport` - both flags monitor their job to completion instead of only confirming submission, and exit `1` on failure instead of always exiting `0`.
+- 409/"already running" detection for both `-imgimport` and `-imgexport`: PowerVS only allows one import/export operation per workspace at a time; a rejection for this reason now gets a specific, clear message instead of a generic API error.
+
+### Fixed
+- `-imgimport ... OTHERACCOUNT`: `load_hmac_keys()` was called but never defined anywhere in the script, so this path has never worked - it always failed with "Missing COS HMAC accessKey/secretKey". Now implemented.
+- `abort()` gained an optional exit-code argument (default `0`, fully backward compatible with every existing call site) so genuine failures in `-imgimport`/`-imgexport` can be distinguished from success via `$?`.
+
 ## [2.0] - 2026-08-05 (`bluexscrt_config_api.sh`)
 
 ### Added

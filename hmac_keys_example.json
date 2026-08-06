@@ -1,0 +1,6 @@
+{
+    "cos_hmac_keys": {
+        "access_key_id": "COLOCAR_ACCESS_KEY_AQUI",
+        "secret_access_key": "COLOCAR_SECRET_KEY_AQUI"
+    }
+}

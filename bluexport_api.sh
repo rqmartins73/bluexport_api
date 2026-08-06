@@ -58,6 +58,16 @@
 #         }
 #     }
 #
+# Export image to COS:
+#   bluexport_api.sh -imgexport IMGNAME BUCKET BUCKET_REGION CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]
+#
+#   BUCKET_REGION is the IBM COS S3 endpoint region where the destination bucket exists.
+#   Same HMAC JSON file format as -imgimport for OTHERACCOUNT (see above, or copy
+#   hmac_keys_example.json in this repo and fill in your keys).
+#   Both -imgimport and -imgexport monitor their PowerVS job to completion and exit
+#   non-zero on failure (including if another import/export is already running in the
+#   target workspace - PowerVS only allows one at a time per workspace).
+#
 # === Cloud Object Storage (COS) ===
 # List buckets for all COS instances (from bluexscrt):  bluexport_api.sh -bucketslsall
 # List objects from a bucket (interactive):             bluexport_api.sh -bucketlsobjs
@@ -140,7 +150,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.13.0
+Version=1.14.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -480,6 +490,21 @@ help() {
 	echoscreen "  JSON must contain:"
 	echoscreen "    .cos_hmac_keys.access_key_id"
 	echoscreen "    .cos_hmac_keys.secret_access_key"
+	echoscreen ""
+	echoscreen "Export image to COS:"
+	echoscreen "  bluexport_api.sh -imgexport IMGNAME BUCKET BUCKET_REGION CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]"
+	echoscreen ""
+	echoscreen "  BUCKET_REGION:"
+	echoscreen "    IBM COS S3 endpoint region where the destination bucket exists."
+	echoscreen "    Examples: eu-es, eu-de, us-east, us-south."
+	echoscreen ""
+	echoscreen "  OTHERACCOUNT:"
+	echoscreen "    Same HMAC JSON file format as -imgimport - copy hmac_keys_example.json"
+	echoscreen "    in this repo and fill in your keys."
+	echoscreen ""
+	echoscreen "  Both -imgimport and -imgexport monitor the PowerVS job to completion and"
+	echoscreen "  exit non-zero on failure, including if another import/export operation is"
+	echoscreen "  already running in the target workspace."
 	echoscreen ""
 	echoscreen "=== Cloud Object Storage (COS) ==="
 	echoscreen "List buckets for all COS instances: bluexport_api.sh -bucketslsall"
