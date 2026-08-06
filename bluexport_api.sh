@@ -1269,6 +1269,105 @@ job_monitor() {
 }
 ####  END:FUNCTION - Monitor Capture and Export Job  ####
 
+####  START:FUNCTION - Generic Job Wait (image import/export, and future non-capture jobs) ####
+# wait_for_job JOB_ID LABEL
+#   JOB_ID: PowerVS job ID to poll (GET /pcloud/v1/.../jobs/$JOB_ID - same unified jobs
+#           queue used by captures, image import, and image export).
+#   LABEL:  short description used in progress/completion/failure messages,
+#           e.g. "Image import of myimage" or "Image export of myimage to bucket mybucket".
+# Same polling/retry logic as job_monitor() (proven in production for captures), but
+# without anything capture-specific (no capture_name/vsi/destination, no delete_previous_img,
+# no operid_file reuse, no per-capture permanent log file) - job_monitor() itself is left
+# untouched. Exits 0 on success, 1 on failure (job failed, or transient-failure retries
+# exhausted) - unlike abort()'s historical default, callers can check $? after this.
+wait_for_job() {
+	local job_id="$1"
+	local label="$2"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Job log in file $job_log" "1"
+	echo "Job Monitoring of $label - Job ID: $job_id" >> "$job_log"
+
+	# The job may take a few seconds to actually register after being submitted;
+	# a poll that lands too early can see "not found" and burn a retry attempt
+	# for no reason. Give it a moment before the first check.
+	spin_wait 10 "Waiting for job to register"
+
+	local operation_before="" job_get_fail_count=0 job_get_max_fail=10 token_refresh_secs=2700
+
+	while true
+	do
+		JOB_ID="$job_id"
+
+		if [[ -n "$iam_token_epoch" ]] && (( $(date +%s) - iam_token_epoch >= token_refresh_secs ))
+		then
+			get_iam_token refresh
+		fi
+
+		local job_raw http_code job_json job_status
+		job_raw=$(job_get)
+		http_code="${job_raw##*$'\n'}"
+		job_json="${job_raw%$'\n'*}"
+		job_status=$(printf '%s' "$job_json" | jq -r '.status.state // empty' 2>/dev/null)
+
+		if [[ -z "$job_status" ]]
+		then
+			job_get_fail_count=$((job_get_fail_count + 1))
+			echo "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Could not read Job $job_id status (HTTP ${http_code:-?}, attempt $job_get_fail_count/$job_get_max_fail). Response: $job_json" >> "$job_log"
+			if [[ "$http_code" == "401" ]]
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - IAM token was rejected (HTTP 401). Refreshing token..." "1"
+				get_iam_token refresh
+			fi
+			if [[ "$job_get_fail_count" -ge "$job_get_max_fail" ]]
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - FAILED Getting Job ID or no Job Running after $job_get_max_fail consecutive attempts!" "1"
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Check file $job_monitor and $job_log for more details." 1
+			fi
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Transient error reading Job $job_id status (HTTP ${http_code:-?}). Retrying in 30s ($job_get_fail_count/$job_get_max_fail)..." "1"
+			spin_wait 30 "Retrying job status check"
+			continue
+		fi
+		job_get_fail_count=0
+
+		printf '%s\n' "$job_json" | tee "$job_monitor" >>"$job_log"
+		local message operation
+		message=$(jq -r '.status.message // empty'    "$job_monitor")
+		operation=$(jq -r '.status.progress // empty' "$job_monitor")
+
+		if [[ "$job_status" == "completed" ]]
+		then
+			echo "$(date +%Y-%m-%d_%H:%M:%S) - Finished Successfully!!" >> "$job_log"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - $label completed successfully!!"
+		elif [[ "$job_status" == "failed" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Job ID $job_id Status: ${job_status^^}" "1"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Message: $message" "1"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - $label failed, check message!!" 1
+		elif [[ "$job_status" == "queued" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Job ID $job_id Status: ${job_status^^}" "1"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Message: $message" "1"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Operation Change... Operation Running Now: ${operation^^}" "1"
+			echo "$(date +%Y-%m-%d_%H:%M:%S) - Running ${operation^^}... Sleeping 60 seconds..." >> "$job_log"
+			spin_wait 60 "Running ${operation^^}"
+			operation_before="$operation"
+		else
+			if [[ "$operation" != "$operation_before" ]]
+			then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Job ID $job_id Status: ${job_status^^}" "1"
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Message: $message" "1"
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Operation Change... Operation Running Now: ${operation^^}" "1"
+				echo "$(date +%Y-%m-%d_%H:%M:%S) - Running ${operation^^}... Sleeping 60 seconds..." >> "$job_log"
+				spin_wait 60 "Running ${operation^^}"
+				operation_before="$operation"
+			else
+				echo "$(date +%Y-%m-%d_%H:%M:%S) - Still Running ${operation^^}... Sleeping 60 seconds..." >> "$job_log"
+				spin_wait 60 "Still running ${operation^^}"
+			fi
+		fi
+	done
+}
+####  END:FUNCTION - Generic Job Wait ####
+
 ####  START:FUNCTION - Get iASP name  ####
 get_iASP_name() {
 	vsi_status=$(ins_get | jq -r '.status')
