@@ -829,6 +829,10 @@ img_export_api() {
 	curl -sX POST $base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/images/$IMAGE_ID/export -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
 }
 
+img_import_status_api() {
+	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/cos-images -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -w '\n%{http_code}'
+}
+
 ## Snapshots
 snap_ls() {
 	curl -sX GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/snapshots -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
@@ -4670,6 +4674,105 @@ img_import() {
 }
 #### END:FUNCTION - Import Image from COS (img_import) ####
 
+####  START:FUNCTION - Monitor Existing Image Import Job (img_import_monitor) ####
+# img_import_monitor WORKSPACE
+#   Re-attaches monitoring to the last import job PowerVS has on record for the given
+#   workspace, without resubmitting anything. Uses PowerVS's "get last cos-image import
+#   job" endpoint (workspace-scoped - no image name involved, since the confirmed Job
+#   resource has no name field and the endpoint only ever tracks one, the most recent,
+#   import job per workspace).
+img_import_monitor() {
+	local workspace_to_import="$1"
+
+	if [[ -z "$workspace_to_import" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -ji WORKSPACE" 1
+	fi
+
+	local ws_key=""
+	ws_key=$(jq -r --arg ws "$workspace_to_import" '
+		.workspaces
+		| to_entries[]?
+		| select((.key | ascii_downcase) == ($ws | ascii_downcase) or (.value.name | ascii_downcase) == ($ws | ascii_downcase))
+		| .key
+	' "$bluexscrt" 2>>"$log_file" | head -n1)
+	if [[ -z "$ws_key" || "$ws_key" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Workspace $workspace_to_import not found in $bluexscrt. Use the workspace short name or full workspace name from your JSON." 1
+	fi
+
+	CRN=$(jq -r --arg ws "$ws_key" '.workspaces[$ws].crn' "$bluexscrt")
+	CLOUD_INSTANCE_ID=$(jq -r --arg ws "$ws_key" '.workspaces[$ws].id' "$bluexscrt")
+	full_ws_name=$(jq -r --arg ws "$ws_key" '.workspaces[$ws].name // $ws' "$bluexscrt")
+	if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Workspace $ws_key ($full_ws_name) missing CRN or ID in $bluexscrt. Aborting..." 1
+	fi
+
+	region_api=$(echo "$CRN" | sed -n 's/.*power-iaas:\([^:]*\):.*/\1/p' | tr '-' '_')
+	base_url_var="base_${region_api}"
+	base_url="${!base_url_var}"
+	if [[ -z "$base_url" ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Could not resolve PowerVS API endpoint for workspace $full_ws_name region $region_api." 1
+	fi
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Workspace resolved: $workspace_to_import -> $ws_key ($full_ws_name)." "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Retrieving last image import job for Workspace $full_ws_name..." "1"
+
+	local status_raw status_http_code status_resp job_id job_state
+	status_raw=$(img_import_status_api 2>>"$log_file")
+	status_http_code="${status_raw##*$'\n'}"
+	status_resp="${status_raw%$'\n'*}"
+	echo "$status_resp" >> "$log_file"
+
+	case "$status_http_code" in
+		2*)
+			if [[ -z "$status_resp" ]]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - No import job history found for workspace $full_ws_name." 1
+			fi
+			if ! printf '%s' "$status_resp" | jq -e . >/dev/null 2>&1
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid response received while retrieving the last import job for workspace $full_ws_name. Check $log_file." 1
+			fi
+			job_id=$(printf '%s' "$status_resp" | jq -r '.id // .jobID // .job.id // .jobReference.id // empty' 2>/dev/null)
+			job_state=$(printf '%s' "$status_resp" | jq -r '.status.state // empty' 2>/dev/null)
+			if [[ -z "$job_id" && -z "$job_state" ]]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - No import job history found for workspace $full_ws_name." 1
+			elif [[ -z "$job_id" ]]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - Import job history was returned, but the response did not include a Job ID. Check $log_file." 1
+			fi
+			;;
+		404)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - No import job history found for workspace $full_ws_name." 1
+			;;
+		400)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid request while retrieving the last import job for workspace $full_ws_name." 1
+			;;
+		401)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Authentication failed while retrieving the last import job for workspace $full_ws_name." 1
+			;;
+		403)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Not authorized to retrieve the last import job for workspace $full_ws_name." 1
+			;;
+		500)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - PowerVS service error while retrieving the last import job for workspace $full_ws_name." 1
+			;;
+		*)
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Failed to retrieve the last import job for workspace $full_ws_name, HTTP status $status_http_code." 1
+			;;
+	esac
+
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Last image import job found: $job_id" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Status: $job_state" "1"
+	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Attaching monitor..." "1"
+	wait_for_job "$job_id" "Image import job for workspace $full_ws_name"
+}
+####  END:FUNCTION - Monitor Existing Image Import Job ####
+
 ####  START:FUNCTION - Export Image to COS (img_export) ####
 img_export() {
 	local img_name="$1"
@@ -5639,6 +5742,14 @@ case $1 in
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgexport IMGNAME BUCKET BUCKET_REGION CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]" 1
 	fi
 	img_export "$2" "$3" "$4" "$5" "$6"
+    ;;
+
+   -ji)
+	if [[ $# -ne 2 ]]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -ji WORKSPACE" 1
+	fi
+	img_import_monitor "$2"
     ;;
 
   -vclonelsall)
