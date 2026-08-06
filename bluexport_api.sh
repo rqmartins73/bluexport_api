@@ -69,6 +69,14 @@
 #   non-zero on failure (including if another import/export is already running in the
 #   target workspace - PowerVS only allows one at a time per workspace).
 #
+# Monitor an existing import/export job (re-attach without resubmitting):
+#   bluexport_api.sh -ji WORKSPACE
+#   bluexport_api.sh -je IMAGE_NAME
+#
+#   Looks up the last import/export job PowerVS has on record (via the API - no
+#   local job-ID storage, works even from a different machine than the one that
+#   submitted it) and monitors it to completion, exiting non-zero on failure.
+#
 # === Cloud Object Storage (COS) ===
 # List buckets for all COS instances (from bluexscrt):  bluexport_api.sh -bucketslsall
 # List objects from a bucket (interactive):             bluexport_api.sh -bucketlsobjs
@@ -151,7 +159,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.14.0
+Version=1.15.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -507,6 +515,15 @@ help() {
 	echoscreen "  Both -imgimport and -imgexport monitor the PowerVS job to completion and"
 	echoscreen "  exit non-zero on failure, including if another import/export operation is"
 	echoscreen "  already running in the target workspace."
+	echoscreen ""
+	echoscreen "Monitor an existing import/export job:"
+	echoscreen "  bluexport_api.sh -ji WORKSPACE"
+	echoscreen "  bluexport_api.sh -je IMAGE_NAME"
+	echoscreen ""
+	echoscreen "  Re-attaches monitoring to the last import/export job PowerVS has on"
+	echoscreen "  record, without resubmitting anything - useful after a lost SSH"
+	echoscreen "  session or a job submitted from a different machine. No job ID is"
+	echoscreen "  stored locally; every call asks PowerVS directly."
 	echoscreen ""
 	echoscreen "=== Cloud Object Storage (COS) ==="
 	echoscreen "List buckets for all COS instances: bluexport_api.sh -bucketslsall"

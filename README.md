@@ -289,6 +289,20 @@ Parameters:
 - `CURRACCOUNT|OTHERACCOUNT`: use `CURRACCOUNT` for COS credentials already present in the bluexport secrets file, or `OTHERACCOUNT` for cross-account COS access
 - `HMAC_JSON_FILE`: full path to the HMAC keys JSON file, required only with `OTHERACCOUNT` (same format as `-imgimport`, see above)
 
+### Monitor an existing import/export job
+```
+./bluexport_api.sh -ji WORKSPACE
+./bluexport_api.sh -je IMAGE_NAME
+```
+
+`-ji` and `-je` re-attach monitoring to the last import/export job PowerVS has on record, without resubmitting anything - useful after a lost SSH session or when the job was submitted from a different machine.
+
+Parameters:
+- `WORKSPACE` (for `-ji`): PowerVS workspace short name or configured workspace display name to look up the last image import job for
+- `IMAGE_NAME` (for `-je`): name of the image whose last export job should be monitored, resolved by name and searched across every configured workspace (same lookup as `-imgexport`/`-imgdel`)
+
+No job ID is stored locally - every call queries PowerVS directly for the last job on record. Like `-imgimport`/`-imgexport`, both exit non-zero on failure.
+
 ### Cloud Object Storage (COS)
 ```
 ./bluexport_api.sh -bucketslsall

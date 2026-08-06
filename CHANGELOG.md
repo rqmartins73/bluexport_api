@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.15.0] - 2026-08-06 (`bluexport_api.sh`)
+
+### Added
+- `-ji WORKSPACE`: re-attach monitoring to the last image import job PowerVS has on record for a workspace, without resubmitting - useful after a lost SSH session or when the import was submitted from a different machine. No job ID is stored locally; queries PowerVS's "get last cos-image import job" endpoint directly.
+- `-je IMAGE_NAME`: same, for the last image export job for a given image (searches every workspace by name, same as `-imgexport`/`-imgdel`).
+- Both distinguish `400`/`401`/`403`/`404`/`500`/other HTTP responses from PowerVS with a specific message each, rather than reporting every failure as "no job history found."
+
 ## [1.14.0] - 2026-08-06 (`bluexport_api.sh`)
 
 ### Added
