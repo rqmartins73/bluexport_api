@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.16.0] - 2026-08-10 (`bluexport_api.sh`)
+
+### Added
+- Every flag that takes at least one argument now prints a per-parameter breakdown (name + description) when the argument count is wrong, and via a new `-h -FLAG` detailed-help mode (e.g. `bluexport_api.sh -h -imgimport`). The general `-h` summary is unchanged.
+
+## [2.1] - 2026-08-10 (`bluexscrt_config_api.sh`)
+
+### Added
+- `-dellpar`/`-addlpar` now print a per-parameter breakdown on a wrong argument count, and via a new `-h -FLAG` detailed-help mode (e.g. `-h -addlpar`).
+
 ## [1.15.0] - 2026-08-06 (`bluexport_api.sh`)
 
 ### Added

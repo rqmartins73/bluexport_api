@@ -101,7 +101,7 @@ Prints a masked snapshot of the current JSON config at the end.
 Shows tool version as JSON (tool name, version, author, license).
 
 #### `-h | --help`
-Shows the built‑in help.
+Shows the built‑in help. Pass a flag after it (`-h -addlpar`) to show detailed parameter help for that flag instead — name and description of each argument it expects. Argument-count errors on `-addlpar`/`-dellpar` also print this same breakdown automatically.
 
 ---
 
@@ -192,6 +192,8 @@ Shows the built‑in help.
 ./bluexport_api.sh -chscrt FILE        # Change secrets file (also prompts for log file path)
 ./bluexport_api.sh -viewscrt           # Show secrets file currently in use
 ```
+
+Pass a flag after `-h` (e.g. `./bluexport_api.sh -h -imgimport`) to show detailed parameter help for that flag instead — name and description of each argument it expects. Any flag that takes at least one argument also prints this same breakdown automatically when called with the wrong argument count.
 
 ### Capture & Export
 ```

@@ -10,6 +10,7 @@
 #
 # Show help:                    bluexport_api.sh -h | --help | -help
 # Show version:                 bluexport_api.sh -v | --version
+# Detailed help for one command:  bluexport_api.sh -h -FLAG  (e.g. -h -imgimport)
 #
 # === Capture & Export ===
 # Capture all volumes:          bluexport_api.sh -a VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
@@ -159,7 +160,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.15.0
+Version=1.16.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 

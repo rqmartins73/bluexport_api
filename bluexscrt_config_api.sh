@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="2.0"
+VERSION="2.1"
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -96,8 +96,9 @@ Options:
       If any new workspace was found, automatically runs -updlpars at the end
       to populate the LPARs of the new workspace(s).
 
-  -h | --help
-      Show this help.
+  -h | --help [-FLAG]
+      Show this help, or detailed parameter help for one flag
+      (e.g. -h -addlpar).
 
 Examples:
   $(basename "$0") -v
