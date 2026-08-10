@@ -5284,6 +5284,75 @@ usage_insvchtier() {
 	echoscreen "    -vchtier (see that flag's note about the prefix)."
 }
 
+usage_creategrs() {
+	echoscreen "  SOURCE_VSI:"
+	echoscreen "    VSI whose volumes are the replication source."
+	echoscreen "  TARGET_VSI:"
+	echoscreen "    VSI that will receive the replicated volumes."
+	echoscreen "  VG_NAME:"
+	echoscreen "    Name for the new volume group (replication group)."
+	echoscreen "  SOURCE_VOLUMES_NAME:"
+	echoscreen "    Common name/prefix matched against SOURCE_VSI's volume names to"
+	echoscreen "    select which volumes join the replication group."
+	echoscreen "  Fails if any selected source volume already has a snapshot -"
+	echoscreen "  delete those snapshots first."
+}
+
+usage_deletegrs() {
+	echoscreen "  SOURCE_VSI:"
+	echoscreen "    VSI on the source side of the replication group."
+	echoscreen "  TARGET_VSI:"
+	echoscreen "    VSI on the target side of the replication group."
+	echoscreen "  VG_NAME:"
+	echoscreen "    Name of the volume group (replication group) to delete."
+	echoscreen "  SOURCE_VOLUME_NAMES:"
+	echoscreen "    Common name/prefix matched against SOURCE_VSI's volume names -"
+	echoscreen "    same value used when the group was created with -creategrs (also"
+	echoscreen "    used to match the corresponding volumes on the target side)."
+}
+
+usage_grsfailover() {
+	echoscreen "  SOURCE_VSI:"
+	echoscreen "    VSI on the source side of the replication group."
+	echoscreen "  VG_NAME:"
+	echoscreen "    Name of the volume group to fail over."
+	echoscreen "  MODE:"
+	echoscreen "    NO_ATTACH|ATTACH - whether to also attach the failed-over volumes"
+	echoscreen "    to a VSI immediately."
+	echoscreen "  TARGET_VSI:"
+	echoscreen "    Required only when MODE=ATTACH; VSI to attach the volumes to."
+}
+
+usage_grscancelfailover() {
+	echoscreen "  SOURCE_VSI:"
+	echoscreen "    VSI on the source side of the replication group."
+	echoscreen "  VG_NAME:"
+	echoscreen "    Name of the volume group to cancel failover on."
+	echoscreen "  MODE:"
+	echoscreen "    NO_DETACH|DETACH - whether to also detach the volumes from"
+	echoscreen "    TARGET_VSI before cancelling."
+	echoscreen "  TARGET_VSI:"
+	echoscreen "    VSI the failed-over volumes are currently attached to."
+}
+
+usage_grsfailback() {
+	echoscreen "  SOURCE_VSI:"
+	echoscreen "    VSI on the source side of the replication group."
+	echoscreen "  TARGET_VSI:"
+	echoscreen "    VSI on the target side of the replication group."
+	echoscreen "  VG_NAME:"
+	echoscreen "    Name of the volume group to fail back to the source."
+}
+
+usage_grsreversereplica() {
+	echoscreen "  SOURCE_VSI:"
+	echoscreen "    VSI currently on the source side of the replication group."
+	echoscreen "  TARGET_VSI:"
+	echoscreen "    VSI currently on the target side of the replication group."
+	echoscreen "  VG_NAME:"
+	echoscreen "    Name of the volume group whose replication direction to reverse."
+}
+
 #### END: usage_X() functions (Task 1 - more appended by later tasks) ####
 
 case $1 in
@@ -5311,6 +5380,12 @@ case $1 in
 			-vclonedel) usage_vclonedel ;;
 			-vchtier) usage_vchtier ;;
 			-insvchtier) usage_insvchtier ;;
+			-creategrs) usage_creategrs ;;
+			-deletegrs) usage_deletegrs ;;
+			-grsfailover) usage_grsfailover ;;
+			-grscancelfailover) usage_grscancelfailover ;;
+			-grsfailback) usage_grsfailback ;;
+			-grsreversereplica) usage_grsreversereplica ;;
 			*)
 				abort "`date +%Y-%m-%d_%H:%M:%S` - Unknown flag for detailed help: $2. Run bluexport_api.sh -h for the full command list." 1
 				;;
@@ -6397,10 +6472,12 @@ EOF
 	# Syntax: bluexport_api.sh -creategrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME
 	if [ $# -lt 5 ]
 	then
+		usage_creategrs
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	fi
 	if [ $# -gt 5 ]
 	then
+		usage_creategrs
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
 	fi
 	test=0
@@ -6472,10 +6549,12 @@ EOF
 	# Syntax: bluexport_api.sh -deletegrs SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES
 	if [ $# -lt 5 ]
 	then
+		usage_deletegrs
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES"
 	fi
 	if [ $# -gt 5 ]
 	then
+		usage_deletegrs
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES"
 	fi
 	test=0
@@ -6512,10 +6591,12 @@ EOF
 	# Syntax: bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]
 	if [ $# -lt 4 ]
 	then
+		usage_grsfailover
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
 	fi
 	if [ $# -gt 5 ]
 	then
+		usage_grsfailover
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
 	fi
 	test=0
@@ -6542,6 +6623,7 @@ EOF
 	# Syntax: bluexport_api.sh -grscancelfailover SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI
 	if [ $# -ne 5 ]
 	then
+		usage_grscancelfailover
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI"
 	fi
 	test=0
@@ -6561,6 +6643,7 @@ EOF
 	# Syntax: bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME
 	if [ $# -ne 4 ]
 	then
+		usage_grsfailback
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME"
 	fi
 	test=0
@@ -6575,6 +6658,7 @@ EOF
 	# Syntax: bluexport_api.sh -grsreversereplica SOURCE_VSI TARGET_VSI VG_NAME
 	if [ $# -ne 4 ]
 	then
+		usage_grsreversereplica
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME"
 	fi
 	test=0
