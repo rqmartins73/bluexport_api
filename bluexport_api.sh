@@ -5234,6 +5234,54 @@ usage_snapres() {
 	echoscreen "    Name of the snapshot to restore."
 }
 
+usage_vclone() {
+	echoscreen "  REQUEST_CLONE_NAME:"
+	echoscreen "    Name for the new volume clone request; must not already exist."
+	echoscreen "  VOLUME_BASE_NAME:"
+	echoscreen "    Common name/prefix used to label the cloned volumes."
+	echoscreen "  LPAR_NAME:"
+	echoscreen "    VSI that owns the source volumes to clone."
+	echoscreen "  REPLICATION:"
+	echoscreen "    True|False - whether to enable replication on the clone."
+	echoscreen "  ROLLBACK:"
+	echoscreen "    True|False - whether to prepare the clone for rollback."
+	echoscreen "  TARGET_TIER:"
+	echoscreen "    tier0|tier1|tier3|tier5k. (Unlike -vchtier's TIER_TO_CHANGE_TO,"
+	echoscreen "    this DOES need the \"tier\" prefix.)"
+	echoscreen "  VOLUMES:"
+	echoscreen "    ALL for every volume attached to LPAR_NAME, or a comma-separated"
+	echoscreen "    list of volume names to clone only those (at least 2 required)."
+}
+
+usage_vclonedel() {
+	echoscreen "  REQUEST_CLONE_NAME:"
+	echoscreen "    Name of the volume clone request to delete (searched across all"
+	echoscreen "    workspaces)."
+	echoscreen "  MODE:"
+	echoscreen "    Optional (defaults to 0). Pass 0 to delete only the clone request,"
+	echoscreen "    or delete_volumes to also delete the cloned volumes themselves."
+}
+
+usage_vchtier() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    VSI that owns the volumes to change tier."
+	echoscreen "  VOLUMES_NAME:"
+	echoscreen "    Common name/pattern (space-separated if more than one) matched"
+	echoscreen "    against volume names attached to VSI_NAME."
+	echoscreen "  TIER_TO_CHANGE_TO:"
+	echoscreen "    0|1|3|5k - the script prepends \"tier\" automatically."
+	echoscreen "    (Note: unlike -vclone's TARGET_TIER, do NOT include the \"tier\""
+	echoscreen "    prefix yourself here.)"
+}
+
+usage_insvchtier() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    VSI whose ALL attached volumes will change tier."
+	echoscreen "  TIER_TO_CHANGE_TO:"
+	echoscreen "    0|1|3|5k - the script prepends \"tier\" automatically, same as"
+	echoscreen "    -vchtier (see that flag's note about the prefix)."
+}
+
 #### END: usage_X() functions (Task 1 - more appended by later tasks) ####
 
 case $1 in
@@ -5257,6 +5305,10 @@ case $1 in
 			-snapupd) usage_snapupd ;;
 			-snapdel) usage_snapdel ;;
 			-snapres) usage_snapres ;;
+			-vclone) usage_vclone ;;
+			-vclonedel) usage_vclonedel ;;
+			-vchtier) usage_vchtier ;;
+			-insvchtier) usage_insvchtier ;;
 			*)
 				abort "`date +%Y-%m-%d_%H:%M:%S` - Unknown flag for detailed help: $2. Run bluexport_api.sh -h for the full command list." 1
 				;;
@@ -5444,10 +5496,12 @@ case $1 in
 	flagj=1
 	if [ $# -lt 4 ]
 	then
+		usage_vchtier
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
 	fi
 	if [ $# -gt 4 ]
 	then
+		usage_vchtier
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
 	fi
 	# Validate STORAGE TIER (vchtier)
@@ -5473,10 +5527,12 @@ case $1 in
 	flagj=1
 	if [ $# -lt 3 ]
 	then
+		usage_insvchtier
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport_api.sh $1 VSI_NAME TIER_TO_CHANGE_TO"
 	fi
 	if [ $# -gt 3 ]
 	then
+		usage_insvchtier
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME TIER_TO_CHANGE_TO"
 	fi
 	# Validate STORAGE TIER (insvchtier)
@@ -6138,10 +6194,12 @@ case $1 in
 	# Args: REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME Replication(True|False) Rollback(True|False) TARGET_TIER volumes(ALL|id1,id2,...)
 	if [ $# -lt 8 ]
 	then
+		usage_vclone
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) tier0|tier1|tier3|tier5k ALL|\"VOL1,VOL2,...\""
 	fi
 	if [ $# -gt 8 ]
 	then
+		usage_vclone
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) tier0|tier1|tier3|tier5k ALL|\"VOL1,VOL2,...\""
 	fi
 	test=0
@@ -6207,10 +6265,12 @@ case $1 in
 	# Syntax: bluexport_api.sh -vclonedel REQUEST_CLONE_NAME 0|delete_volumes
 	if [ $# -lt 2 ]
 	then
+		usage_vclonedel
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes"
 	fi
 	if [ $# -gt 3 ]
 	then
+	usage_vclonedel
 	abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes"
 	fi
 	test=0
