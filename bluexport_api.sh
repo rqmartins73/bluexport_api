@@ -5250,7 +5250,9 @@ usage_vclone() {
 	echoscreen "    this DOES need the \"tier\" prefix.)"
 	echoscreen "  VOLUMES:"
 	echoscreen "    ALL for every volume attached to LPAR_NAME, or a comma-separated"
-	echoscreen "    list of volume names to clone only those (at least 2 required)."
+	echoscreen "    list of volume NAMES (not IDs, despite what the nearby \"# Args:\""
+	echoscreen "    inline code comment for this flag might suggest) to clone only"
+	echoscreen "    those (at least 2 required)."
 }
 
 usage_vclonedel() {
