@@ -5353,6 +5353,48 @@ usage_grsreversereplica() {
 	echoscreen "    Name of the volume group whose replication direction to reverse."
 }
 
+usage_vsistart() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    Name of the VSI to start."
+}
+
+usage_vsioper() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    Name of the VSI to change boot/operating mode for."
+	echoscreen "  BOOT_MODE:"
+	echoscreen "    a|b|c|d."
+	echoscreen "  OPERATING_MODE:"
+	echoscreen "    normal|manual."
+}
+
+usage_vsitask() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    Name of the VSI to run the task on."
+	echoscreen "  TASK:"
+	echoscreen "    dston|retrydump|consoleservice|iopreset|remotedstoff|remotedston|"
+	echoscreen "    iopdump|dumprestart."
+}
+
+usage_vsisrcmon() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    Name of the VSI whose SRC (reference code) to monitor."
+	echoscreen "  MODE:"
+	echoscreen "    START|SHUTOFF - which state transition to wait for."
+}
+
+usage_attachvolumes() {
+	echoscreen "  VOLUMES_COMMON_NAME:"
+	echoscreen "    Common name/pattern matched against existing volume names -"
+	echoscreen "    every match gets attached."
+	echoscreen "  VSI_NAME:"
+	echoscreen "    Target VSI to attach the volumes to; must be SHUTOFF."
+}
+
+usage_detachvolumes() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    VSI to detach ALL currently attached volumes from."
+}
+
 #### END: usage_X() functions (Task 1 - more appended by later tasks) ####
 
 case $1 in
@@ -5386,6 +5428,12 @@ case $1 in
 			-grscancelfailover) usage_grscancelfailover ;;
 			-grsfailback) usage_grsfailback ;;
 			-grsreversereplica) usage_grsreversereplica ;;
+			-vsistart) usage_vsistart ;;
+			-vsioper) usage_vsioper ;;
+			-vsitask) usage_vsitask ;;
+			-vsisrcmon) usage_vsisrcmon ;;
+			-attachvolumes) usage_attachvolumes ;;
+			-detachvolumes) usage_detachvolumes ;;
 			*)
 				abort "`date +%Y-%m-%d_%H:%M:%S` - Unknown flag for detailed help: $2. Run bluexport_api.sh -h for the full command list." 1
 				;;
@@ -6672,6 +6720,7 @@ EOF
    -vsistart)
 	if [ $# -ne 2 ]
 	then
+		usage_vsistart
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsistart VSI_NAME"
 	fi
 	vsi="$2"
@@ -6682,6 +6731,7 @@ EOF
 	# Syntax: -vsioper VSI_NAME BOOT_MODE OPERATING_MODE
 	if [ $# -ne 4 ]
 	then
+		usage_vsioper
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE. BOOT_MODE: a | b | c | d  -  OPERATING_MODE: normal | manual"
 	fi
 	vsi="$2"
@@ -6693,6 +6743,7 @@ EOF
    -vsitask)
 	if [ $# -ne 3 ]
 	then
+		usage_vsitask
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsitask VSI_NAME TASK. TASK: dston | retrydump | consoleservice | iopreset | remotedstoff | remotedston | iopdump | dumprestart"
 	fi
 	vsi="$2"
@@ -6703,6 +6754,7 @@ EOF
    -vsisrcmon)
 	if [ $# -ne 3 ]
 	then
+		usage_vsisrcmon
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF"
 	fi
 	vsi="$2"
@@ -6714,6 +6766,7 @@ EOF
 	# Syntax: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME
 	if [ $# -ne 3 ]
 	then
+		usage_attachvolumes
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME"
 	fi
 	vol_common_name="$2"
@@ -6725,6 +6778,7 @@ EOF
 	# Syntax: bluexport_api.sh -detachvolumes VSI_NAME
 	if [ $# -ne 2 ]
 	then
+		usage_detachvolumes
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -detachvolumes VSI_NAME"
 	fi
 	vsi="$2"
