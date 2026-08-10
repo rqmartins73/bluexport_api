@@ -10,7 +10,7 @@
 #
 # Show help:                    bluexport_api.sh -h | --help | -help
 # Show version:                 bluexport_api.sh -v | --version
-# Detailed help for one command:  bluexport_api.sh -h -FLAG  (e.g. -h -imgimport)
+# Detailed help per flag:       bluexport_api.sh -h -FLAG  (e.g. -h -imgimport)
 #
 # === Capture & Export ===
 # Capture all volumes:          bluexport_api.sh -a VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single
@@ -83,7 +83,7 @@
 # List objects from a bucket (interactive):             bluexport_api.sh -bucketlsobjs
 # Delete object from a bucket (interactive):            bluexport_api.sh -bucketdelobj
 # Restore archived object to COS bucket:                bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]
-#   DAYS: days to make available (default 3). ARCHIVE_TYPE: Bulk|Standard|Accelerated (default Accelerated).
+#   DAYS: days to make available (default 3). ARCHIVE_TYPE: Bulk|Accelerated (default Accelerated).
 #
 # === Volume Clones ===
 # Create volume clone:
@@ -460,6 +460,7 @@ help() {
 	echoscreen ""
 	echoscreen "Show help:                  bluexport_api.sh -h | --help | -help"
 	echoscreen "Show version:               bluexport_api.sh -v | --version"
+	echoscreen "Detailed help per flag:     bluexport_api.sh -h -FLAG   (e.g. -h -imgimport)"
 	echoscreen ""
 	echoscreen "=== Capture & Export ==="
 	echoscreen "Capture all volumes:          bluexport_api.sh -a VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
@@ -532,7 +533,7 @@ help() {
 	echoscreen "Delete object from a bucket:        bluexport_api.sh -bucketdelobj         (interactive - guided selection)"
 	echoscreen "Restore archived object:            bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
 	echoscreen "  DAYS:         Number of days to make the object available. Default: 3."
-	echoscreen "  ARCHIVE_TYPE: Restore tier. Default: Accelerated. Options: Bulk | Standard | Accelerated."
+	echoscreen "  ARCHIVE_TYPE: Restore tier. Default: Accelerated. Options: Bulk | Accelerated."
 	echoscreen ""
 	echoscreen "=== Volume Clones ==="
 	echoscreen "Create volume clone:"
@@ -5126,7 +5127,8 @@ usage_a() {
 usage_x() {
 	echoscreen "  EXCLUDE_NAME:"
 	echoscreen "    Volume name pattern(s) to exclude from the capture (space separated;"
-	echoscreen "    matched case-insensitively as a substring against each volume name)."
+	echoscreen "    matched case-insensitively as a regex against each volume name -"
+	echoscreen "    avoid regex metacharacters in names)."
 	echoscreen "  VSI_NAME:"
 	echoscreen "    Name of the VSI to capture."
 	echoscreen "  IMAGE_NAME:"
@@ -5293,9 +5295,12 @@ usage_creategrs() {
 	echoscreen "  VG_NAME:"
 	echoscreen "    Name for the new volume group (replication group)."
 	echoscreen "  SOURCE_VOLUMES_NAME:"
-	echoscreen "    Common name/prefix matched against SOURCE_VSI's volume names to"
-	echoscreen "    select which volumes join the replication group."
-	echoscreen "  Fails if any selected source volume already has a snapshot -"
+	echoscreen "    Common name/prefix of the source volumes. NOTE: it does NOT limit"
+	echoscreen "    which volumes join the group - EVERY volume attached to SOURCE_VSI"
+	echoscreen "    is added and gets replicationEnabled=true. The prefix is used to"
+	echoscreen "    match volumes while waiting for consistent_copying and to label the"
+	echoscreen "    target onboarding request; pass the same value to -deletegrs."
+	echoscreen "  Fails if ANY volume attached to SOURCE_VSI already has a snapshot -"
 	echoscreen "  delete those snapshots first."
 }
 
@@ -5405,7 +5410,7 @@ usage_restorefromarchive() {
 	echoscreen "    Optional; number of days the restored copy stays available."
 	echoscreen "    Defaults to 3 if omitted."
 	echoscreen "  ARCHIVE_TYPE:"
-	echoscreen "    Optional; Bulk|Standard|Accelerated. Defaults to Accelerated"
+	echoscreen "    Optional; Bulk|Accelerated. Defaults to Accelerated"
 	echoscreen "    if omitted."
 }
 
@@ -5416,7 +5421,7 @@ usage_chscrt() {
 	echoscreen "    interactively (also then prompts for a new log file path)."
 }
 
-#### END: usage_X() functions (Task 1 - more appended by later tasks) ####
+#### END: usage_X() functions ####
 
 case $1 in
    -h | --help | -help)
