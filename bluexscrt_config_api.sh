@@ -1447,8 +1447,44 @@ set_ws_context() {
 }
 #### END:FUNCTION - set_ws_context ####
 
+#### START: usage_X() - per-flag parameter detail (shown on argument-count error and via -h -FLAG) ####
+usage_dellpar() {
+	echo "  NAME:" >&2
+	echo "    Logical system name to remove from .systems[] (case-insensitive)." >&2
+}
+
+usage_addlpar() {
+	echo "  NAME:" >&2
+	echo "    Logical system name (e.g. ibmi75m2)." >&2
+	echo "  IP:" >&2
+	echo "    IP address used for SSH and bluexport operations." >&2
+	echo "  PVM_ID:" >&2
+	echo "    PowerVS pvmInstanceID of the LPAR." >&2
+	echo "  WORKSPACE_SHORT:" >&2
+	echo "    Workspace key as defined under .workspaces in the JSON (e.g. WSMAD2)." >&2
+	echo "  OS:" >&2
+	echo "    ibmi|aix|linux|other - determines whether operations that flush ASPs" >&2
+	echo "    (CHGASPACT) run for this LPAR (ibmi only)." >&2
+}
+#### END: usage_X() functions ####
+
 case "$flag" in
   -h | --help)
+    if [ $# -gt 2 ]; then
+      echo "ERROR: Too many arguments!! Syntax: $(basename "$0") -h [-FLAG]" >&2
+      exit 1
+    fi
+    if [ $# -eq 2 ]; then
+      case "$2" in
+        -dellpar) usage_dellpar ;;
+        -addlpar) usage_addlpar ;;
+        *)
+          echo "ERROR: Unknown flag for detailed help: $2. Run $(basename "$0") -h for the full command list." >&2
+          exit 1
+          ;;
+      esac
+      exit 0
+    fi
     usage
     exit 0
     ;;
@@ -1461,6 +1497,7 @@ case "$flag" in
     if [[ $# -ne 2 ]]; then
       echo "ERROR: Wrong syntax." >&2
       echo "Usage: $(basename "$0") -dellpar NAME" >&2
+      usage_dellpar
       exit 1
     fi
     name="$2"
@@ -1484,6 +1521,7 @@ case "$flag" in
       echo "ERROR: Wrong syntax." >&2
       echo "Usage: $(basename "$0") -addlpar NAME IP PVM_ID WORKSPACE_SHORT OS" >&2
       echo "  OS must be one of: ibmi | aix | linux | other" >&2
+      usage_addlpar
       exit 1
     fi
 
