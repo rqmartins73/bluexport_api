@@ -5395,6 +5395,26 @@ usage_detachvolumes() {
 	echoscreen "    VSI to detach ALL currently attached volumes from."
 }
 
+usage_restorefromarchive() {
+	echoscreen "  BUCKET:"
+	echoscreen "    COS bucket name containing the archived object."
+	echoscreen "  OBJECT:"
+	echoscreen "    Key/path of the archived object to restore."
+	echoscreen "  DAYS:"
+	echoscreen "    Optional; number of days the restored copy stays available."
+	echoscreen "    Defaults to 3 if omitted."
+	echoscreen "  ARCHIVE_TYPE:"
+	echoscreen "    Optional; Bulk|Standard|Accelerated. Defaults to Accelerated"
+	echoscreen "    if omitted."
+}
+
+usage_chscrt() {
+	echoscreen "  SECRETS_FILE:"
+	echoscreen "    Optional; full path to a bluexscrt_*.json file to switch to."
+	echoscreen "    If omitted, lists available bluexscrt*.json files and prompts"
+	echoscreen "    interactively (also then prompts for a new log file path)."
+}
+
 #### END: usage_X() functions (Task 1 - more appended by later tasks) ####
 
 case $1 in
@@ -5434,6 +5454,8 @@ case $1 in
 			-vsisrcmon) usage_vsisrcmon ;;
 			-attachvolumes) usage_attachvolumes ;;
 			-detachvolumes) usage_detachvolumes ;;
+			-restorefromarchive) usage_restorefromarchive ;;
+			-chscrt) usage_chscrt ;;
 			*)
 				abort "`date +%Y-%m-%d_%H:%M:%S` - Unknown flag for detailed help: $2. Run bluexport_api.sh -h for the full command list." 1
 				;;
@@ -5694,6 +5716,7 @@ case $1 in
 		# Mode 1: path provided directly: -chscrt /path/bluexscrt_xxx.json
 		if [ $# -gt 2 ]
 		then
+			usage_chscrt
 			abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -chscrt bluexscrt_file_name  (use full path, e.g. /home/user/bluexscrt_new.json)"
 		fi
 		new_scrt="$2"
@@ -7037,10 +7060,12 @@ EOF
 	# Restore an archived object from COS bucket (S3 Restore)
 	if [ $# -lt 3 ]
 	then
+		usage_restorefromarchive
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
 	fi
 	if [ $# -gt 5 ]
 	then
+		usage_restorefromarchive
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
 	fi
 	test=0
