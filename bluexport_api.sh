@@ -5099,8 +5099,129 @@ then
 	abort "`date +%Y-%m-%d_%H:%M:%S` - No arguments supplied!!"
 fi
 
+#### START: usage_X() - per-flag parameter detail (shown on argument-count error and via -h -FLAG) ####
+usage_j() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    Name of the VSI whose capture job to monitor."
+	echoscreen "  IMAGE_NAME:"
+	echoscreen "    Capture image name (as passed to -a/-x when the capture was started)."
+}
+
+usage_a() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    Name of the VSI to capture."
+	echoscreen "  IMAGE_NAME:"
+	echoscreen "    Base name for the capture image; a timestamp suffix is appended."
+	echoscreen "  DESTINATION:"
+	echoscreen "    both|image-catalog|cloud-storage - where the capture ends up."
+	echoscreen "    hourly/daily only allow image-catalog (not cloud-storage or both)."
+	echoscreen "  RECURRENCE:"
+	echoscreen "    hourly|daily|weekly|monthly|single - controls the retention window"
+	echoscreen "    used to identify the previous capture to clean up."
+	echoscreen "  Note: -ta runs the same flow in test mode - it validates and logs"
+	echoscreen "  everything but does not actually run the capture."
+}
+
+usage_x() {
+	echoscreen "  EXCLUDE_NAME:"
+	echoscreen "    Volume name pattern(s) to exclude from the capture (space separated;"
+	echoscreen "    matched case-insensitively as a substring against each volume name)."
+	echoscreen "  VSI_NAME:"
+	echoscreen "    Name of the VSI to capture."
+	echoscreen "  IMAGE_NAME:"
+	echoscreen "    Base name for the capture image; a timestamp suffix is appended."
+	echoscreen "  DESTINATION:"
+	echoscreen "    both|image-catalog|cloud-storage - where the capture ends up."
+	echoscreen "    hourly/daily only allow image-catalog (not cloud-storage or both)."
+	echoscreen "  RECURRENCE:"
+	echoscreen "    hourly|daily|weekly|monthly|single - controls the retention window"
+	echoscreen "    used to identify the previous capture to clean up."
+	echoscreen "  Note: -tx runs the same flow in test mode - it validates and logs"
+	echoscreen "  everything but does not actually run the capture."
+}
+
+usage_imgdel() {
+	echoscreen "  IMG_NAME:"
+	echoscreen "    Name of the captured image to delete (searched across all workspaces)."
+}
+
+usage_imgimport() {
+	echoscreen "  IMGNAME:"
+	echoscreen "    COS object filename to import (e.g. myimage.ova.gz)."
+	echoscreen "  BUCKET:"
+	echoscreen "    COS bucket name where the object is stored."
+	echoscreen "  BUCKET_REGION:"
+	echoscreen "    IBM COS S3 endpoint region where the source bucket exists."
+	echoscreen "    Examples: eu-es, eu-de, us-east, us-south."
+	echoscreen "    Do not use the PowerVS datacenter name here (e.g. mad02)."
+	echoscreen "  WORKSPACE_TO_IMPORT:"
+	echoscreen "    Target PowerVS workspace, short or full name."
+	echoscreen "  IMGNAME_WS:"
+	echoscreen "    Name to give the imported image in the workspace's image catalog."
+	echoscreen "  STORAGE_TYPE:"
+	echoscreen "    tier0|tier1|tier3|tier5k."
+	echoscreen "  CURRACCOUNT|OTHERACCOUNT:"
+	echoscreen "    COS account type. OTHERACCOUNT requires HMAC JSON file from IBM"
+	echoscreen "    Cloud COS Service Credentials (.cos_hmac_keys.access_key_id and"
+	echoscreen "    .cos_hmac_keys.secret_access_key)."
+	echoscreen "  HMAC_JSON_FILE:"
+	echoscreen "    Optional; required only for OTHERACCOUNT."
+}
+
+usage_imgexport() {
+	echoscreen "  IMGNAME:"
+	echoscreen "    Name of the captured image (in the workspace catalog) to export."
+	echoscreen "  BUCKET:"
+	echoscreen "    COS bucket name to export to; may include a folder prefix"
+	echoscreen "    (bucketName/optional/folder)."
+	echoscreen "  BUCKET_REGION:"
+	echoscreen "    IBM COS S3 endpoint region where the destination bucket exists."
+	echoscreen "    Examples: eu-es, eu-de, us-east, us-south."
+	echoscreen "  CURRACCOUNT|OTHERACCOUNT:"
+	echoscreen "    COS account type. OTHERACCOUNT requires the same HMAC JSON file"
+	echoscreen "    format as -imgimport - copy hmac_keys_example.json to a file"
+	echoscreen "    outside this repository and fill in your keys."
+	echoscreen "  HMAC_JSON_FILE:"
+	echoscreen "    Optional; required only for OTHERACCOUNT."
+}
+
+usage_ji() {
+	echoscreen "  WORKSPACE:"
+	echoscreen "    PowerVS workspace (short or full name) whose last image import job"
+	echoscreen "    to re-attach monitoring to. No image name needed - PowerVS tracks"
+	echoscreen "    one import job per workspace."
+}
+
+usage_je() {
+	echoscreen "  IMAGE_NAME:"
+	echoscreen "    Name of the image (searched across every workspace) whose last"
+	echoscreen "    export job to re-attach monitoring to."
+}
+#### END: usage_X() functions (Task 1 - more appended by later tasks) ####
+
 case $1 in
    -h | --help | -help)
+	if [ $# -gt 2 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -h [-FLAG]" 1
+	fi
+	if [ $# -eq 2 ]
+	then
+		case "$2" in
+			-j) usage_j ;;
+			-a|-ta) usage_a ;;
+			-x|-tx) usage_x ;;
+			-imgdel) usage_imgdel ;;
+			-imgimport) usage_imgimport ;;
+			-imgexport) usage_imgexport ;;
+			-ji) usage_ji ;;
+			-je) usage_je ;;
+			*)
+				abort "`date +%Y-%m-%d_%H:%M:%S` - Unknown flag for detailed help: $2. Run bluexport_api.sh -h for the full command list." 1
+				;;
+		esac
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Detailed help for $2 shown above."
+	fi
 	help
 	abort "`date +%Y-%m-%d_%H:%M:%S` - Help requested!!"
     ;;
@@ -5109,11 +5230,13 @@ case $1 in
 	if [ $# -lt 3 ]
 	then
 		echoscreen "Flag -j selected, but Arguments Missing!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
+		usage_j
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but Arguments Missing!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
 	fi
 	if [ $# -gt 3 ]
 	then
 		echoscreen "Flag -j selected, but too many arguments!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
+		usage_j
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but too many arguments!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
 	fi
 	vsi=$2
@@ -5135,10 +5258,12 @@ case $1 in
    -a | -ta)
 	if [ $# -lt 5 ]
 	then
+		usage_a
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
 	fi
 	if [ $# -gt 5 ]
 	then
+		usage_a
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
 	fi
 	destination=$4
@@ -5203,10 +5328,12 @@ case $1 in
    -x | -tx)
 	if [ $# -lt 6 ]
 	then
+		usage_x
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
 	fi
 	if [ $# -gt 6 ]
 	then
+		usage_x
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
 	fi
 	capture_img_name=${4^^}
@@ -5857,6 +5984,7 @@ case $1 in
    -imgdel)
 	if [ $# -ne 2 ]
 	then
+		usage_imgdel
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgdel IMG_NAME"
 	fi
 	img_name="$2"
@@ -5866,6 +5994,7 @@ case $1 in
    -imgimport)
 	if [[ $# -lt 8 || $# -gt 9 ]]
 	then
+		usage_imgimport
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgimport IMGNAME BUCKET BUCKET_REGION WORKSPACE_TO_IMPORT IMGNAME_WS STORAGE_TYPE CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]" 1
 	fi
 	img_import "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
@@ -5874,6 +6003,7 @@ case $1 in
    -imgexport)
 	if [[ $# -lt 5 || $# -gt 6 ]]
 	then
+		usage_imgexport
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgexport IMGNAME BUCKET BUCKET_REGION CURRACCOUNT|OTHERACCOUNT [HMAC_JSON_FILE]" 1
 	fi
 	img_export "$2" "$3" "$4" "$5" "$6"
@@ -5882,6 +6012,7 @@ case $1 in
    -ji)
 	if [[ $# -ne 2 ]]
 	then
+		usage_ji
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -ji WORKSPACE" 1
 	fi
 	img_import_monitor "$2"
@@ -5890,6 +6021,7 @@ case $1 in
    -je)
 	if [[ $# -ne 2 ]]
 	then
+		usage_je
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -je IMAGE_NAME" 1
 	fi
 	img_export_monitor "$2"
