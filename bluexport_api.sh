@@ -5197,6 +5197,43 @@ usage_je() {
 	echoscreen "    Name of the image (searched across every workspace) whose last"
 	echoscreen "    export job to re-attach monitoring to."
 }
+
+usage_snapcr() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    Name of the VSI to snapshot."
+	echoscreen "  SNAPSHOT_NAME:"
+	echoscreen "    Name for the new snapshot; must not already exist for this VSI."
+	echoscreen "  DESCRIPTION:"
+	echoscreen "    Optional. Pass 0 to omit, or a quoted description string."
+	echoscreen "  VOLUMES:"
+	echoscreen "    Optional. Pass 0 for all attached volumes, or a comma-separated"
+	echoscreen "    list of volume names or IDs to snapshot only those."
+}
+
+usage_snapupd() {
+	echoscreen "  SNAPSHOT_NAME:"
+	echoscreen "    Name of the existing snapshot to update (searched across all"
+	echoscreen "    workspaces)."
+	echoscreen "  NEW_SNAPSHOT_NAME:"
+	echoscreen "    Optional. Pass 0 to keep the current name, or a new name."
+	echoscreen "  DESCRIPTION:"
+	echoscreen "    Optional. Pass 0 to keep the current description, or a quoted"
+	echoscreen "    new description."
+	echoscreen "  At least one of NEW_SNAPSHOT_NAME/DESCRIPTION must differ from 0."
+}
+
+usage_snapdel() {
+	echoscreen "  SNAPSHOT_NAME:"
+	echoscreen "    Name of the snapshot to delete (searched across all workspaces)."
+}
+
+usage_snapres() {
+	echoscreen "  VSI_NAME:"
+	echoscreen "    VSI to restore the snapshot onto."
+	echoscreen "  SNAPSHOT_NAME:"
+	echoscreen "    Name of the snapshot to restore."
+}
+
 #### END: usage_X() functions (Task 1 - more appended by later tasks) ####
 
 case $1 in
@@ -5216,6 +5253,10 @@ case $1 in
 			-imgexport) usage_imgexport ;;
 			-ji) usage_ji ;;
 			-je) usage_je ;;
+			-snapcr) usage_snapcr ;;
+			-snapupd) usage_snapupd ;;
+			-snapdel) usage_snapdel ;;
+			-snapres) usage_snapres ;;
 			*)
 				abort "`date +%Y-%m-%d_%H:%M:%S` - Unknown flag for detailed help: $2. Run bluexport_api.sh -h for the full command list." 1
 				;;
@@ -5596,10 +5637,12 @@ case $1 in
 	# Args: VSI_NAME SNAPSHOT_NAME 0|"DESCRIPTION" 0|[VOLUMES (comma separated names or IDs)]
 	if [ $# -lt 5 ]
 	then
+		usage_snapcr
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|\"VOL1,VOL2,...\""
 	fi
 	if [ $# -gt 5 ]
 	then
+		usage_snapcr
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|\"VOL1,VOL2,...\""
 	fi
 	vsi="$2"
@@ -5659,10 +5702,12 @@ case $1 in
 	# Sintaxe: bluexport_api.sh -snapupd SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|["DESCRIPTION"]
 	if [ $# -lt 4 ]
 	then
+		usage_snapupd
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 	fi
 	if [ $# -gt 4 ]
 	then
+	usage_snapupd
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
 	fi
 	test=0
@@ -5791,10 +5836,12 @@ case $1 in
 	# Validate arguments
 	if [ $# -lt 2 ]
 	then
+		usage_snapdel
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME"
 	fi
 	if [ $# -gt 2 ]
 	then
+		usage_snapdel
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME"
 	fi
 	test=0
@@ -5838,10 +5885,12 @@ case $1 in
 	# Syntax: bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME
 	if [ $# -lt 3 ]
 	then
+		usage_snapres
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
 	fi
 	if [ $# -gt 3 ]
 	then
+		usage_snapres
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
 	fi
 	test=0
