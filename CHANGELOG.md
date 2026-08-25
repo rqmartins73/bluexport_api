@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.17.0] - 2026-08-25 (`bluexport_api.sh`)
+
+### Fixed
+- `-vsisrcmon` — and therefore `-vsistart`, which delegates its entire monitoring phase to it — no longer refreshes nothing and polls forever. It had none of the three mechanisms `job_monitor()` and `wait_for_job()` have had since captures started outliving their IAM token.
+  - **The IAM token is now refreshed**, proactively every 45 minutes and on any `401`. Previously, once the ~60-minute token expired, the API returned an error body with no `.status` field, `jq -r '.status // "UNKNOWN"'` rendered that as the literal string `UNKNOWN`, and the monitor aborted reporting *"VSI … entered UNKNOWN status. The LPAR/VSI is not starting."* — a false diagnosis that sent the operator to look at a perfectly healthy LPAR. A large IBM i IPL after an abnormal end running past the hour is routine, not exotic.
+  - **Unreadable responses are now counted and bounded** — ten consecutive failures, 30 seconds apart, then a stop that states plainly that this is an API/connectivity failure and *not* a statement about the VSI. Previously they retried forever, 15 seconds apart, with no counter and nothing said about why.
+  - **The monitor now has an overall time bound**, four hours by default. Previously an IPL that never reached SRC `00000000` — a hung IPL, the wrong boot mode, a B-side problem — polled until somebody killed the process.
+
+### Added
+- `BLUEXPORT_SRCMON_TIMEOUT` environment variable overrides the `-vsisrcmon` time bound, in seconds, without editing the script. A timeout is reported as a timeout, never as a failed IPL, and re-running the same command resumes monitoring.
+- `ins_get_code()`, a variant of `ins_get()` that appends the HTTP status code as a trailing line, using the same idiom `job_get()` already uses. Kept as a separate function rather than changing `ins_get()`, whose nine other callers parse a bare JSON body and would all break on a trailing line.
+
+### Changed
+- The `UNKNOWN` status branch in `-vsisrcmon` is now reached only when the API answered `2xx` and the status it reported is literally `UNKNOWN`. It is no longer the catch-all for every unreadable response, so that abort now means what it says.
+
 ## [1.16.0] - 2026-08-10 (`bluexport_api.sh`)
 
 ### Added

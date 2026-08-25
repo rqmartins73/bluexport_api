@@ -133,6 +133,9 @@
 # Monitor VSI SRC:              bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF
 #      START   -> Monitor until status=ACTIVE and SRC=00000000
 #      SHUTOFF -> Monitor until status=SHUTOFF (SRC ignored)
+#      Stops after 4h by default; BLUEXPORT_SRCMON_TIMEOUT overrides (seconds).
+#      A timeout is reported as a timeout, never as a failed IPL - re-run the
+#      same command to resume monitoring.
 #
 # Attach volumes by common name: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME
 #      Attach all volumes in the workspace whose name contains VOLUMES_COMMON_NAME.
@@ -160,7 +163,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.16.0
+Version=1.17.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -621,6 +624,25 @@ ws_ls() {
 ## Instance (VSI) management functions
 ins_get() {
 	curl -sX GET "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
+}
+
+ins_get_code() {
+	# Same request as ins_get(), but appends the HTTP status code as the last
+	# line - the identical trick job_get() uses, and for the identical reason:
+	# without it a caller cannot tell "the API says the LPAR is in state X"
+	# apart from "the API refused to answer". An expired IAM token returns an
+	# error body with no .status field, and `jq -r '.status // "UNKNOWN"'`
+	# renders that as the literal string UNKNOWN - indistinguishable from a
+	# real LPAR state. That is how a monitor outliving its token came to
+	# report a perfectly healthy IPL as an LPAR that was not starting.
+	#
+	# Deliberately a SEPARATE function rather than a change to ins_get(): that
+	# one has nine other callers which parse a bare JSON body, and appending a
+	# trailing line would break every one of them.
+	#
+	# Caller must split the code back out (see do_vsi_srcmon) - this runs via
+	# command substitution, so it cannot hand it back in a global.
+	curl -sS --connect-timeout 30 --max-time 60 -w '\n%{http_code}' -X GET "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" 2>>"$log_file"
 }
 
 ins_vol_ls() {
@@ -3979,23 +4001,92 @@ do_vsi_srcmon() {
 	local saw_nonzero=0
 	local stable_zero=0
 
+	# Bounds and token upkeep, lifted from job_monitor()/wait_for_job(), which
+	# have had all three of these since captures started outliving their token.
+	# This loop had none of them, and it is reached by -vsistart too, since
+	# do_start_vsi() delegates its entire monitoring phase here.
+	#
+	#  - IAM tokens expire in ~3600s. A large IBM i IPL after an abnormal end
+	#    running past the hour is routine, not exotic.
+	#  - An IPL that never reaches SRC 00000000 (hung IPL, wrong boot mode, a
+	#    B-side problem) previously polled until somebody killed the process.
+	#  - A run of unreadable responses previously retried forever, 15s apart,
+	#    with no counter and nothing said about why.
+	#
+	# BLUEXPORT_SRCMON_TIMEOUT overrides the overall bound (seconds) without
+	# editing this script; the 4h default is deliberately generous, since
+	# stopping a monitor early on a slow-but-healthy IPL is its own failure.
+	local srcmon_start_ts
+	srcmon_start_ts=$(date +%s)
+	local srcmon_timeout_secs="${BLUEXPORT_SRCMON_TIMEOUT:-14400}"
+	local srcmon_fail_count=0
+	local srcmon_max_fail=10
+	local token_refresh_secs=2700
+	local srcmon_now_ts srcmon_elapsed vsi_raw http_code
+
 	while true
 	do
-		vsi_json=$(ins_get 2>>"$log_file")
-		if [[ -z "$vsi_json" ]]
+		# Overall bound. Reported as a timeout, and explicitly NOT as a
+		# failed IPL - the VSI is very likely still doing something.
+		srcmon_now_ts=$(date +%s)
+		srcmon_elapsed=$((srcmon_now_ts - srcmon_start_ts))
+		if [ "$srcmon_elapsed" -ge "$srcmon_timeout_secs" ]
 		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING: Could not retrieve VSI status/SRC. Retrying in 15 seconds..." "1"
-			sleep 15
-			continue
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Monitoring of VSI $vsi_name TIMED OUT after ${srcmon_elapsed}s (limit ${srcmon_timeout_secs}s). ===" "1"
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - The VSI has NOT been declared failed - it may still be running. Last seen Status: ${vsi_status:-n/a}, SRC: ${vsi_src:-n/a}." "1"
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Re-run 'bluexport_api.sh -vsisrcmon $vsi_name $mode_u' to resume monitoring, or raise BLUEXPORT_SRCMON_TIMEOUT." 1
 		fi
 
-		vsi_status=$(echo "$vsi_json" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+		# Refresh the IAM token before it expires, so a long IPL never hits an
+		# auth failure mid-poll.
+		if [[ -n "$iam_token_epoch" ]] && (( $(date +%s) - iam_token_epoch >= token_refresh_secs ))
+		then
+			get_iam_token refresh
+		fi
+
+		# Read status via ins_get_code() so an unanswerable request is told
+		# apart from a real LPAR state. vsi_status is left EMPTY unless the
+		# API returned 2xx with an actual .status - never defaulted to
+		# "UNKNOWN", which used to make an expired token look like a dead LPAR.
+		vsi_raw=$(ins_get_code)
+		http_code="${vsi_raw##*$'\n'}"
+		vsi_json="${vsi_raw%$'\n'*}"
+		vsi_status=""
+		if [[ "$http_code" == 2* ]]
+		then
+			vsi_status=$(printf '%s' "$vsi_json" | jq -r '.status // empty' 2>>"$log_file")
+		fi
+
+		if [[ -z "$vsi_status" ]]
+		then
+			srcmon_fail_count=$((srcmon_fail_count + 1))
+			echo "`date +%Y-%m-%d_%H:%M:%S` - WARNING - Could not read status for VSI $vsi_name (HTTP ${http_code:-?}, attempt $srcmon_fail_count/$srcmon_max_fail). Response: $vsi_json" >> "$log_file"
+			if [[ "$http_code" == "401" ]]
+			then
+				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - IAM token was rejected (HTTP 401). Refreshing token..." "1"
+				get_iam_token refresh
+			fi
+			if [ "$srcmon_fail_count" -ge "$srcmon_max_fail" ]
+			then
+				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - FAILED to read status for VSI $vsi_name after $srcmon_max_fail consecutive attempts (last HTTP ${http_code:-?})." "1"
+				abort "`date +%Y-%m-%d_%H:%M:%S` - Monitoring stopped. This is an API/connectivity failure, NOT a statement about the VSI. Check $log_file." 1
+			fi
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - WARNING - Transient error reading status for VSI $vsi_name (HTTP ${http_code:-?}). Retrying in 30s ($srcmon_fail_count/$srcmon_max_fail)..." "1"
+			spin_wait 30 "Retrying VSI status check"
+			continue
+		fi
+		srcmon_fail_count=0
+
 		# srcs is an array-of-array, like: "srcs": [[{ "src": "00000000", ... }]]
-		vsi_src=$(echo "$vsi_json" | jq -r '.srcs[0][0].src // "UNKNOWN"' 2>>"$log_file")
+		vsi_src=$(printf '%s' "$vsi_json" | jq -r '.srcs[0][0].src // "UNKNOWN"' 2>>"$log_file")
 
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name - Status: $vsi_status, SRC: $vsi_src" "1"
 
-		# Check for UNKNOWN status (abnormal state)
+		# Check for UNKNOWN status (abnormal state).
+		# Reached ONLY when the API answered 2xx and the status it reported is
+		# literally "UNKNOWN". It is no longer the catch-all it used to be:
+		# an unreadable response is handled by the transient branch above,
+		# so this abort now means what it says.
 		if [[ "$vsi_status" == "UNKNOWN" ]]
 		then
 			if [[ "$mode_u" == "START" ]]
@@ -5386,6 +5477,11 @@ usage_vsisrcmon() {
 	echoscreen "    Name of the VSI whose SRC (reference code) to monitor."
 	echoscreen "  MODE:"
 	echoscreen "    START|SHUTOFF - which state transition to wait for."
+	echoscreen ""
+	echoscreen "  Monitoring stops after 4 hours by default. Set the environment"
+	echoscreen "  variable BLUEXPORT_SRCMON_TIMEOUT to a number of seconds to change"
+	echoscreen "  it. A timeout is reported as a timeout, never as a failed IPL, and"
+	echoscreen "  re-running the same command resumes monitoring."
 }
 
 usage_attachvolumes() {

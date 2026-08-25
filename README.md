@@ -233,6 +233,7 @@ Examples:
 - `TASK`: `dston | retrydump | consoleservice | iopreset | remotedstoff | remotedston | iopdump | dumprestart`
 - `-vsisrcmon START` → monitor until `ACTIVE` and SRC `00000000`
 - `-vsisrcmon SHUTOFF` → monitor until `SHUTOFF` (SRC ignored)
+- Monitoring refreshes the IAM token as it runs, so an IPL that outlives the ~60-minute token keeps being monitored correctly. It stops after **4 hours** by default — set `BLUEXPORT_SRCMON_TIMEOUT` (seconds) to change it. A timeout is reported as a timeout, never as a failed IPL; re-run the same command to resume monitoring. `-vsistart` uses this same monitor.
 
 ### Snapshots
 ```
