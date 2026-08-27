@@ -10,6 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [2.2] - 2026-08-28 (`bluexscrt_config_api.sh`)
+
+### Fixed
+- `rc_list_powervs()` asked the Resource Controller for `resource_id=power-iaas`. That parameter
+  takes the **service's catalog GUID**, not its name, and the name matches nothing — so the call
+  returned `200 OK` with zero rows rather than an error. Anything reading it would have concluded
+  the account holds no PowerVS at all. Now sends `abd259f0-9990-11e8-acc8-b9f54a8f1661`, verified
+  against a real account: with the name, 0 rows; with the GUID, every workspace.
+
+  The function is not called from anywhere today, which is why this survived — it is reachable
+  only if someone wires it up, and it would have failed silently the moment they did. Found while
+  porting workspace discovery to BlueXport Desktop.
+
+  Two traps are now recorded in a comment above it: PowerVS **sub-resources** (`power-iaas.image`,
+  `.network`, `.network-interface`, `.network-security-group`, `.pvm-instance`, `.volume`) *do*
+  come back from an unfiltered `type=service_instance` listing while the **workspaces do not**, so
+  filtering that listing on a CRN containing `:power-iaas:` finds ninety things and misses every
+  workspace; and the listing pages at 100 with a `.next_url` that this function does not follow.
+
 ## [1.17.0] - 2026-08-25 (`bluexport_api.sh`)
 
 ### Fixed

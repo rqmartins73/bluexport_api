@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="2.1"
+VERSION="2.2"
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -211,11 +211,27 @@ get_iam_token() {
   header_accept="Accept: application/json"
 }
 
+# The Resource Controller's resource_id parameter takes the SERVICE'S CATALOG GUID, not the
+# service name. "power-iaas" is not rejected - it matches nothing and the call returns 200 OK
+# with zero rows, which reads as an account with no PowerVS in it. Verified 2026-08-27 against a
+# real account: with the name, 0 rows; with this GUID, every workspace.
+#
+# Two things worth knowing before anyone "simplifies" this back:
+#  - PowerVS SUB-resources (power-iaas.image / .network / .network-interface /
+#    .network-security-group / .pvm-instance / .volume) DO come back from an unfiltered
+#    type=service_instance listing, ninety of them on that account, while the WORKSPACES do not.
+#    So filtering the plain listing on a CRN containing ":power-iaas:" finds plenty and misses
+#    every workspace.
+#  - The listing pages at 100 and carries .next_url, which is a path and needs the host prefixed
+#    back on. This function does not follow it; an account with more than 100 PowerVS resources
+#    would need that added.
+POWERVS_CATALOG_ID="abd259f0-9990-11e8-acc8-b9f54a8f1661"
+
 rc_list_powervs() {
   curl -s \
     -H "$header_auth" \
     -H "$header_accept" \
-    "https://resource-controller.cloud.ibm.com/v2/resource_instances?type=service_instance&resource_id=power-iaas"
+    "https://resource-controller.cloud.ibm.com/v2/resource_instances?resource_id=$POWERVS_CATALOG_ID"
 }
 
 # Current date (YYYY-MM-DD). Required for Transit Gateway API versioning.
