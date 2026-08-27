@@ -27,6 +27,7 @@
 # Delete snapshot:              bluexport_api.sh -snapdel SNAPSHOT_NAME
 # Restore snapshot:             bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME
 # List all snapshots (all WS):  bluexport_api.sh -snaplsall
+# LPAR compute and licences:    bluexport_api.sh -vsidetails
 #
 # === Captured Images ===
 # List all captured images (all workspaces):  bluexport_api.sh -imglsall
@@ -163,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.17.0
+Version=1.18.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -480,6 +481,7 @@ help() {
 	echoscreen "Delete snapshot:            bluexport_api.sh -snapdel SNAPSHOT_NAME"
 	echoscreen "Restore snapshot:           bluexport_api.sh -snapres VSI_NAME SNAPSHOT_NAME"
 	echoscreen "List all snapshots(all WS): bluexport_api.sh -snaplsall"
+	echoscreen "LPAR compute and licences:  bluexport_api.sh -vsidetails"
 	echoscreen ""
 	echoscreen "=== Captured Images ==="
 	echoscreen "List all captured images (all workspaces): bluexport_api.sh -imglsall"
@@ -6284,6 +6286,71 @@ case $1 in
 	done
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing all snapshots in all workspaces"
     ;;
+
+  -vsidetails)
+	# Too many arguments?
+	if [ $# -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing compute and licences for all LPARs in all workspaces!" "1"
+	read -r -a allws_array <<< "$allws"
+	# Loop all workspaces
+	for ws in "${allws_array[@]}"
+	do
+		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+		full_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name // $k' "$bluexscrt")
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === LPAR details at workspace $full_ws_name" "1"
+		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+		ins_json=$(ins_ls 2>>"$log_file")
+		if ! echo "$ins_json" | jq -e '.pvmInstances | length > 0' >/dev/null 2>&1
+		then
+			echoscreen "----------------------- No LPARs Found -----------------------" "1"
+		else
+			# One TSV line per LPAR. The licence flags are rendered as a comma-separated list of
+			# the ones that are ON, rather than four true/false columns: a consultant reads
+			# "CSS, PHA" faster than four booleans, and an LPAR with none prints "-" rather than
+			# four "false"s that look like an error.
+			echo "$ins_json" | jq -r '.pvmInstances // [] | .[] |
+			[
+			.serverName,
+			.status,
+			(.memory | tostring),
+			(.processors | tostring),
+			.procType,
+			((.virtualCores.assigned // "-") | tostring),
+			(.sysType // "-"),
+			(.osType // "-"),
+			([ (.softwareLicenses // {}) | to_entries[]
+			   | select(.value == true) | .key ] | join(", ") | if . == "" then "-" else . end),
+			((.softwareLicenses.ibmiRDSUsers // "-") | tostring),
+			.pvmInstanceID
+			] | @tsv' 2>>"$log_file" | \
+			while IFS=$'\t' read -r d_name d_status d_mem d_proc d_ptype d_vcores d_systype d_ostype d_lic d_rdsusers d_id
+			do
+				{
+					echo "----------------------- LPAR Found -----------------------"
+					echo "Name: $d_name"
+					echo "Status: $d_status"
+					echo "Memory (GB): $d_mem"
+					echo "Processors: $d_proc ($d_ptype)"
+					echo "Virtual Cores: $d_vcores"
+					echo "System Type: $d_systype"
+					echo "OS Type: $d_ostype"
+					echo "Licences: $d_lic"
+					echo "RDS Users: $d_rdsusers"
+					echo "PVM Instance ID: $d_id"
+					echo "----------------------------------------------------------"
+				} | tee -a "$log_file"
+			done
+		fi
+	done
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing compute and licences!" "1"
+	exit 0
+	;;
 
   -imglsall)
 	if [ $# -gt 1 ]

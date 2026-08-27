@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.18.0] - 2026-08-28 (`bluexport_api.sh`)
+
+### Added
+- `-vsidetails` — the compute and licensing of every LPAR in every configured workspace, from the
+  data `pvm-instances` already returns and nothing else was reading: **memory**, **processors** and
+  their type, **virtual cores**, **system type**, and the **IBM i software licences**.
+
+  The licences print as a comma-separated list of the ones that are ON — `ibmiCSS, ibmiPHA` — rather
+  than as four true/false columns. A consultant reads that faster, and an LPAR with none prints `-`
+  instead of four `false`s that look like a fault. `ibmiRDSUsers` is carried separately because it
+  is a count, not a flag.
+
+  Follows the same shape as `-snaplsall`: loop the workspaces, resolve the base URL from the CRN's
+  region, one TSV line per row read back through `while IFS=$'\t' read -r`. No `mapfile`, no
+  `readarray`, nothing outside what the rest of the script already relies on, so it runs under PASE
+  on IBM i like everything else here.
+
 ## [2.2] - 2026-08-28 (`bluexscrt_config_api.sh`)
 
 ### Fixed
