@@ -10,6 +10,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.18.1] - 2026-09-11 (`bluexport_api.sh`)
+
+### Fixed
+
+- **The ASP flush's error check could never fire, and a flush that did not happen looked exactly
+  like one that did.** `flush_asps` ran `CHGASPACT ... OPTION(*FRCWRT)` piped to `tee` and then
+  tested `$?` — which after a pipeline is the *last* command's status, so it read `tee`, and `tee`
+  succeeds whenever it can write the log. An SSH failure, a `CHGASPACT` IBM i refused, a partition
+  that had stopped answering: all of them left `$?` at `0`, the `abort` never ran, and
+  `do_snap_create` went on to take the snapshot.
+
+  That is what the flush is *for*. Without it the snapshot captures disk the partition has not
+  finished writing to, the snapshot still completes at 100%, and the damage only surfaces when it
+  is restored and the partition IPLs abnormally — by which point nothing points back at the flush.
+  Someone who knew the flush could fail would check the log, and the log said it ran.
+
+  The status is now captured before anything is piped (POSIX, not `PIPESTATUS`, which is a
+  bashism). **Applied at all four flush sites, not two:** the two remote ones had the dead guard;
+  the two local ones had no guard at all. The abort message no longer blames the SSH connection
+  either — a refused `CHGASPACT` is the likelier failure and reads nothing like a timeout.
+
+- **`-snapdel` aborted on the first workspace that had snapshots but not the one asked for.** The
+  sweep across workspaces is there, but its guard tested whether the workspace had *any* snapshots
+  rather than whether it had *this* one. A workspace holding unrelated snapshots therefore fell
+  through to `do_snap_delete`, which looks the name up in that workspace's list, does not find it,
+  and aborts — ending the run before the workspace actually holding the snapshot is reached.
+
+  It worked every time with one workspace, or with snapshots in only one, which is why it had not
+  been noticed. With a second workspace ahead of the target's, the same command reported that a
+  snapshot which exists does not.
+
+- **The snapshot-create watch never exited when the snapshot left the list.** `select` yielded
+  nothing, the percentage was coerced to `0`, and `while [ "$snap_percent" -lt 100 ]` stayed true
+  forever — an unbounded spin at ten-second intervals, after `flush_asps` had already run, leaving
+  the partition flushed and the operator waiting on a snapshot that would never report.
+  `do_snap_restore` checks for exactly this and aborts; the create watch now does too.
+
+All three were found while porting these paths to a companion project, by reading each line
+closely enough to reproduce it rather than transliterating it. Each bullet above is self-contained;
+nothing here depends on a document you cannot see. No behaviour changes beyond the three fixes, no
+new flags, and nothing that alters the shape of any API call.
+
 ## [1.18.0] - 2026-08-28 (`bluexport_api.sh`)
 
 ### Added

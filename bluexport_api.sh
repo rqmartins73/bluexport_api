@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.18.0
+Version=1.18.1
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -1612,31 +1612,67 @@ flush_asps() {
 		if [[ "$local_name" == "${vsi^^}" ]]
 		then
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Running locally on $vsi, executing SYSBAS flush without SSH..." "1"
-			system "CHGASPACT ASPDEV(*SYSBAS) OPTION(*FRCWRT)" 2>&1 | tee -a "$log_file" ###>> "$log_file" 2>&1
+			# S-9 fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
+			# pipeline is the LAST command's status - it was tee's, and tee always succeeds,
+			# so the guard below could never fire. A flush that did not happen then looked
+			# exactly like one that did, and the snapshot was taken anyway. POSIX capture
+			# rather than PIPESTATUS, which is a bashism.
+			flush_out=$(system "CHGASPACT ASPDEV(*SYSBAS) OPTION(*FRCWRT)" 2>&1)
+			flush_rc=$?
+			printf '%s\n' "$flush_out" | tee -a "$log_file"
+			if [ "$flush_rc" -ne 0 ]
+			then
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - CHGASPACT on *SYSBAS failed (rc=$flush_rc). The snapshot would capture disk the partition has not finished writing to. Aborting."
+			fi
 			if [[ -n "$iasp_names" ]]
 			then
 				for iasp_name in $iasp_names
 				do
 					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Flushing Memory to Disk for $iasp_name ..." "1"
-					system "CHGASPACT ASPDEV($iasp_name) OPTION(*FRCWRT)" 2>&1 | tee -a "$log_file" ###>> "$log_file" 2>&1
+					# S-9 fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
+					# pipeline is the LAST command's status - it was tee's, and tee always succeeds,
+					# so the guard below could never fire. A flush that did not happen then looked
+					# exactly like one that did, and the snapshot was taken anyway. POSIX capture
+					# rather than PIPESTATUS, which is a bashism.
+					flush_out=$(system "CHGASPACT ASPDEV($iasp_name) OPTION(*FRCWRT)" 2>&1)
+					flush_rc=$?
+					printf '%s\n' "$flush_out" | tee -a "$log_file"
+					if [ "$flush_rc" -ne 0 ]
+					then
+						abort "$(date +%Y-%m-%d_%H:%M:%S) - CHGASPACT on iASP $iasp_name failed (rc=$flush_rc). The snapshot would capture disk the partition has not finished writing to. Aborting."
+					fi
 				done
 			fi
 		else
 			# Remote via SSH
-			ssh -T -i "$sshkeypath" "$vsi_user@$vsi_ip" 'system "CHGASPACT ASPDEV(*SYSBAS) OPTION(*FRCWRT)"' 2>&1 | tee -a "$log_file" ###>> "$log_file" | tee -a "$log_file"
-			if [[ $? -ne 0 ]]
+			# S-9 fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
+			# pipeline is the LAST command's status - it was tee's, and tee always succeeds,
+			# so the guard below could never fire. A flush that did not happen then looked
+			# exactly like one that did, and the snapshot was taken anyway. POSIX capture
+			# rather than PIPESTATUS, which is a bashism.
+			flush_out=$(ssh -T -i "$sshkeypath" "$vsi_user@$vsi_ip" 'system "CHGASPACT ASPDEV(*SYSBAS) OPTION(*FRCWRT)"' 2>&1)
+			flush_rc=$?
+			printf '%s\n' "$flush_out" | tee -a "$log_file"
+			if [ "$flush_rc" -ne 0 ]
 			then
-				abort "$(date +%Y-%m-%d_%H:%M:%S) - ERRO: ligação SSH falhou ou deu timeout, abortando..."
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - CHGASPACT on *SYSBAS failed (rc=$flush_rc). The snapshot would capture disk the partition has not finished writing to. Aborting."
 			fi
 			if [[ -n "$iasp_names" ]]
 			then
 				for iasp_name in $iasp_names
 				do
 					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Flushing Memory to Disk for $iasp_name ..." "1"
-					ssh -T -i "$sshkeypath" "$vsi_user@$vsi_ip" "system \"CHGASPACT ASPDEV($iasp_name) OPTION(*FRCWRT)\"" 2>&1 | tee -a "$log_file" ###>> "$log_file" | tee -a "$log_file"
-					if [[ $? -ne 0 ]]
+					# S-9 fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
+					# pipeline is the LAST command's status - it was tee's, and tee always succeeds,
+					# so the guard below could never fire. A flush that did not happen then looked
+					# exactly like one that did, and the snapshot was taken anyway. POSIX capture
+					# rather than PIPESTATUS, which is a bashism.
+					flush_out=$(ssh -T -i "$sshkeypath" "$vsi_user@$vsi_ip" "system \"CHGASPACT ASPDEV($iasp_name) OPTION(*FRCWRT)\"" 2>&1)
+					flush_rc=$?
+					printf '%s\n' "$flush_out" | tee -a "$log_file"
+					if [ "$flush_rc" -ne 0 ]
 					then
-						abort "$(date +%Y-%m-%d_%H:%M:%S) - ERRO: ligação SSH falhou ou deu timeout, abortando..."
+						abort "$(date +%Y-%m-%d_%H:%M:%S) - CHGASPACT on iASP $iasp_name failed (rc=$flush_rc). The snapshot would capture disk the partition has not finished writing to. Aborting."
 					fi
 				done
 			fi
@@ -1746,6 +1782,17 @@ do_snap_create() {
 		then
 			echo "$status_json" >>"$log_file"
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading snapshot status from API."
+		fi
+		# S-10 fix (1.18.1): a snapshot that has left the list yields nothing from select,
+		# snap_percent became empty, the coercion below made it 0, and "while [ -lt 100 ]"
+		# stayed true forever - an unbounded spin at 10s intervals, after flush_asps had
+		# already run. do_snap_restore checks for exactly this (its "not found in list while
+		# monitoring restore" abort); the create watch did not.
+		snap_present=$(echo "$status_json" | jq -r --arg id "$snap_id" \
+			'.snapshots[]? | select(.snapshotID == $id) | .snapshotID' 2>>"$log_file")
+		if [ -z "$snap_present" ] || [ "$snap_present" = "null" ]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot $snap_name (ID $snap_id) is no longer in the list; creation did not complete."
 		fi
 		snap_percent=$(echo "$status_json" | jq -r --arg id "$snap_id" '
 			.snapshots[]? | select(.snapshotID == $id) | .percentComplete // 0
@@ -6178,14 +6225,20 @@ case $1 in
                 base_url_var="base_${region_api}"
                 base_url="${!base_url_var}"
 		snaps_json=$(snap_ls 2>>"$log_file")
-                # Check if there are snapshots
-                if ! echo "$snaps_json" | jq -e '.snapshots | length > 0' >/dev/null 2>&1
+                # S-8 fix (1.18.1): ask whether THIS snapshot is here, not whether the
+                # workspace has ANY. The old guard tested '.snapshots | length > 0', so a
+                # workspace holding unrelated snapshots fell through to do_snap_delete, which
+                # looks the name up in that workspace's list and aborts when it is not there -
+                # ending the sweep before the workspace that actually holds the snapshot was
+                # ever reached. It worked only when the target happened to live in the first
+                # workspace that had any snapshots at all.
+                if ! echo "$snaps_json" | jq -e --arg n "$snap_name" \
+                        '[.snapshots[]? | select(.name == $n)] | length > 0' >/dev/null 2>&1
 		then
-			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Snapshot with name $snap_name doesn't exists in Workspace $full_ws_name, moving on to next Workspace!" "1"
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Snapshot with name $snap_name not found in Workspace $full_ws_name, moving on to next Workspace!" "1"
 			continue
-		else
-			do_snap_delete
 		fi
+		do_snap_delete
 	done
     ;;
 
