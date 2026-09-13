@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.18.1
+Version=1.18.2
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -5737,7 +5737,23 @@ case $1 in
 		fi
 		if [[ $6 == "hourly" ]]
 		then
-			old_img=$(date --date '1 hour ago' "+%H")
+			# S-11 fix (1.18.2): "+_%H", not "+%H", matching -a at the same point.
+			# delete_previous_img compares this token as a PLAIN UNANCHORED SUBSTRING -
+			# contains($old) against the image name, index(key, old) > 0 against the COS
+			# object key - and takes head -n1. Every capture name carries a full ISO date,
+			# so a bare two-digit hour matches the DATE as readily as the time: at 14:00 on
+			# the 13th, "13" matched NAME_2026-09-13_1400, the capture just taken, in
+			# preference to NAME_2026-09-13_1300, the one meant for cleanup. The just-made
+			# image was then deleted and the run reported success. Nor is it only the day of
+			# month: in 2026 the year alone supplies 20, 02 and 26, so the 21:00, 03:00 and
+			# 10:00 hours collided with every image, every day.
+			#
+			# The leading underscore cannot occur inside 2026-09-13, so it can only match
+			# the time segment. Note this narrows the hazard rather than removing it: an
+			# LPAR whose own name ends in _13 would still collide, because the match is
+			# still a substring. Anchoring it to the name's time segment is the fix for the
+			# class and is deliberately not made here, since it changes -a's working path too.
+			old_img=$(date --date '1 hour ago' "+_%H")
 			capture_name=$capture_img_name"_"$capture_hour
 		fi
 		if [[ $6 == "daily" ]]

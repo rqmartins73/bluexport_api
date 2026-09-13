@@ -10,6 +10,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.18.2] - 2026-09-13 (`bluexport_api.sh`)
+
+### Fixed
+
+- **`-x` with `hourly` could delete the capture it had just taken.** `-a` and `-x` computed the
+  token used to find the previous capture for cleanup one character apart — `"+_%H"` and `"+%H"` —
+  and `delete_previous_img` matches that token as a plain, unanchored substring before taking the
+  first hit.
+
+  Every capture name carries a full ISO date, so a bare two-digit hour matches the *date* as
+  readily as the time. At 14:00 on the 13th, `13` matched `NAME_2026-09-13_1400` — the capture the
+  run had just finished making — in preference to `NAME_2026-09-13_1300`, the one meant for
+  cleanup. The new image was deleted, the old one left behind, and the run reported success.
+
+  Nor was it only the day of the month: the token is the previous hour, `00`–`23`, matched against
+  a string containing the year, month and day. In 2026 the year alone supplies `20`, `02` and `26`,
+  so the 21:00, 03:00 and 10:00 hours collided with every image, every day.
+
+  It needed `-x` rather than `-a`, with `hourly` rather than the other four recurrences — the
+  narrowest corner of the flag matrix — and the damage was a deleted image rather than an error,
+  which is why it had not been seen.
+
+### Known, not fixed here
+
+- **The cleanup match is still an unanchored substring, and in the 21:00 hour it hits the year.**
+  A capture name's date begins right after an underscore too, so `_20` matches
+  `NAME_2026-09-13_1400`. Where an LPAR has both an hourly rotation and a nightly keep, the
+  nightly image is the one deleted. **This affects `-a` as well as `-x`**, and it is one hour a
+  day for as long as the year begins `20`.
+
+  Not fixed in this release deliberately: unlike the above it changes `-a`'s currently-working
+  path and the Cloud Object Storage matcher, and it should be decided on its own rather than
+  carried along with a one-character fix. Anchoring the hourly comparison — `endswith` rather than
+  `contains` — is the shape of it.
+
+Both were found while porting these paths to a companion project, by reading each line closely
+enough to reproduce it, and both were reproduced against this script's own `jq` before being
+written down.
+
 ## [1.18.1] - 2026-09-11 (`bluexport_api.sh`)
 
 ### Fixed
