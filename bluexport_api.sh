@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.18.5
+Version=1.18.6
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -200,7 +200,7 @@ echoscreen() {
     msg="$1"
     flag="$2"
 
-    # Quebra linhas a cada 132 colunas
+    # Quebra linhas a cada 377 colunas
     wrapped=$(printf '%s\n' "$msg" | fold -w 377 -s)
 
     # Interactive (TTY) OR forced (IBM i batch)
@@ -864,7 +864,9 @@ img_ls() {
 }
 
 img_del() {
-	curl -sX DELETE $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/images/$IMAGE_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
+	# (1.18.6) The HTTP status is appended as the last line, as img_import_api does, so the
+	# caller can tell a refused delete (4xx) from a successful one; the body alone could not.
+	curl -sX DELETE $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/images/$IMAGE_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -w '\n%{http_code}'
 }
 
 img_import_api() {
@@ -910,7 +912,9 @@ list_object() {
 }
 
 object_delete() {
-	curl -sX DELETE https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$KEY -H "$header_auth"
+	# (1.18.6) HTTP status appended as the last line; S3 answers a failed delete with an XML
+	# <Error> body and a 4xx, and the caller has to read one or the other to notice.
+	curl -sX DELETE https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$KEY -H "$header_auth" -w '\n%{http_code}'
 }
 
 cos_ins_ls() {
@@ -922,7 +926,9 @@ cos_ls_buckets() {
 }
 
 cos_rest_arch() {
-	curl -sX POST https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "$header_json" -d "$ACTIONS"
+	# (1.18.6) The body is XML (see do_object_restore_from_archive), so say so; it was sent
+	# under Content-Type: application/json.
+	curl -sX POST https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "Content-Type: application/xml" -d "$ACTIONS"
 }
 #### END:FUNCTIONS - API Commands ####
 
@@ -1213,7 +1219,9 @@ delete_previous_img() {
 	else
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Deleting from image catalog image name $img_name_old - image ID $img_id_old - from day $old_img... ==" "1"
 		IMAGE_ID="$img_id_old"
-		img_del 2>>"$log_file" | tee -a "$log_file"
+		del_raw=$(img_del 2>>"$log_file")
+		printf '%s\n' "$del_raw" >> "$log_file"
+		delete_check "$del_raw" "image $img_name_old" || true
 	fi
 	# --- Delete from Object Storage (if safe) ---
 	if [[ -z "$objstg_img" ]]
@@ -1226,7 +1234,9 @@ delete_previous_img() {
 		else
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - == Deleting from Bucket $bucket, image name $objstg_img from day $old_img... ==" "1"
 			KEY="$objstg_img"
-			object_delete 2>>"$log_file" | tee -a "$log_file"
+			del_raw=$(object_delete 2>>"$log_file")
+			printf '%s\n' "$del_raw" >> "$log_file"
+			delete_check "$del_raw" "object $KEY in bucket $bucket" || true
 		fi
 	fi
 }
@@ -1417,10 +1427,21 @@ wait_for_job() {
 	spin_wait 10 "Waiting for job to register"
 
 	local operation_before="" job_get_fail_count=0 job_get_max_fail=10 token_refresh_secs=2700
+	# (1.18.6) A wall-clock bound. A job that keeps answering a readable, non-terminal state
+	# used to be polled forever; 24 hours by default, BLUEXPORT_JOB_MAX_SECS overrides it.
+	# Stopping the monitor does not stop the job - re-attach with -j, -ji or -je.
+	local job_max_secs="${BLUEXPORT_JOB_MAX_SECS:-86400}" job_started_epoch
+	job_started_epoch=$(date +%s)
 
 	while true
 	do
 		JOB_ID="$job_id"
+
+		if [ $(( $(date +%s) - job_started_epoch )) -ge "$job_max_secs" ]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $label has not finished after $job_max_secs seconds. Monitoring stopped; the job itself CONTINUES in IBM Cloud. Re-attach later with -j, -ji or -je." "1"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Job ID $job_id monitoring timed out (limit BLUEXPORT_JOB_MAX_SECS=$job_max_secs)." 1
+		fi
 
 		if [[ -n "$iam_token_epoch" ]] && (( $(date +%s) - iam_token_epoch >= token_refresh_secs ))
 		then
@@ -2360,6 +2381,38 @@ cos_resolve_bucket_region() {
 }
 ####  END:FUNCTION  Resolve COS Bucket Region  ####
 
+####  START:FUNCTION - Read a DELETE answer whose last line is the HTTP status  ####
+# (1.18.6) Usage: delete_check "$raw_output" "what was being deleted"
+# Sets delete_http and delete_body; returns 0 on a 2xx with no error payload, 1 otherwise,
+# with delete_err holding the API's message. POSIX-safe parameter expansion only.
+delete_check() {
+	local raw="$1" what="$2"
+	delete_http="${raw##*$'\n'}"
+	delete_body="${raw%$'\n'*}"
+	[ "$delete_body" = "$raw" ] && delete_body=""
+	delete_err=""
+	case "$delete_http" in
+		2[0-9][0-9]) ;;
+		*)
+			delete_err="HTTP ${delete_http:-unknown}"
+			;;
+	esac
+	if printf '%s' "$delete_body" | grep -q "<Error>"
+	then
+		delete_err="$(printf '%s' "$delete_body" | sed -n 's/.*<Code>\([^<]*\)<\/Code>.*/\1/p' | head -n1) $(printf '%s' "$delete_body" | sed -n 's/.*<Message>\([^<]*\)<\/Message>.*/\1/p' | head -n1)"
+	elif printf '%s' "$delete_body" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
+	then
+		delete_err=$(printf '%s' "$delete_body" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
+	fi
+	if [ -n "$delete_err" ]
+	then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Delete of $what was refused: $delete_err" "1"
+		return 1
+	fi
+	return 0
+}
+####  END:FUNCTION - Read a DELETE answer  ####
+
 ####  START:FUNCTION  Restore object from Archive to COS Bucket  ####
 do_object_restore_from_archive() {
 	local bucket_name object_key days archive_type
@@ -2381,7 +2434,7 @@ do_object_restore_from_archive() {
 	# Validate DAYS numeric
 	if ! echo "$days" | grep -Eq '^[0-9]+$'
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - DAYS must be a number (received: $days)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - DAYS must be a number (received: $days)." 1
 	fi
 
 	# Normalize ARCHIVE_TYPE (Bulk|Accelerated)
@@ -2393,7 +2446,7 @@ do_object_restore_from_archive() {
 	then
 		archive_type="Accelerated"
 	else
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - ARCHIVE_TYPE must be Bulk or Accelerated (received: $4)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - ARCHIVE_TYPE must be Bulk or Accelerated (received: $4)." 1
 	fi
 
 	# Resolve bucket region (best effort). Start with configured region from secrets.
@@ -2457,32 +2510,28 @@ do_object_restore_from_archive() {
 	if [[ -z "$resp" ]]
 	then
 		# Successful restore is often empty body (200 OK). We still log headers in $log_file via tee.
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - SUCCESS - Restore request submitted (empty body). Check restore status with HEAD (x-amz-restore) or in COS UI." "1"
+		# (1.18.6) Exit 0: abort's second argument is the EXIT CODE, and this line used to pass
+		# "1" to it, so every successful restore ended the script as a failure.
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - SUCCESS - Restore request submitted (empty body). Check restore status with HEAD (x-amz-restore) or in COS UI."
 	fi
 
 	if echo "$resp" | grep -q "<Error>"
 	then
 		local err_code err_msg
-		err_code=$(echo "$resp" | grep -oPm1 '(?<=<Code>)[^<]+')
-		err_msg=$(echo "$resp" | grep -oPm1 '(?<=<Message>)[^<]+')
+		# (1.18.6) sed, not grep -P: PCRE grep is not a given on every PASE.
+		err_code=$(printf '%s' "$resp" | sed -n 's/.*<Code>\([^<]*\)<\/Code>.*/\1/p' | head -n1)
+		err_msg=$(printf '%s' "$resp" | sed -n 's/.*<Message>\([^<]*\)<\/Message>.*/\1/p' | head -n1)
 
 		if [[ "$err_code" == "RestoreAlreadyInProgress" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - INFO - Restore already in progress for '$object_key' in bucket '$bucket_name'." "1"
+			# A restore already under way is information, not a failure: exit 0.
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - INFO - Restore already in progress for '$object_key' in bucket '$bucket_name'."
 		fi
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Restore request returned error: ${err_code:-Unknown} ${err_msg:-Unknown}"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Restore request returned error: ${err_code:-Unknown} ${err_msg:-Unknown}" 1
 	fi
-#	# If S3 returns an XML error, handle it
-#	if echo "$resp" | grep -q "<Error>"
-#	then
-#		local err_code err_msg
-#		err_code=$(echo "$resp" | sed 's/^.*<Code>\([^<]*\)<\/Code>.*$/\1/' 2>>"$log_file")
-#		err_msg=$(echo "$resp" | sed 's/^.*<Message>\([^<]*\)<\/Message>.*$/\1/' 2>>"$log_file")
-#		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Restore request returned error: ${err_code:-Unknown} ${err_msg:-Unknown}"
-#	fi
 
 	# Otherwise, just log the response and exit OK
-	abort "$(date +%Y-%m-%d_%H:%M:%S) - Restore request response: $resp" "1"
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - Restore request response: $resp"
 }
 ####  END:FUNCTION  Restore object from Archive to COS Bucket  ####
 
@@ -4606,6 +4655,7 @@ do_img_delete() {
 	local IMAGE_ID=""
 	local found_ws=""
 	local found_ws_name=""
+	local found_crn="" found_cloud_instance_id="" found_base_url="" match_count=0 match_list=""
 	# Percorrer todas as workspaces definidas
 	for ws in "${allws_array[@]}"
 	do
@@ -4635,29 +4685,50 @@ do_img_delete() {
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Could not retrieve image list via API in workspace $full_ws_name, skipping." "1"
 			continue
 		fi
-		IMAGE_ID=$(echo "$imgs_json" | jq -r --arg name "$img_name" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file" | head -n1)
-		if [[ -n "$IMAGE_ID" && "$IMAGE_ID" != "null" ]]
-		then
+		# (1.18.6) Every workspace is searched and every match counted. Before, the first
+		# match in the first workspace won (head -n1, then break) and was deleted with no
+		# confirmation - so two images sharing a name, in one workspace or in two, lost
+		# whichever the API happened to list first.
+		local ws_ids
+		ws_ids=$(echo "$imgs_json" | jq -r --arg name "$img_name" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file")
+		local one_id
+		for one_id in $ws_ids
+		do
+			[ -z "$one_id" ] && continue
+			[ "$one_id" = "null" ] && continue
+			match_count=$((match_count + 1))
+			match_list="$match_list
+  - $full_ws_name: $one_id"
+			IMAGE_ID="$one_id"
 			found_ws="$ws"
 			found_ws_name="$full_ws_name"
+			found_crn="$CRN"
+			found_cloud_instance_id="$CLOUD_INSTANCE_ID"
+			found_base_url="$base_url"
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image $img_name found in Workspace $found_ws_name with ID: $IMAGE_ID" "1"
-			break
-		fi
+		done
 	done
-	if [[ -z "$IMAGE_ID" || "$IMAGE_ID" == "null" ]]
+	if [ "$match_count" -eq 0 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Image with name $img_name not found in any Workspace."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image with name $img_name not found in any Workspace." 1
 	fi
+	if [ "$match_count" -gt 1 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image name $img_name is ambiguous: $match_count images carry it and this command deletes by name. Nothing deleted. Matches:$match_list" 1
+	fi
+	CRN="$found_crn"
+	CLOUD_INSTANCE_ID="$found_cloud_instance_id"
+	base_url="$found_base_url"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Calling Image Delete API for $img_name (ID $IMAGE_ID) in Workspace $found_ws_name..." "1"
 	# Chamar API de delete na workspace onde foi encontrada
 	del_output=$(img_del 2>>"$log_file")
 	ret=$?
-	echo "$del_output" >> "$log_file"
-	# Verificar exit code e possível payload de erro
-	if [ $ret -ne 0 ] || echo "$del_output" | jq -e '.code? != null' >/dev/null 2>&1
+	printf '%s\n' "$del_output" >> "$log_file"
+	# (1.18.6) The HTTP status is read, not inferred from the body's shape: a 4xx with an empty
+	# or non-JSON body used to be reported as a successful delete.
+	if [ $ret -ne 0 ] || ! delete_check "$del_output" "image $img_name"
 	then
-		errmsg=$(echo "$del_output" | jq -r '.message // .error // "Unknown error"' 2>/dev/null)
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error calling image delete API for $img_name: $errmsg"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Image $img_name (ID $IMAGE_ID) was NOT deleted from Workspace $found_ws_name." 1
 	fi
 	abort "`date +%Y-%m-%d_%H:%M:%S` - === Image $img_name (ID $IMAGE_ID) deleted successfully from Workspace $found_ws_name. ==="
 }
@@ -7559,7 +7630,9 @@ EOF
 	KEY="$chosen_key"
 	REGION="$region"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Deleting object \"$KEY\" from bucket \"$BUCKET\" in region $REGION..." "1"
-	object_delete 2>>"$log_file" | tee -a "$log_file"
+	del_raw=$(object_delete 2>>"$log_file")
+	printf '%s\n' "$del_raw" >> "$log_file"
+	delete_check "$del_raw" "object $KEY in bucket $BUCKET" || abort "$(date +%Y-%m-%d_%H:%M:%S) - Object \"$KEY\" was NOT deleted from bucket \"$BUCKET\"." 1
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished deleting object \"$KEY\" from bucket \"$BUCKET\" ==="
      ;;
 

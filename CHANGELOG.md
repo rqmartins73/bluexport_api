@@ -10,6 +10,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.18.6] - 2026-09-13 (`bluexport_api.sh`)
+
+### Fixed
+
+- **`-imgdel` could report a delete that had not happened.** `img_del` never read the HTTP status,
+  and success was inferred from the body not being JSON with a `code` field — so a `403` or `404`
+  with an empty body printed "deleted successfully". `img_del` now appends the status, and a
+  shared `delete_check` reads it (and any JSON or XML error body) before anything is called done.
+  The same check now covers the object delete in `-bucketdelobj` and both deletes inside the
+  previous-capture cleanup, which piped their output to `tee` and never looked at it.
+- **`-imgdel` deleted the first image that matched, with no confirmation, even when the name was
+  not unique.** The search stopped at the first workspace with a hit and took the first match in
+  it. Every workspace is now searched and every match counted; more than one match aborts with the
+  list, and nothing is deleted.
+- **`-restorefromarchive` ended a successful request with exit status 1.** Its success lines
+  passed `"1"` as `abort`'s second argument, which is the exit code, not a log flag; a restore
+  already in progress did the same. Both now exit 0, and the two validation failures (DAYS not a
+  number, ARCHIVE_TYPE not Bulk/Accelerated) now exit 1 instead of 0.
+- The restore request sent its XML body under `Content-Type: application/json`; it is
+  `application/xml` now.
+- The XML error parsing in the restore path used `grep -P`, which not every PASE `grep` has;
+  it is `sed` now.
+
+### Changed
+
+- **`wait_for_job` has a wall-clock bound.** A job answering a readable, non-terminal state was
+  polled forever. The default is 24 hours (`BLUEXPORT_JOB_MAX_SECS` overrides it); on reaching it
+  the monitor stops with exit 1 and says so — the job itself continues in IBM Cloud, and `-j`,
+  `-ji` or `-je` re-attach to it.
+- `echoscreen`'s comment said it wraps at 132 columns; the code wraps at 377 and now the comment
+  says so too.
+
+IBM i / PASE: `$'\n'` splitting is what the script already used for `img_import_api`; the new
+helper uses `[ ]`, `case`, `sed -n` and `jq`, nothing else.
+
 ## [1.18.5] - 2026-09-13 (`bluexport_api.sh`)
 
 ### Changed
