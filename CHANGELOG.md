@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.18.4] - 2026-09-13 (`bluexport_api.sh`)
+
+### Fixed
+
+- **`-x` and `-tx` accepted `hourly` and `daily` with `both` or `cloud-storage`, which `-a` has
+  always refused.** The recurrence check read `$destination` before the handler assigned it —
+  `destination=$5` came 46 lines later — so it compared an empty string and never fired. The
+  assignment now comes first. Reproduced before the fix (`-x LOGVOL VSI IMG cloud-storage hourly`
+  accepted) and after it (refused with the same message as `-a`); `image-catalog hourly` and
+  `cloud-storage weekly` are still accepted.
+
+- **In the repeated hour of an autumn clock change, hourly cleanup could delete the capture it
+  had just taken.** On the last Sunday of October in Europe/Lisbon, 01:00–01:59 happens twice. In
+  the second one, `date --date '1 hour ago' "+_%H"` is `_01` — the same suffix the capture just
+  taken is named with — so `delete_previous_img` looked for this run's own image. The cleanup is
+  now skipped when the hourly token equals the current capture's suffix, with a line saying so.
+  Skipping deletes nothing; the older image of the same name is left for a later cleanup. Checked
+  across the 2026 change: 01:30 WEST and 02:30 WET clean up as before, 01:30 WET skips.
+
+Both changes are plain `[ ]` tests and an earlier assignment — nothing new for PASE.
+
 ## [1.18.3] - 2026-09-13 (`bluexport_api.sh`)
 
 ### Fixed

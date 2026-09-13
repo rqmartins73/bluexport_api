@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.18.3
+Version=1.18.4
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -1338,7 +1338,16 @@ job_monitor() {
 			fi
 			if [ "$single" -eq 0 ] && [ "$flagj" -ne 1 ]
 			then
-				delete_previous_img
+				# S-13 fix (1.18.4): in the repeated hour of an autumn clock change, "1 hour
+				# ago" is the same wall-clock hour as now, so the hourly token is THIS
+				# capture's own name suffix and the cleanup could delete the image just made.
+				# Skipping deletes nothing; the older same-named image is left for a later cleanup.
+				if [ "$old_is_hour" -eq 1 ] && [ "$old_img" = "_$capture_hour" ]
+				then
+					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Previous capture cleanup skipped: the previous hour's token $old_img is this capture's own name (repeated hour of a clock change). Nothing deleted." "1"
+				else
+					delete_previous_img
+				fi
 			fi
 			echo "$(date +%Y-%m-%d_%H:%M:%S) - Finished Successfully!!" >> "$job_log"
 			job_log_perm="${job_log_short}_${capture_name}.log"
@@ -5762,6 +5771,11 @@ case $1 in
 		usage_x
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
 	fi
+	# S-14 fix (1.18.4): destination is assigned HERE, before the recurrence check reads it.
+	# It used to be assigned 46 lines further down, so the check below compared an empty
+	# string, never fired, and -x accepted hourly/daily with both or cloud-storage - the
+	# combination -a has always refused.
+	destination=$5
 	capture_img_name=${4^^}
 	capture_name=$capture_img_name"_"$capture_time
 	if [[ $6 == "hourly" ]] || [[ $6 == "daily" ]]
@@ -5820,7 +5834,6 @@ case $1 in
 	vsi_id_bluexscrt
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting Capture&Export for VSI Name: $vsi ..." "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Capture Name: $capture_name" "1"
-	destination=$5
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Export Destination: $destination" "1"
 	if [[ $destination == "both" ]] || [[ $destination == "image-catalog" ]] || [[ $destination == "cloud-storage" ]]
 	then
