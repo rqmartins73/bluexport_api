@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.18.2
+Version=1.18.3
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -275,6 +275,9 @@ then
 	capture_time=`date +%Y-%m-%d_%H%M`
 	capture_date=`date +%Y-%m-%d`
 	capture_hour=`date "+%H"`
+	# S-12 (1.18.3): whether old_img is a bare hour rather than a full %Y-%m-%d date.
+	# delete_previous_img anchors the comparison when it is; see there for why.
+	old_is_hour=0
 	flagj=0
 	job_log=$(jq -r '.job_log' "$conf_file")
 	job_test_log=$(jq -r '.job_test_log' "$conf_file")
@@ -1131,21 +1134,45 @@ delete_previous_img() {
 	REGION="$region"
 	BUCKET="$bucket"
 	# --- Image Catalog (PowerVS Images) via img_ls() ---
-	# Look for an image whose name contains both $vsi and $old_img
+	# Look for an image whose name contains both $vsi and $old_img.
+	#
+	# S-12 fix (1.18.3): WHEN $old_img IS A BARE HOUR, THE COMPARISON IS ANCHORED.
+	# Capture names carry a full ISO date, and the date begins right after an
+	# underscore just as the time segment does - so "_20" matched
+	# NAME_2026-09-13_1400 as readily as NAME_20, and head -n1 then deleted whichever
+	# the API happened to list first. On an LPAR with both an hourly rotation and a
+	# nightly keep, that was the nightly image, one hour a day, for as long as the
+	# year begins 20.
+	#
+	# The anchor is "not followed by another digit", which is exactly the property
+	# that separates NAME_20 and NAME_20.ova from NAME_2026-... It holds whatever
+	# suffix an object key carries, which a plain endswith would not.
+	#
+	# The daily/weekly/monthly tokens are full %Y-%m-%d dates and stay on contains:
+	# the name is NAME_YYYY-MM-DD_HHMM, so the date is not at the end and the token
+	# is long enough not to collide by accident.
 	local img_json
 	img_json=$(img_ls 2>>"$log_file")
 	img_id_old=$(echo "$img_json" | jq -r \
 		--arg vsi "$vsi" \
-		--arg old "$old_img" '
+		--arg old "$old_img" \
+		--arg anchor "$old_is_hour" '
 		.images[]?
-		| select((.name | contains($vsi)) and (.name | contains($old)))
+		| select((.name | contains($vsi))
+		         and (if $anchor == "1"
+		              then (.name | test($old + "([^0-9]|$)"))
+		              else (.name | contains($old)) end))
 		| .imageID
 	' 2>>"$log_file" | head -n1)
 	img_name_old=$(echo "$img_json" | jq -r \
 		--arg vsi "$vsi" \
-		--arg old "$old_img" '
+		--arg old "$old_img" \
+		--arg anchor "$old_is_hour" '
 		.images[]?
-		| select((.name | contains($vsi)) and (.name | contains($old)))
+		| select((.name | contains($vsi))
+		         and (if $anchor == "1"
+		              then (.name | test($old + "([^0-9]|$)"))
+		              else (.name | contains($old)) end))
 		| .name
 	' 2>>"$log_file" | head -n1)
 	# --- COS (Object Storage) via list_object() ---
@@ -1153,12 +1180,19 @@ delete_previous_img() {
 	local list_xml
 	list_xml=$(list_object 2>>"$log_file")
 	# Previous export object (old_img)
+	# S-12 fix (1.18.3): same anchoring as the image-catalog match above. An object
+	# key carries a suffix, so this is a "not followed by a digit" test rather than a
+	# suffix comparison - see the reasoning there.
 	objstg_img=$(echo "$list_xml" | \
-		awk -v vsi="$vsi" -v old="$old_img" '
+		awk -v vsi="$vsi" -v old="$old_img" -v anchor="$old_is_hour" '
 			match($0, /<Key>([^<]+)<\/Key>/, m) {
 				key = m[1]
-				if (index(key, vsi) > 0 && index(key, old) > 0) {
-					print key
+				if (index(key, vsi) > 0) {
+					if (anchor == "1") {
+						if (key ~ (old "([^0-9]|$)")) { print key }
+					} else {
+						if (index(key, old) > 0) { print key }
+					}
 				}
 			}
 		' | head -n1)
@@ -5669,6 +5703,7 @@ case $1 in
 		if [[ $5 == "hourly" ]]
 		then
 			old_img=$(date --date '1 hour ago' "+_%H")
+			old_is_hour=1
 			capture_name=$capture_img_name"_"$capture_hour
 		fi
 		if [[ $5 == "daily" ]]
@@ -5737,23 +5772,15 @@ case $1 in
 		fi
 		if [[ $6 == "hourly" ]]
 		then
-			# S-11 fix (1.18.2): "+_%H", not "+%H", matching -a at the same point.
-			# delete_previous_img compares this token as a PLAIN UNANCHORED SUBSTRING -
-			# contains($old) against the image name, index(key, old) > 0 against the COS
-			# object key - and takes head -n1. Every capture name carries a full ISO date,
-			# so a bare two-digit hour matches the DATE as readily as the time: at 14:00 on
-			# the 13th, "13" matched NAME_2026-09-13_1400, the capture just taken, in
-			# preference to NAME_2026-09-13_1300, the one meant for cleanup. The just-made
-			# image was then deleted and the run reported success. Nor is it only the day of
-			# month: in 2026 the year alone supplies 20, 02 and 26, so the 21:00, 03:00 and
-			# 10:00 hours collided with every image, every day.
+			# S-11 fix (1.18.2): "+_%H", not "+%H", matching -a at the same point. A bare
+			# two-digit hour matched the ISO DATE in a capture name as readily as the time,
+			# so at 14:00 on the 13th "13" selected the capture just taken for deletion.
 			#
-			# The leading underscore cannot occur inside 2026-09-13, so it can only match
-			# the time segment. Note this narrows the hazard rather than removing it: an
-			# LPAR whose own name ends in _13 would still collide, because the match is
-			# still a substring. Anchoring it to the name's time segment is the fix for the
-			# class and is deliberately not made here, since it changes -a's working path too.
+			# S-12 fix (1.18.3): the underscore alone is not enough, because a capture name's
+			# date ALSO begins right after one - _20 matches NAME_2026-09-13_1400. That hit
+			# -a as well. old_is_hour tells delete_previous_img to anchor the comparison.
 			old_img=$(date --date '1 hour ago' "+_%H")
+			old_is_hour=1
 			capture_name=$capture_img_name"_"$capture_hour
 		fi
 		if [[ $6 == "daily" ]]

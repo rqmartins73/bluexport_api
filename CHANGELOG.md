@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.18.3] - 2026-09-13 (`bluexport_api.sh`)
+
+### Fixed
+
+- **The cleanup match was an unanchored substring, so in the 21:00 hour it hit the year — and this
+  one affected `-a` as well as `-x`.** 1.18.2 gave the hourly token a leading underscore so it
+  could only match a capture name's time segment. It could not: **a capture name's date begins
+  right after an underscore too**, so `_20` matches `NAME_2026-09-13_1400`.
+
+  Where an LPAR has both an hourly rotation and a nightly keep, running hourly cleanup in the
+  21:00 hour selected the *nightly* image — `head -n1` takes whichever the API lists first — and
+  deleted it, leaving the hourly one it was meant to remove. One hour a day, every day, for as
+  long as the year begins `20`.
+
+  **The anchor is "not followed by another digit"**, not a suffix comparison. Reading the Cloud
+  Object Storage path before changing it is what settled that: an object key carries a suffix
+  (`NAME_20.ova`), so `endswith` would have failed on the path that most needed fixing. "Not
+  followed by a digit" is exactly the property separating `NAME_20` and `NAME_20.ova` from
+  `NAME_2026-…`, and it holds whatever suffix a key has.
+
+  Applied **only when the token is a bare hour**, via a new `old_is_hour` flag. The
+  `daily`/`weekly`/`monthly` tokens are full `%Y-%m-%d` dates matched against
+  `NAME_YYYY-MM-DD_HHMM` — the date is not at the end and the token is long enough not to collide
+  by accident — so those paths keep `contains` and their behaviour is unchanged.
+
+Found while verifying 1.18.2's fix rather than by looking for it, which is why it is a separate
+release: the one-character change was correct and necessary and did not close the class.
+
 ## [1.18.2] - 2026-09-13 (`bluexport_api.sh`)
 
 ### Fixed
