@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.18.4
+Version=1.18.5
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -275,7 +275,7 @@ then
 	capture_time=`date +%Y-%m-%d_%H%M`
 	capture_date=`date +%Y-%m-%d`
 	capture_hour=`date "+%H"`
-	# S-12 (1.18.3): whether old_img is a bare hour rather than a full %Y-%m-%d date.
+	# (1.18.3): whether old_img is a bare hour rather than a full %Y-%m-%d date.
 	# delete_previous_img anchors the comparison when it is; see there for why.
 	old_is_hour=0
 	flagj=0
@@ -1136,7 +1136,7 @@ delete_previous_img() {
 	# --- Image Catalog (PowerVS Images) via img_ls() ---
 	# Look for an image whose name contains both $vsi and $old_img.
 	#
-	# S-12 fix (1.18.3): WHEN $old_img IS A BARE HOUR, THE COMPARISON IS ANCHORED.
+	# Fix (1.18.3): WHEN $old_img IS A BARE HOUR, THE COMPARISON IS ANCHORED.
 	# Capture names carry a full ISO date, and the date begins right after an
 	# underscore just as the time segment does - so "_20" matched
 	# NAME_2026-09-13_1400 as readily as NAME_20, and head -n1 then deleted whichever
@@ -1180,7 +1180,7 @@ delete_previous_img() {
 	local list_xml
 	list_xml=$(list_object 2>>"$log_file")
 	# Previous export object (old_img)
-	# S-12 fix (1.18.3): same anchoring as the image-catalog match above. An object
+	# Fix (1.18.3): same anchoring as the image-catalog match above. An object
 	# key carries a suffix, so this is a "not followed by a digit" test rather than a
 	# suffix comparison - see the reasoning there.
 	objstg_img=$(echo "$list_xml" | \
@@ -1338,7 +1338,7 @@ job_monitor() {
 			fi
 			if [ "$single" -eq 0 ] && [ "$flagj" -ne 1 ]
 			then
-				# S-13 fix (1.18.4): in the repeated hour of an autumn clock change, "1 hour
+				# Fix (1.18.4): in the repeated hour of an autumn clock change, "1 hour
 				# ago" is the same wall-clock hour as now, so the hourly token is THIS
 				# capture's own name suffix and the cleanup could delete the image just made.
 				# Skipping deletes nothing; the older same-named image is left for a later cleanup.
@@ -1655,7 +1655,7 @@ flush_asps() {
 		if [[ "$local_name" == "${vsi^^}" ]]
 		then
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Running locally on $vsi, executing SYSBAS flush without SSH..." "1"
-			# S-9 fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
+			# Fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
 			# pipeline is the LAST command's status - it was tee's, and tee always succeeds,
 			# so the guard below could never fire. A flush that did not happen then looked
 			# exactly like one that did, and the snapshot was taken anyway. POSIX capture
@@ -1672,7 +1672,7 @@ flush_asps() {
 				for iasp_name in $iasp_names
 				do
 					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Flushing Memory to Disk for $iasp_name ..." "1"
-					# S-9 fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
+					# Fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
 					# pipeline is the LAST command's status - it was tee's, and tee always succeeds,
 					# so the guard below could never fire. A flush that did not happen then looked
 					# exactly like one that did, and the snapshot was taken anyway. POSIX capture
@@ -1688,7 +1688,7 @@ flush_asps() {
 			fi
 		else
 			# Remote via SSH
-			# S-9 fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
+			# Fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
 			# pipeline is the LAST command's status - it was tee's, and tee always succeeds,
 			# so the guard below could never fire. A flush that did not happen then looked
 			# exactly like one that did, and the snapshot was taken anyway. POSIX capture
@@ -1705,7 +1705,7 @@ flush_asps() {
 				for iasp_name in $iasp_names
 				do
 					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Flushing Memory to Disk for $iasp_name ..." "1"
-					# S-9 fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
+					# Fix (1.18.1): capture the status BEFORE anything is piped. "$?" after a
 					# pipeline is the LAST command's status - it was tee's, and tee always succeeds,
 					# so the guard below could never fire. A flush that did not happen then looked
 					# exactly like one that did, and the snapshot was taken anyway. POSIX capture
@@ -1826,7 +1826,7 @@ do_snap_create() {
 			echo "$status_json" >>"$log_file"
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading snapshot status from API."
 		fi
-		# S-10 fix (1.18.1): a snapshot that has left the list yields nothing from select,
+		# Fix (1.18.1): a snapshot that has left the list yields nothing from select,
 		# snap_percent became empty, the coercion below made it 0, and "while [ -lt 100 ]"
 		# stayed true forever - an unbounded spin at 10s intervals, after flush_asps had
 		# already run. do_snap_restore checks for exactly this (its "not found in list while
@@ -5771,7 +5771,7 @@ case $1 in
 		usage_x
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
 	fi
-	# S-14 fix (1.18.4): destination is assigned HERE, before the recurrence check reads it.
+	# Fix (1.18.4): destination is assigned HERE, before the recurrence check reads it.
 	# It used to be assigned 46 lines further down, so the check below compared an empty
 	# string, never fired, and -x accepted hourly/daily with both or cloud-storage - the
 	# combination -a has always refused.
@@ -5786,11 +5786,11 @@ case $1 in
 		fi
 		if [[ $6 == "hourly" ]]
 		then
-			# S-11 fix (1.18.2): "+_%H", not "+%H", matching -a at the same point. A bare
+			# Fix (1.18.2): "+_%H", not "+%H", matching -a at the same point. A bare
 			# two-digit hour matched the ISO DATE in a capture name as readily as the time,
 			# so at 14:00 on the 13th "13" selected the capture just taken for deletion.
 			#
-			# S-12 fix (1.18.3): the underscore alone is not enough, because a capture name's
+			# Fix (1.18.3): the underscore alone is not enough, because a capture name's
 			# date ALSO begins right after one - _20 matches NAME_2026-09-13_1400. That hit
 			# -a as well. old_is_hour tells delete_previous_img to anchor the comparison.
 			old_img=$(date --date '1 hour ago' "+_%H")
@@ -6281,7 +6281,7 @@ case $1 in
                 base_url_var="base_${region_api}"
                 base_url="${!base_url_var}"
 		snaps_json=$(snap_ls 2>>"$log_file")
-                # S-8 fix (1.18.1): ask whether THIS snapshot is here, not whether the
+                # Fix (1.18.1): ask whether THIS snapshot is here, not whether the
                 # workspace has ANY. The old guard tested '.snapshots | length > 0', so a
                 # workspace holding unrelated snapshots fell through to do_snap_delete, which
                 # looks the name up in that workspace's list and aborts when it is not there -

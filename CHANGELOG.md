@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.18.5] - 2026-09-13 (`bluexport_api.sh`)
+
+### Changed
+
+- Comments only. The fix comments added in 1.18.1–1.18.4 carried a finding number from another
+  project's tracker that means nothing to a reader of this repository; they now name the version
+  that made the change and nothing else. No code changed.
+
 ## [1.18.4] - 2026-09-13 (`bluexport_api.sh`)
 
 ### Fixed
@@ -168,7 +176,7 @@ new flags, and nothing that alters the shape of any API call.
 
   The function is not called from anywhere today, which is why this survived — it is reachable
   only if someone wires it up, and it would have failed silently the moment they did. Found while
-  porting workspace discovery to BlueXport Desktop.
+  reviewing workspace discovery.
 
   Two traps are now recorded in a comment above it: PowerVS **sub-resources** (`power-iaas.image`,
   `.network`, `.network-interface`, `.network-security-group`, `.pvm-instance`, `.volume`) *do*
