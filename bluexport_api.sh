@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.18.6
+Version=1.18.7
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -928,7 +928,22 @@ cos_ls_buckets() {
 cos_rest_arch() {
 	# (1.18.6) The body is XML (see do_object_restore_from_archive), so say so; it was sent
 	# under Content-Type: application/json.
-	curl -sX POST https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "Content-Type: application/xml" -d "$ACTIONS"
+	#
+	# (1.18.7) COS requires an integrity header on a restore request: Content-MD5, the base64
+	# MD5 of the exact body sent. It is computed with openssl when the system has it; without
+	# openssl the request goes as before and a warning is logged.
+	local content_md5=""
+	if command -v openssl >/dev/null 2>&1
+	then
+		content_md5=$(printf '%s' "$ACTIONS" | openssl dgst -md5 -binary | openssl base64)
+	fi
+	if [ -n "$content_md5" ]
+	then
+		curl -sX POST https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "Content-Type: application/xml" -H "Content-MD5: $content_md5" -d "$ACTIONS"
+	else
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - openssl not found: the restore request is sent without Content-MD5 and Cloud Object Storage may refuse it." "1"
+		curl -sX POST https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET/$OBJECT?restore -H "$header_auth" -H "Content-Type: application/xml" -d "$ACTIONS"
+	fi
 }
 #### END:FUNCTIONS - API Commands ####
 

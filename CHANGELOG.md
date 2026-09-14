@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.18.7] - 2026-09-15 (`bluexport_api.sh`)
+
+### Fixed
+
+- **`-restorefromarchive` sent no `Content-MD5`.** IBM Cloud Object Storage requires an integrity
+  header on a restore request; without it the request can be refused. The header is now the base64
+  MD5 of the exact XML body, computed with `openssl`. On a system without `openssl` the request is
+  sent as before and a warning is logged.
+
+IBM i / PASE: `command -v openssl` decides; `openssl dgst -md5 -binary | openssl base64` is the only
+new dependency, and it is optional.
+
 ## [1.18.6] - 2026-09-13 (`bluexport_api.sh`)
 
 ### Fixed
