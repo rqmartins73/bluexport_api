@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.19.0
+Version=1.19.1
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -1329,7 +1329,7 @@ dc_vsi_list() {
 	vsi_id=$(grep -wi "$vsi" "$vsi_list_id_tmp" | awk '{print $1}')
 	if [[ -z "$vsi_id" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Instance $vsi exists in your config file ($bluexscrt), but does not exist on IBM Cloud. Please update the JSON config!"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Instance $vsi exists in your config file ($bluexscrt), but does not exist on IBM Cloud. Please update the JSON config!" 1
 	fi
 	awk '{print $2}' "$vsi_list_id_tmp" > "$vsi_list_tmp"
 }
@@ -1372,12 +1372,12 @@ job_monitor() {
         	# Reuse existing job mapping from operid_file: <capture_name> <job_id>
 		job_id=$(awk -v name="$capture_name" '$1 == name {print $2; exit}' "$operid_file")
 		if [[ -z "$job_id" || "$job_id" == "null" ]]; then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - No Job ID found for capture $capture_name in $operid_file"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - No Job ID found for capture $capture_name in $operid_file" 1
 		fi
 	else
 		if [[ -z "$job_id" || "$job_id" == "null" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - Capturing instance $vsi has failed, see log file!"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Capturing instance $vsi has failed, see log file!" 1
 		fi
 		echo "$capture_name $job_id" >> "$operid_file"
 	fi
@@ -1423,7 +1423,7 @@ job_monitor() {
 			then
 				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - FAILED Getting Job ID or no Job Running after $job_get_max_fail consecutive attempts!" "1"
 				rm -f "$job_hdr_file"
-				abort "$(date +%Y-%m-%d_%H:%M:%S) - Check file $job_monitor and $job_log for more details."
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Check file $job_monitor and $job_log for more details." 1
 			fi
 			# (1.19.0) Exponential backoff (30/60/120/240, capped 300s); a 429's own
 			# Retry-After wins when the API sent one.
@@ -1491,7 +1491,7 @@ job_monitor() {
 		then
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Job ID $job_id Status: ${job_status^^}" "1"
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Message: $message" "1"
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - Job Failed, check message!!"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Job Failed, check message!!" 1
 		else
 			if [[ "$operation" != "$operation_before" ]]
 			then
@@ -1690,7 +1690,7 @@ get_iASP_name() {
 					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - First ping to $vsi_ip failed, retrying..." "1"
 					if ! eval $PING &> /dev/null
 					then
-						abort "$(date +%Y-%m-%d_%H:%M:%S) - Cannot ping VSI $vsi at $vsi_ip ! Aborting..."
+						abort "$(date +%Y-%m-%d_%H:%M:%S) - Cannot ping VSI $vsi at $vsi_ip ! Aborting..." 1
 					fi
 				fi
 			else
@@ -2032,7 +2032,7 @@ do_snap_restore() {
 	fi
 	# Regra: SÓ fazemos restore se estiver SHUTOFF
 	if [[ "$vsi_status" != "SHUTOFF" ]]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is in status $vsi_status. Snapshot restore is only allowed when VSI is SHUTOFF."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is in status $vsi_status. Snapshot restore is only allowed when VSI is SHUTOFF." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi is in status: $vsi_status. Proceeding with snapshot restore..." "1"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Searching Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID) in current workspace..." "1"
@@ -2131,7 +2131,7 @@ do_snap_delete() {
 	snap_id=$(echo "$snaps_json" | jq -r --arg name "$snap_name" '.snapshots[]? | select(.name == $name) | .snapshotID ')
 	if [[ -z "$snap_id" || "$snap_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' does not exist. Choose another name or use -snapcr to create one."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' does not exist. Choose another name or use -snapcr to create one." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' found with ID: $snap_id" "1"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Executing delete for snapshot ID $snap_id ..." "1"
@@ -2154,7 +2154,7 @@ do_snap_delete() {
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - === Successfully finished - Snapshot $snap_name Deleted!"
 		fi
 	done
-	abort "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: Snapshot delete requested but snapshot still appears in list. Check IBM Cloud."
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - WARNING: Snapshot delete requested but snapshot still appears in list. Check IBM Cloud." 1
 }
 ####  END:FUNCTION - Do the Snapshot Delete  ####
 
@@ -2409,7 +2409,7 @@ vsi_id_bluexscrt() {
 vchtier() {
 	if [[ -z "$volumes" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - There are no volumes with any of these words \"${volchtier_names[*]}\" in instance $vsi_cloud_name"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - There are no volumes with any of these words \"${volchtier_names[*]}\" in instance $vsi_cloud_name" 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume IDs to be changed to tier $tier: $volumes" "1"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume names to be changed to tier $tier: $volumes_name" "1"
@@ -2644,7 +2644,7 @@ do_object_restore_from_archive() {
 	bucket_code=$(echo "$bucket_hdrs" | awk 'NR==1{print $2}')
 	if [[ "$bucket_code" == "404" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Bucket '$bucket_name' does not exist (HEAD returned 404)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Bucket '$bucket_name' does not exist (HEAD returned 404)." 1
 	fi
 	if [[ "$bucket_code" == "403" ]]
 	then
@@ -2661,7 +2661,7 @@ do_object_restore_from_archive() {
 	obj_code=$(echo "$obj_hdrs" | awk 'NR==1{print $2}')
 	if [[ "$obj_code" == "404" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Object '$object_key' does not exist in bucket '$bucket_name' (HEAD returned 404)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Object '$object_key' does not exist in bucket '$bucket_name' (HEAD returned 404)." 1
 	fi
 	if [[ "$obj_code" == "403" ]]
 	then
@@ -2730,7 +2730,7 @@ create_grs() {
 	vol_ids=$(ins_vol_ls | jq -r '.volumes[]? | .volumeID' 2>>"$log_file")
 	if [[ -z "$vol_ids" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - No volumes attached to source VSI $source_vsi. Aborting GRS creation."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - No volumes attached to source VSI $source_vsi. Aborting GRS creation." 1
 	fi
 	vol_count=$(echo "$vol_ids" | wc -w)
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Source VSI $source_vsi has $vol_count attached volumes." "1"
@@ -2777,7 +2777,7 @@ create_grs() {
 		loop=$((loop + 1))
 		if (( loop >= max_wait_loops ))
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - VG $vg_name did not reach expected aux volume count ($vol_count) after $max_wait_loops minutes. Aborting."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - VG $vg_name did not reach expected aux volume count ($vol_count) after $max_wait_loops minutes. Aborting." 1
 		fi
 
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Waiting for VG $vg_name aux volumes to match source count... Sleeping 60 seconds..." "1"
@@ -2785,7 +2785,7 @@ create_grs() {
 	done
 	if [[ -z "$auxvol_names" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - No auxiliary volumes found in remote-copy relationships for $vg_name after waiting. Aborting."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - No auxiliary volumes found in remote-copy relationships for $vg_name after waiting. Aborting." 1
 	fi
 	auxvolnames=$(echo $auxvol_names | tr ' ' ',')
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Auxiliary volumes on target storage: $auxvol_names" "1"
@@ -3024,7 +3024,7 @@ delete_grs() {
 	done
 	if [[ -n "$unsafe_aux" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Some target (aux) volumes still have replicationEnabled=true: $unsafe_aux. Aborting GRS delete to avoid impacting primary volumes."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Some target (aux) volumes still have replicationEnabled=true: $unsafe_aux. Aborting GRS delete to avoid impacting primary volumes." 1
 	fi
 	# 3.2 Apagar auxiliary volumes no target (os mesmos IDs apanhados antes)
 	if [[ -n "$tg_vol_ids" ]]; then
@@ -3219,7 +3219,7 @@ do_grs_failover() {
 	# ATTACH mode requires TARGET_VSI
 	if [[ -z "$target_vsi" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI is required when using ATTACH mode. Syntax: bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME ATTACH TARGET_VSI"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI is required when using ATTACH mode. Syntax: bluexport_api.sh -grsfailover SOURCE_VSI VG_NAME ATTACH TARGET_VSI" 1
 	fi
 
 	# Resolve TARGET_VSI context (must be in the same workspace we just found)
@@ -3230,7 +3230,7 @@ do_grs_failover() {
 
 	if [[ "$shortnamecrn" != "$target_ws_crn" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi is not in the target workspace where the VG was activated ($target_ws_name). Aborting attach to avoid cross-workspace mistakes."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi is not in the target workspace where the VG was activated ($target_ws_name). Aborting attach to avoid cross-workspace mistakes." 1
 	fi
 
 	# Map aux volume NAMES -> volumeIDs in TARGET workspace
@@ -3471,7 +3471,7 @@ do_grs_cancel_failover() {
 
 	if [[ "$shortnamecrn" != "$target_ws_crn" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi is not in the target workspace ($target_ws_name) where the VG exists. Aborting to avoid cross-workspace mistakes."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi is not in the target workspace ($target_ws_name) where the VG exists. Aborting to avoid cross-workspace mistakes." 1
 	fi
 
 	# Switch API context to TARGET workspace for volume checks/detach
@@ -3736,7 +3736,7 @@ do_grs_failback() {
 	# Basic safety: SOURCE and TARGET must not be the same workspace
 	if [[ "$source_ws_crn_local" == "$target_ws_crn_local" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi and TARGET_VSI $target_vsi are in the same workspace ($source_ws_name). Failback requires two different workspaces."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi and TARGET_VSI $target_vsi are in the same workspace ($source_ws_name). Failback requires two different workspaces." 1
 	fi
 
 	##############################################
@@ -3752,7 +3752,7 @@ do_grs_failback() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi status: $s_status" "1"
 	if [[ "$s_status" != "SHUTOFF" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi is not SHUTOFF (current: $s_status). Stop it before running -grsfailback."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi is not SHUTOFF (current: $s_status). Stop it before running -grsfailback." 1
 	fi
 
 	# Check TARGET VSI status
@@ -3765,7 +3765,7 @@ do_grs_failback() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi status: $t_status" "1"
 	if [[ "$t_status" != "SHUTOFF" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi is not SHUTOFF (current: $t_status). Stop it before running -grsfailback."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi is not SHUTOFF (current: $t_status). Stop it before running -grsfailback." 1
 	fi
 
 	##############################################
@@ -4076,7 +4076,7 @@ do_grs_reverse_replica() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi status: $s_status" "1"
 	if [[ "$s_status" != "SHUTOFF" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi is not SHUTOFF (current: $s_status). Stop it before running -grsreversereplica."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE_VSI $source_vsi is not SHUTOFF (current: $s_status). Stop it before running -grsreversereplica." 1
 	fi
 
 	##############################################
@@ -4201,7 +4201,7 @@ do_start_vsi() {
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi is in status: $vsi_status." "1"
 
 	if [[ "$vsi_status" != "SHUTOFF" ]]; then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi is not in SHUTOFF status (current: $vsi_status). Aborting start."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi is not in SHUTOFF status (current: $vsi_status). Aborting start." 1
 	fi
 
 	# Start action
@@ -4226,7 +4226,7 @@ do_vsi_oper() {
 	local operating_mode="$3"
 
 	if [[ -z "$vsi" || -z "$boot_mode" || -z "$operating_mode" ]]; then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME, BOOT_MODE and OPERATING_MODE are mandatory. Syntax: bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME, BOOT_MODE and OPERATING_MODE are mandatory. Syntax: bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE" 1
 	fi
 	# Validate BOOT_MODE
 	case "$boot_mode" in
@@ -4261,7 +4261,7 @@ do_vsi_task() {
 	local vsi="$1"
 	local task="$2"
 	if [[ -z "$vsi" || -z "$task" ]]; then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME and TASK are mandatory. Syntax: bluexport_api.sh -vsitask VSI_NAME TASK"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME and TASK are mandatory. Syntax: bluexport_api.sh -vsitask VSI_NAME TASK" 1
 	fi
 	case "$task" in
 		dston|retrydump|consoleservice|iopreset|remotedstoff|remotedston|iopdump|dumprestart)
@@ -4412,9 +4412,9 @@ do_vsi_srcmon() {
 		then
 			if [[ "$mode_u" == "START" ]]
 			then
-				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name entered UNKNOWN status. The LPAR/VSI is not starting. SRC monitoring terminated. ==="
+				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name entered UNKNOWN status. The LPAR/VSI is not starting. SRC monitoring terminated. ===" 1
 			else
-				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name entered UNKNOWN status. The LPAR/VSI is not shutting down properly. SRC monitoring terminated. ==="
+				abort "`date +%Y-%m-%d_%H:%M:%S` - === VSI $vsi_name entered UNKNOWN status. The LPAR/VSI is not shutting down properly. SRC monitoring terminated. ===" 1
 			fi
 		fi
 
@@ -4518,7 +4518,7 @@ do_vsi_attach_volumes() {
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name is in status: $vsi_status." "1"
 	if [[ "$vsi_status" != "SHUTOFF" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name is not SHUTOFF (current: $vsi_status). Stop it before running -attachvolumes."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name is not SHUTOFF (current: $vsi_status). Stop it before running -attachvolumes." 1
 	fi
 
 	# Current volumes already attached to this VSI
@@ -4541,7 +4541,7 @@ do_vsi_attach_volumes() {
 	match_lines=$(echo "$vols_json" | jq -r --arg p "$vol_common_name" '.volumes[]? | select(.name | contains($p)) | "\(.volumeID) \(.name)"' 2>>"$log_file")
 	if [[ -z "$match_lines" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - No volumes found in workspace $shortnamecrn with name containing '$vol_common_name'. Nothing to attach."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - No volumes found in workspace $shortnamecrn with name containing '$vol_common_name'. Nothing to attach." 1
 	fi
 
 	# Identify boot volume among matches
@@ -4764,7 +4764,7 @@ do_vsi_detach_volumes() {
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name is in status: $vsi_status." "1"
 	if [[ "$vsi_status" != "SHUTOFF" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name is not SHUTOFF (current: $vsi_status). Stop it before running -detachvolumes."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI $vsi_name is not SHUTOFF (current: $vsi_status). Stop it before running -detachvolumes." 1
 	fi
 
 	# Get attached volume IDs
@@ -5556,7 +5556,7 @@ echo "Flags Used: $@" | tee -a $log_file
 if [ $# -eq 0 ]
 then
 	help
-	abort "`date +%Y-%m-%d_%H:%M:%S` - No arguments supplied!!"
+	abort "`date +%Y-%m-%d_%H:%M:%S` - No arguments supplied!!" 1
 fi
 
 #### START: usage_X() - per-flag parameter detail (shown on argument-count error and via -h -FLAG) ####
@@ -5946,7 +5946,7 @@ case $1 in
 	then
 		echoscreen "Flag -j selected, but too many arguments!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
 		usage_j
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but too many arguments!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but too many arguments!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME" 1
 	fi
 	vsi=$2
 	capture_name=${3^^}
@@ -6030,7 +6030,7 @@ case $1 in
 	then
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Export Destination $destination is valid." "1"
 	else
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Export Destination $destination is NOT valid!"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Export Destination $destination is NOT valid!" 1
 	fi
 	volumes_cmd="ins_vol_ls | jq -r '.volumes[] | \"\(.volumeID) \(.name)\"'"
     ;;
@@ -6114,7 +6114,7 @@ case $1 in
 	then
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Export Destination $destination is valid!" "1"
 	else
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Export Destination $destination is NOT valid!"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Export Destination $destination is NOT valid!" 1
 	fi
 	volumes_cmd="ins_vol_ls | jq -r --arg re \"$exclude_names_regex\" '.volumes[] | select(.name | test(\$re; \"i\") | not) | \"\(.volumeID) \(.name)\"'"
     ;;
@@ -6206,7 +6206,7 @@ case $1 in
 		new_scrt="$2"
 		if [ ! -f "$new_scrt" ]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Secret file $new_scrt does not exist. Aborting..."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Secret file $new_scrt does not exist. Aborting..." 1
 		fi
 	else
 		# Mode 2: no args -> list and ask which one to use
@@ -6217,7 +6217,7 @@ case $1 in
 		scrt_files=("$scrt_dir"/bluexscrt*.json)
 		if [ ${#scrt_files[@]} -eq 0 ]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - No secret files found (pattern: bluexscrt*.json)."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - No secret files found (pattern: bluexscrt*.json)." 1
 		fi
 		index=1
 		for f in "${scrt_files[@]}"
@@ -6350,7 +6350,7 @@ case $1 in
 
 	if [ -n "$existing_snap_name" ] && [ "$existing_snap_name" != "null" ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Already exists one Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID), please choose a different name or use flag -snapupd to change the name."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Already exists one Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID), please choose a different name or use flag -snapupd to change the name." 1
 	fi
 	# Argumento DESCRIPTION: 0 ou frase entre aspas
 	description_arg="$4"
@@ -6411,7 +6411,7 @@ case $1 in
 	# Têm de vir pelo menos um campo para alterar
 	if [ "$new_name_arg" = "0" ] && [ "$description_arg" = "0" ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - You must pass at least one flag, DESCRIPTION or NEW_SNAPSHOT_NAME!..."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - You must pass at least one flag, DESCRIPTION or NEW_SNAPSHOT_NAME!..." 1
 	fi
 	#### Tratar NEW_SNAPSHOT_NAME
 	if [ -n "$new_name_arg" ]
@@ -6497,7 +6497,7 @@ case $1 in
 	done
 	if [[ -z "$SNAP_ID" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name does not exist in any configured workspace. Use -snapcr to create one."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot with name $snap_name does not exist in any configured workspace. Use -snapcr to create one." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Found snapshot $snap_name in workspace $found_workspace_name with ID $SNAP_ID" "1"
 	# Se o utilizador pediu para manter a descrição (0), usamos a atual
@@ -6793,7 +6793,7 @@ case $1 in
 	if [ $# -ne 2 ]
 	then
 		usage_imgdel
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgdel IMG_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -imgdel IMG_NAME" 1
 	fi
 	img_name="$2"
 	do_img_delete "$img_name"
@@ -6935,7 +6935,7 @@ case $1 in
 	existing_vclone_json=$(vol_cl_ls 2>>"$log_file")
 	if echo "$existing_vclone_json" | jq -e --arg name "$vclone_name" '.volumesClone[]? | select(.name == $name)' >/dev/null 2>&1
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone with name $vclone_name already exists, please choose a different name!"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone with name $vclone_name already exists, please choose a different name!" 1
 	fi
 	# Resolver volumes a clonar
 	if [[ "$volumes_to_clone_arg" == "ALL" ]]
@@ -6944,7 +6944,7 @@ case $1 in
 		volumes_to_clone=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]?.volumeID' | paste -sd, -)
 		if [[ -z "$volumes_to_clone" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - No volumes found attached to VSI $vsi to clone."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - No volumes found attached to VSI $vsi to clone." 1
 		fi
 	else
 		# (1.19.0) The tokens are volume NAMES (see usage_vclone), not volumeIDs, but used
@@ -6983,7 +6983,7 @@ case $1 in
 	IFS=',' read -r -a vclone_array <<< "$volumes_to_clone"
 	if [ "${#vclone_array[@]}" -lt 2 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request must contain at least 2 volumes. You provided: ${#vclone_array[@]} ($volumes_to_clone)"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone Request must contain at least 2 volumes. You provided: ${#vclone_array[@]} ($volumes_to_clone)" 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting the three processes of Volume Clone $vclone_name" "1"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - This is the list of volumes that will be cloned: $volumes_to_clone" "1"
@@ -7130,7 +7130,7 @@ EOF
 	done
 	if [[ "$found" -eq 0 ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone '$vclone_name' does not exist in any workspace."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone '$vclone_name' does not exist in any workspace." 1
 	fi
      ;;
 
@@ -7204,7 +7204,7 @@ EOF
 		then
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Existing Snapshots were found for volumes attached to source VSI $source_vsi. Replication cannot be enabled while these Snapshots exist." "1"
 			echoscreen "$vols_with_snaps" "1"
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Aborting GRS creation - please delete the snapshots for these volumes and run bluexport_api.sh $flags again."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Aborting GRS creation - please delete the snapshots for these volumes and run bluexport_api.sh $flags again." 1
 		fi
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Both VSIs found and validated. Proceeding with GRS creation..." "1"
@@ -7275,7 +7275,7 @@ EOF
 	then
 		if [ $# -ne 5 ]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI is required when using ATTACH mode. Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME ATTACH TARGET_VSI"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI is required when using ATTACH mode. Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME ATTACH TARGET_VSI" 1
 		fi
 		target_vsi="$5"
 	elif [[ "$attach_mode" != "NO_ATTACH" ]]
@@ -7339,7 +7339,7 @@ EOF
 	if [ $# -ne 2 ]
 	then
 		usage_vsistart
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsistart VSI_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsistart VSI_NAME" 1
 	fi
 	vsi="$2"
 	do_start_vsi "$vsi"
@@ -7350,7 +7350,7 @@ EOF
 	if [ $# -ne 4 ]
 	then
 		usage_vsioper
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE. BOOT_MODE: a | b | c | d  -  OPERATING_MODE: normal | manual"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsioper VSI_NAME BOOT_MODE OPERATING_MODE. BOOT_MODE: a | b | c | d  -  OPERATING_MODE: normal | manual" 1
 	fi
 	vsi="$2"
 	boot_mode="$3"
@@ -7362,7 +7362,7 @@ EOF
 	if [ $# -ne 3 ]
 	then
 		usage_vsitask
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsitask VSI_NAME TASK. TASK: dston | retrydump | consoleservice | iopreset | remotedstoff | remotedston | iopdump | dumprestart"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsitask VSI_NAME TASK. TASK: dston | retrydump | consoleservice | iopreset | remotedstoff | remotedston | iopdump | dumprestart" 1
 	fi
 	vsi="$2"
 	task="$3"
@@ -7373,7 +7373,7 @@ EOF
 	if [ $# -ne 3 ]
 	then
 		usage_vsisrcmon
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF" 1
 	fi
 	vsi="$2"
 	mode="$3"
@@ -7385,7 +7385,7 @@ EOF
 	if [ $# -ne 3 ]
 	then
 		usage_attachvolumes
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME" 1
 	fi
 	vol_common_name="$2"
 	vsi="$3"
@@ -7397,7 +7397,7 @@ EOF
 	if [ $# -ne 2 ]
 	then
 		usage_detachvolumes
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -detachvolumes VSI_NAME"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -detachvolumes VSI_NAME" 1
 	fi
 	vsi="$2"
 	do_vsi_detach_volumes "$vsi"
@@ -7543,7 +7543,7 @@ EOF
 	cos_crn=$(jq -r --arg ci "$chosen_cos" '.cos_instances[$ci].crn  // ""' "$bluexscrt" 2>>"$log_file")
 	if [[ -z "$SERVICE_INSTANCE_ID" || "$SERVICE_INSTANCE_ID" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - COS instance \"$chosen_cos\" has no GUID in $bluexscrt. Cannot list buckets."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - COS instance \"$chosen_cos\" has no GUID in $bluexscrt. Cannot list buckets." 1
 	fi
 	REGION="$region"  # por agora usamos a mesma region definida em .access
 	echoscreen "" "1"
@@ -7563,7 +7563,7 @@ EOF
 	echo "$buckets_xml" >>"$log_file"
 	if [[ -z "$buckets_xml" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing buckets for COS instance \"$chosen_cos\"."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing buckets for COS instance \"$chosen_cos\"." 1
 	fi
 	# Extrair lista de bucket names (IBM i-safe)
 	bxml="$buckets_xml"
@@ -7621,7 +7621,7 @@ EOF
 	echo "$objects_xml" >>"$log_file"
 	if [[ -z "$objects_xml" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing objects in bucket \"$chosen_bucket\"."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing objects in bucket \"$chosen_bucket\"." 1
 	fi
 	# Extrair todas as chaves <Key>...</Key> em modo IBM i-safe (sem confiar em \n)
 	data="$objects_xml"
@@ -7730,7 +7730,7 @@ EOF
 	cos_crn=$(jq -r --arg ci "$chosen_cos" '.cos_instances[$ci].crn  // ""' "$bluexscrt" 2>>"$log_file")
 	if [[ -z "$SERVICE_INSTANCE_ID" || "$SERVICE_INSTANCE_ID" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - COS instance \"$chosen_cos\" has no GUID in $bluexscrt. Cannot list buckets."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - COS instance \"$chosen_cos\" has no GUID in $bluexscrt. Cannot list buckets." 1
 	fi
 	REGION="$region"	# mesma lógica do -bucketlsobjs
 	echoscreen "" "1"
@@ -7750,7 +7750,7 @@ EOF
 	echo "$buckets_xml" >>"$log_file"
 	if [[ -z "$buckets_xml" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing buckets for COS instance \"$chosen_cos\"."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing buckets for COS instance \"$chosen_cos\"." 1
 	fi
 	# Extrair nomes dos buckets (mesmo parsing IBM i-safe usado no -bucketslsall)
 	bucket_names=()
@@ -7807,7 +7807,7 @@ EOF
 	echo "$objects_xml" >>"$log_file"
 	if [[ -z "$objects_xml" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing objects in bucket \"$chosen_bucket\"."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Empty response from S3 when listing objects in bucket \"$chosen_bucket\"." 1
 	fi
 	data="$objects_xml"
 	obj_array=()

@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.19.1] - 2026-09-15 (`bluexport_api.sh`)
+
+### Fixed
+
+- **59 more failures still exited 0.** 1.19.0 matched failure aborts by a fixed word list,
+  so messages worded differently ("Too many or too few arguments", "is not SHUTOFF",
+  "does not exist", "did not reach", "Cannot ping", "Job Failed", "Empty response",
+  "has no GUID", the GRS safety refusals) kept exit 0. Each now passes `1`. "Nothing to
+  do", "Nothing to list" and user-cancelled aborts still exit 0.
+
+### IBM i / PASE
+
+- Exit codes only; no new commands or shell constructs.
+
 ## [1.19.0] - 2026-09-15 (`bluexport_api.sh`)
 
 ### Fixed
