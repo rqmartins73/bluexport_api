@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.18.7
+Version=1.18.8
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -746,7 +746,8 @@ vol_cl_ls() {
 }
 
 vol_cl_del() {
-	curl -sX DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/volumes-clone/$VOL_CLONE_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
+	# (1.18.8) HTTP status appended as the last line, read by delete_check.
+	curl -sX DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/volumes-clone/$VOL_CLONE_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -w '\n%{http_code}'
 }
 
 vol_cl_st() {
@@ -2059,6 +2060,24 @@ do_snap_delete() {
 }
 ####  END:FUNCTION - Do the Snapshot Delete  ####
 
+
+####  START:FUNCTION - Volume clone failure and time bound  ####
+# (1.18.8) Usage: vclone_failure "$clone_json"  -> prints the failure reason, or nothing.
+# A volumes-clone object is failed when its status is "failed" or it carries a failureMessage
+# (the API's own field for the reason a clone request failed). Case-insensitive on status.
+vclone_failure() {
+	printf '%s' "$1" | jq -r 'if ((.status // "") | ascii_downcase) == "failed" or ((.failureMessage // "") != "") then (.failureMessage // "status failed, no reason given") else empty end' 2>/dev/null
+}
+# (1.18.8) Usage: vclone_time_left "$started_epoch" "what" -> aborts once the bound is passed.
+# Same bound as wait_for_job: BLUEXPORT_JOB_MAX_SECS, default 24 hours. The clone keeps running.
+vclone_time_left() {
+	local max_secs="${BLUEXPORT_JOB_MAX_SECS:-86400}"
+	if [ $(( $(date +%s) - $1 )) -ge "$max_secs" ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - $2 has not finished after $max_secs seconds. Monitoring stopped; the clone itself CONTINUES in IBM Cloud (limit BLUEXPORT_JOB_MAX_SECS)." 1
+	fi
+}
+####  END:FUNCTION - Volume clone failure and time bound  ####
 ####  START:FUNCTION - Do the Volume Clone Execute ####
 do_volume_clone_execute() {
 	# Flush ASPs na origem antes de executar o clone (IBM i only)
@@ -2106,15 +2125,26 @@ do_volume_clone_execute() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone $vclone_name execution to finish..." "1"
 	local vcloneex_percent=0
 	local vcloneex_percent_before=0
+	local vcloneex_started
+	vcloneex_started=$(date +%s)
 	while :
 	do
 		sleep 5
+		vclone_time_left "$vcloneex_started" "Volume Clone $vclone_name execution"
 		local status_json
 		status_json=$(vol_cl_get 2>>"$log_file")
 		if [ $? -ne 0 ] || [ -z "$status_json" ]
 		then
 			echo "$status_json" >>"$log_file"
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error getting status for Volume Clone execution $vclone_name."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error getting status for Volume Clone execution $vclone_name." 1
+		fi
+		# (1.18.8) A failed clone used to be polled until percentComplete reached 100, i.e. forever.
+		local vclone_fail_reason
+		vclone_fail_reason=$(vclone_failure "$status_json")
+		if [ -n "$vclone_fail_reason" ]
+		then
+			echo "$status_json" >>"$log_file"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone $vclone_name execution failed: $vclone_fail_reason" 1
 		fi
 		vcloneex_percent=$(echo "$status_json" | jq -r '.percentComplete // .status.percentComplete // 0' 2>/dev/null)
 		[[ "$vcloneex_percent" =~ ^[0-9]+$ ]] || vcloneex_percent=0
@@ -2201,13 +2231,24 @@ do_volume_clone() {
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve Volume Clone Request ID for $vclone_name. Check the log above this line..."
 		fi
 		vclone_percent=0
+		local vclone_started vclone_obj vclone_fail_reason
+		vclone_started=$(date +%s)
 		while [ "$vclone_percent" -lt 100 ]
 		do
 			vclone_percent_before=$vclone_percent
 			sleep 5
-			vclone_percent=$(vol_cl_ls 2>>"$log_file" | jq -r --arg id "$vclone_id" '.volumesClone[]? | select(.volumesCloneID == $id) | .percentComplete // 0')
+			vclone_time_left "$vclone_started" "Volume Clone Request $vclone_name creation"
+			vclone_obj=$(vol_cl_ls 2>>"$log_file" | jq -c --arg id "$vclone_id" '.volumesClone[]? | select(.volumesCloneID == $id)')
+			# (1.18.8) A failed request used to be polled forever; stop and say why.
+			vclone_fail_reason=$(vclone_failure "$vclone_obj")
+			if [ -n "$vclone_fail_reason" ]
+			then
+				echo "$vclone_obj" >>"$log_file"
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone Request $vclone_name failed: $vclone_fail_reason" 1
+			fi
+			vclone_percent=$(printf '%s' "$vclone_obj" | jq -r '.percentComplete // 0' 2>/dev/null)
 			# Garantir valor numérico
-			[ -z "$vclone_percent" ] && vclone_percent=0
+			[[ "$vclone_percent" =~ ^[0-9]+$ ]] || vclone_percent=0
 			if [ "$vclone_percent" != "$vclone_percent_before" ]
 			then
 				if [ "$vclone_percent" -eq 100 ]
@@ -6740,7 +6781,7 @@ case $1 in
 	fi
 	# Garantir que não existe já um Volume Clone com este nome (via API)
 	existing_vclone_json=$(vol_cl_ls 2>>"$log_file")
-	if echo "$existing_vclone_json" | jq -e --arg name "$vclone_name" '.volumeClones[]? | select(.name == $name)' >/dev/null 2>&1
+	if echo "$existing_vclone_json" | jq -e --arg name "$vclone_name" '.volumesClone[]? | select(.name == $name)' >/dev/null 2>&1
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone with name $vclone_name already exists, please choose a different name!"
 	fi
@@ -6889,11 +6930,13 @@ EOF
 		fi
 		# Agora apagar o Volume Clone request
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Trying to Delete Volume Clone with name $vclone_name" "1"
-		vol_cl_del 2>>"$log_file" | tee -a "$log_file" #>/dev/null
+		# (1.18.8) ret used to be tee's status, so a refused delete read as success.
+		del_raw=$(vol_cl_del 2>>"$log_file")
 		ret=$?
-		if [ $ret -ne 0 ]
+		printf '%s\n' "$del_raw" >> "$log_file"
+		if [ $ret -ne 0 ] || ! delete_check "$del_raw" "volume clone request $vclone_name"
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error deleting Volume Clone $vclone_name. Check messages above this line..."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error deleting Volume Clone $vclone_name. Check messages above this line..." 1
 		fi
 		abort "`date +%Y-%m-%d_%H:%M:%S` - === Successfully Deleted Volume Clone with name $vclone_name (mode: $delete_mode) !"
 	done

@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.18.8] - 2026-09-15 (`bluexport_api.sh`)
+
+### Fixed
+
+- **A failed volume clone was watched forever.** Both `-vclone` polls waited only for
+  `percentComplete` to reach 100, so a clone request or execution that failed never ended the
+  script. A clone is now treated as failed when its `status` is `failed` or it carries a
+  `failureMessage` (the API's field for why a clone failed); the script stops with exit 1 and
+  prints that reason.
+- **The clone polls had no time bound.** They now stop after `BLUEXPORT_JOB_MAX_SECS` (24 hours
+  by default), the same bound `wait_for_job` has; the clone itself continues in IBM Cloud.
+- **`-vclone`'s duplicate-name check never fired.** It read `.volumeClones[]`, but the API returns
+  `.volumesClone[]` (as every other read in the script already uses), so an existing name was never
+  found.
+- **`-vclonedel` reported a refused delete of the clone request as success.** The status checked
+  was `tee`'s, not `curl`'s. The call now appends its HTTP status and `delete_check` reads it.
+- The execute poll's two failure aborts now exit 1.
+
+IBM i / PASE: `jq`, `date +%s`, `[ ]` and `case` only.
+
 ## [1.18.7] - 2026-09-15 (`bluexport_api.sh`)
 
 ### Fixed
