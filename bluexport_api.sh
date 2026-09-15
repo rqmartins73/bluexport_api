@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.19.2
+Version=1.19.3
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -3761,6 +3761,10 @@ do_grs_failback() {
 	# Syntax: bluexport_api.sh -grsfailback SOURCE_VSI TARGET_VSI VG_NAME
 	# Expected globals:
 	#   source_vsi, target_vsi, vg_name
+	# (1.19.3) The three polls below compare against max_wait, which was never set in this
+	# function (vg_wait_sync_aux_to_master keeps its own copy local). Empty counts as 0 in
+	# (( )), so each poll gave up on its first check; they now wait up to 60 minutes.
+	local max_wait=60   # minutes
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting GRS failback (sync aux->master, re-enable replication) for SOURCE_VSI=$source_vsi, TARGET_VSI=$target_vsi, VG_NAME=$vg_name ===" "1"
 
 	############################

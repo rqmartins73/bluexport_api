@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.19.3] - 2026-09-15 (`bluexport_api.sh`)
+
+### Fixed
+
+- **`-grsfailback` stopped halfway on every run.** Its three polls (source replication
+  disabled, source replication re-enabled, target replication visible) compared against
+  `max_wait`, which was never set in `do_grs_failback`. An empty value counts as 0, so the
+  first two polls aborted (exit 1) on their first check - typically after the aux-to-master
+  sync and the source stop had already been sent - and the third only warned. They now wait
+  up to 60 minutes, like the other GRS flags.
+
+### IBM i / PASE
+
+- One `local` declaration; no new commands or constructs.
+
 ## [1.19.2] - 2026-09-15 (`bluexport_api.sh`)
 
 ### Fixed
