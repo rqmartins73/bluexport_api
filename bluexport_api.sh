@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.18.8
+Version=1.19.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -251,6 +251,32 @@ abort() {
         exit "${2:-0}"
 }
 #### END:FUNCTION - Finish log file when aborting  ####
+
+#### START:FUNCTION - Confirm a destructive action interactively  ####
+# confirm_or_abort "<what will happen>" "<name to type>"
+# (1.19.0) -vclone, -vclonedel, -vchtier and -insvchtier act on live volumes/VSIs with
+# no way back; ask an interactive operator to type the name back before proceeding.
+# When stdin/stdout are not both a terminal (IBM i batch, cron, pipes) or
+# BLUEXPORT_ASSUME_YES=1, confirmation is skipped - one log line says so - so existing
+# automation keeps working unchanged. A typed name that does not match aborts.
+confirm_or_abort() {
+	local what="$1" name="$2" typed
+	if [ "$BLUEXPORT_ASSUME_YES" = "1" ] || ! [ -t 0 ] || ! [ -t 1 ]
+	then
+		echo "$(date +%Y-%m-%d_%H:%M:%S) - INFO - Confirmation skipped (non-interactive, or BLUEXPORT_ASSUME_YES=1): $what" >> "$log_file"
+		return 0
+	fi
+	echoscreen ""
+	echoscreen "   ### $what"
+	echoscreen "   ### Type the name below exactly to continue, anything else cancels: $name"
+	printf "   ### > " > /dev/tty
+	read -r typed < /dev/tty
+	if [[ "$typed" != "$name" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Confirmation did not match (expected '$name'); cancelled." 1
+	fi
+}
+#### END:FUNCTION - Confirm a destructive action interactively  ####
 
 if [[ $1 != "-chscrt" ]] && [[ $1 != "-viewscrt" ]] && [[ $1 != "-h" ]] && [[ $1 != "--help" ]] && [[ $1 != "-help" ]] && [[ $1 != "" ]]
 then
@@ -394,7 +420,7 @@ then
 			timestamp=$(date +%F" "%T" "%Z)
 			echoscreen "==== START ======= $timestamp =========" "1"
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $resp" "1"
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No internet connectivity (cannot reach iam.cloud.ibm.com). Check PVS egress / proxy / routing." 1
 		fi
 		token=$(printf '%s\n' "$resp" | jq -r '.access_token')
 		if [[ -z "$token" || "$token" == "null" ]]
@@ -404,11 +430,23 @@ then
 				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - IAM token refresh response did not contain access_token, will retry. Raw response: $resp" "1"
 				return 1
 			fi
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - IAM token response did not contain access_token. Raw response: $resp"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - IAM token response did not contain access_token. Raw response: $resp" 1
 		fi
 		iam_token="$token"
 		header_auth="Authorization: Bearer $iam_token"
 		iam_token_epoch=$(date +%s)
+		# (1.19.0) Refresh at 75% of the token's own expires_in instead of a hardcoded
+		# 2700s guess, so a shorter- or longer-lived token still gets refreshed before
+		# it expires. Falls back to 2700 when expires_in is absent, non-numeric, or too
+		# small (<120s) to be a sane token TTL.
+		local expires_in
+		expires_in=$(printf '%s\n' "$resp" | jq -r '.expires_in // empty')
+		if [[ "$expires_in" =~ ^[0-9]+$ ]] && [ "$expires_in" -ge 120 ]
+		then
+			iam_refresh_secs=$(( expires_in * 75 / 100 ))
+		else
+			iam_refresh_secs=2700
+		fi
 		echoscreen "   ### IAM Token successfully retrieved!"
 		return 0
 	}
@@ -712,6 +750,14 @@ vol_act() {
 	curl -sX POST "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volumes/$VOL_ID/action" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
+# (1.19.0) Same request as vol_act(), with the HTTP status appended as the last line
+# (curl -w), so a caller can tell success from failure without inferring it from the
+# body. A separate function, not a change to vol_act() itself, because vol_act() has
+# other callers that pipe its plain body straight to tee.
+vol_act_status() {
+	curl -sX POST "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volumes/$VOL_ID/action" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
+}
+
 vol_att() {
 	curl -sX POST "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/volumes/$VOL_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
@@ -856,7 +902,10 @@ job_get() {
 	# "job not found". Caller must split it back out (see job_monitor) -
 	# this runs via command substitution, so it cannot hand back a status
 	# via a global variable.
-	curl -sS --connect-timeout 30 --max-time 60 -w '\n%{http_code}' -X GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/jobs/$JOB_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json" 2>>"$log_file"
+	# (1.19.0) $1, when given, is a file path to receive the response headers
+	# (curl -D) so a caller can read Retry-After on a 429 without a second call.
+	local hdr_file="${1:-/dev/null}"
+	curl -sS --connect-timeout 30 --max-time 60 -D "$hdr_file" -w '\n%{http_code}' -X GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/jobs/$JOB_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json" 2>>"$log_file"
 }
 
 ## Images
@@ -1005,7 +1054,7 @@ vg_wait_sync_aux_to_master() {
 
 		if [[ -z "$t_rep" || -z "$t_state" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read $label VG status while monitoring $purpose."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read $label VG status while monitoring $purpose." 1
 		fi
 
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $label VG status: state=$t_state, replicationStatus=$t_rep, primaryRole=${t_primary:-UNKNOWN}" "1"
@@ -1019,7 +1068,7 @@ vg_wait_sync_aux_to_master() {
 		i=$((i + 1))
 		if (( i >= max_wait ))
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - $label VG did not reach aux->master syncing state after $max_wait minutes (last: state=$t_state, replicationStatus=$t_rep, primaryRole=${t_primary:-UNKNOWN})."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - $label VG did not reach aux->master syncing state after $max_wait minutes (last: state=$t_state, replicationStatus=$t_rep, primaryRole=${t_primary:-UNKNOWN})." 1
 		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
 		sleep 60
@@ -1265,6 +1314,14 @@ dc_vsi_list() {
 	region_api=$(ws_ls | jq -r --arg s "$shortnamecrn" '.workspaces[] | select(.details.crn == $s) | .location.region | gsub("-"; "_")')
 	base_url_var="base_${region_api}"
 	base_url="${!base_url_var}"
+	# (1.19.0) An empty region_api (workspace not found in ws_ls, or its CRN region has
+	# no matching base_<region> variable) used to leave base_url blank via the indirect
+	# expansion above - every subsequent API call would then hit a bare/wrong host. Stop
+	# instead of silently keeping (or losing) a default; a wrong endpoint is worse.
+	if [[ -z "$region_api" || -z "$base_url" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not resolve base_url for CRN $shortnamecrn (region_api='$region_api'); no $base_url_var variable is defined." 1
+	fi
 	CRN="$shortnamecrn"
 	PVM_ID="$vsi_id"
 	CLOUD_INSTANCE_ID=$(jq -r --arg ws "$vsiwsshort" '.workspaces[$ws].id' "$bluexscrt")
@@ -1277,6 +1334,34 @@ dc_vsi_list() {
 	awk '{print $2}' "$vsi_list_id_tmp" > "$vsi_list_tmp"
 }
 ####  END:FUNCTION - Target DC and List all VSI in the POWERVS DC and Get VSI Name and ID  ####
+
+####  START:FUNCTION - Job poll retry delay (job_monitor and wait_for_job)  ####
+# job_poll_delay FAIL_COUNT HTTP_CODE HDR_FILE
+# (1.19.0) A job poll that comes back with no readable status used to retry every
+# 30s flat, for up to job_get_max_fail attempts - hammering an API that is already
+# struggling. Backs off instead: 30s, 60s, 120s, 240s, then holds at 300s. On HTTP
+# 429 the server's own Retry-After (seconds form) wins when present; otherwise the
+# same backoff applies. HDR_FILE is the curl -D header dump from job_get.
+job_poll_delay() {
+	local fail_count="$1" http_code="$2" hdr_file="$3" retry_after
+	if [[ "$http_code" == "429" ]] && [[ -s "$hdr_file" ]]
+	then
+		retry_after=$(awk 'tolower($1) ~ /^retry-after:$/ {gsub(/\r/,""); print $2; exit}' "$hdr_file" 2>/dev/null)
+		if [[ "$retry_after" =~ ^[0-9]+$ ]]
+		then
+			echo "$retry_after"
+			return
+		fi
+	fi
+	case "$fail_count" in
+		1) echo 30 ;;
+		2) echo 60 ;;
+		3) echo 120 ;;
+		4) echo 240 ;;
+		*) echo 300 ;;
+	esac
+}
+####  END:FUNCTION - Job poll retry delay  ####
 
 ####  START:FUNCTION - Monitor Capture and Export Job  ####
 job_monitor() {
@@ -1301,7 +1386,8 @@ job_monitor() {
 	operation_before=""
 	job_get_fail_count=0
 	job_get_max_fail=10          # abort only after this many consecutive bad polls
-	token_refresh_secs=2700      # refresh IAM token every 45min, under its ~60min TTL
+	token_refresh_secs="${iam_refresh_secs:-2700}"      # refresh IAM token before it expires
+	job_hdr_file="/tmp/bluexport_job_headers_$$.out"    # (1.19.0) curl -D dump, for Retry-After
 	while true
 	do
 		JOB_ID="$job_id"
@@ -1317,7 +1403,7 @@ job_monitor() {
 		# as a trailing line; split it back out here (must happen in this
 		# process, not inside job_get, since command substitution runs it
 		# in a subshell where a global variable couldn't be read back).
-		job_raw=$(job_get)
+		job_raw=$(job_get "$job_hdr_file")
 		http_code="${job_raw##*$'\n'}"
 		job_json="${job_raw%$'\n'*}"
 		job_status=$(printf '%s' "$job_json" | jq -r '.status.state // empty' 2>/dev/null)
@@ -1336,10 +1422,14 @@ job_monitor() {
 			if [[ "$job_get_fail_count" -ge "$job_get_max_fail" ]]
 			then
 				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - FAILED Getting Job ID or no Job Running after $job_get_max_fail consecutive attempts!" "1"
+				rm -f "$job_hdr_file"
 				abort "$(date +%Y-%m-%d_%H:%M:%S) - Check file $job_monitor and $job_log for more details."
 			fi
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Transient error reading Job $job_id status (HTTP ${http_code:-?}). Retrying in 30s ($job_get_fail_count/$job_get_max_fail)..." "1"
-			spin_wait 30 "Retrying job status check"
+			# (1.19.0) Exponential backoff (30/60/120/240, capped 300s); a 429's own
+			# Retry-After wins when the API sent one.
+			job_retry_delay=$(job_poll_delay "$job_get_fail_count" "$http_code" "$job_hdr_file")
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Transient error reading Job $job_id status (HTTP ${http_code:-?}). Retrying in ${job_retry_delay}s ($job_get_fail_count/$job_get_max_fail)..." "1"
+			spin_wait "$job_retry_delay" "Retrying job status check"
 			continue
 		fi
 		job_get_fail_count=0
@@ -1442,7 +1532,9 @@ wait_for_job() {
 	# for no reason. Give it a moment before the first check.
 	spin_wait 10 "Waiting for job to register"
 
-	local operation_before="" job_get_fail_count=0 job_get_max_fail=10 token_refresh_secs=2700
+	local operation_before="" job_get_fail_count=0 job_get_max_fail=10
+	local token_refresh_secs="${iam_refresh_secs:-2700}"
+	local job_hdr_file="/tmp/bluexport_job_headers_$$.out"    # (1.19.0) curl -D dump, for Retry-After
 	# (1.18.6) A wall-clock bound. A job that keeps answering a readable, non-terminal state
 	# used to be polled forever; 24 hours by default, BLUEXPORT_JOB_MAX_SECS overrides it.
 	# Stopping the monitor does not stop the job - re-attach with -j, -ji or -je.
@@ -1456,6 +1548,7 @@ wait_for_job() {
 		if [ $(( $(date +%s) - job_started_epoch )) -ge "$job_max_secs" ]
 		then
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - $label has not finished after $job_max_secs seconds. Monitoring stopped; the job itself CONTINUES in IBM Cloud. Re-attach later with -j, -ji or -je." "1"
+			rm -f "$job_hdr_file"
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - Job ID $job_id monitoring timed out (limit BLUEXPORT_JOB_MAX_SECS=$job_max_secs)." 1
 		fi
 
@@ -1465,7 +1558,7 @@ wait_for_job() {
 		fi
 
 		local job_raw http_code job_json job_status
-		job_raw=$(job_get)
+		job_raw=$(job_get "$job_hdr_file")
 		http_code="${job_raw##*$'\n'}"
 		job_json="${job_raw%$'\n'*}"
 		job_status=$(printf '%s' "$job_json" | jq -r '.status.state // empty' 2>/dev/null)
@@ -1482,10 +1575,15 @@ wait_for_job() {
 			if [[ "$job_get_fail_count" -ge "$job_get_max_fail" ]]
 			then
 				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - FAILED Getting Job ID or no Job Running after $job_get_max_fail consecutive attempts!" "1"
+				rm -f "$job_hdr_file"
 				abort "$(date +%Y-%m-%d_%H:%M:%S) - Check file $job_monitor and $job_log for more details." 1
 			fi
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Transient error reading Job $job_id status (HTTP ${http_code:-?}). Retrying in 30s ($job_get_fail_count/$job_get_max_fail)..." "1"
-			spin_wait 30 "Retrying job status check"
+			# (1.19.0) Exponential backoff (30/60/120/240, capped 300s); a 429's own
+			# Retry-After wins when the API sent one.
+			local job_retry_delay
+			job_retry_delay=$(job_poll_delay "$job_get_fail_count" "$http_code" "$job_hdr_file")
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - WARNING - Transient error reading Job $job_id status (HTTP ${http_code:-?}). Retrying in ${job_retry_delay}s ($job_get_fail_count/$job_get_max_fail)..." "1"
+			spin_wait "$job_retry_delay" "Retrying job status check"
 			continue
 		fi
 		job_get_fail_count=0
@@ -1539,7 +1637,7 @@ get_iASP_name() {
 		vsi_ip=$(jq -r --arg name "$vsi" '.systems[] | select((.name | ascii_downcase) == ($name | ascii_downcase)) | .ip' "$bluexscrt")
 		if [[ -z "$vsi_ip" || "$vsi_ip" == "null" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi not found in JSON systems[] section. Aborting..."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI $vsi not found in JSON systems[] section. Aborting..." 1
 		fi
 		# Detect local execution
 		local_name=$(hostname -s 2>/dev/null)
@@ -1605,7 +1703,7 @@ get_iASP_name() {
 			ssh -T -q -i "$sshkeypath" "$vsi_user@$vsi_ip" exit
 			if [ $? -eq 255 ]
 			then
-				abort "$(date +%Y-%m-%d_%H:%M:%S) - Unable to SSH to $vsi! Try STRTCPSVR *SSHD. Aborting..."
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Unable to SSH to $vsi! Try STRTCPSVR *SSHD. Aborting..." 1
 			fi
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - ssh into VSI $vsi succeeded..." "1"
 			cmd="system 'WRKCFGSTS CFGTYPE(*DEV) CFGD(*ASP)'"
@@ -1677,7 +1775,7 @@ check_locally_VSI_exists() {
 			get_iASP_name
 		fi	else
 		echoscreen ""
-		abort "   ### VSI $vsi not found in any of the workspaces available in $bluexscrt!"
+		abort "   ### VSI $vsi not found in any of the workspaces available in $bluexscrt!" 1
 	fi
 }
 ####  END:FUNCTION - Check if VSI exists in secret file and Get VSI IP and iASP NAME if exists  ####
@@ -1782,7 +1880,7 @@ do_snap_create() {
 		vols_json=$(ins_vol_ls 2>>"$log_file")
 		if [[ -z "$vols_json" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list instance volumes via API. Check log above this line..."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list instance volumes via API. Check log above this line..." 1
 		fi
 		# volumes_to_snap é comma-separated de nomes ou IDs
 		IFS=',' read -r -a snap_vols_array <<< "$volumes_to_snap"
@@ -1798,7 +1896,7 @@ do_snap_create() {
 			' 2>>"$log_file" | head -n1)
 			if [[ -z "$vol_id" || "$vol_id" == "null" ]]
 			then
-				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume '$vtrim' not found on VSI $vsi. Use exact Volume Name or Volume ID."
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume '$vtrim' not found on VSI $vsi. Use exact Volume Name or Volume ID." 1
 			fi
 			json_ids="$json_ids\"$vol_id\","
 		done
@@ -1806,7 +1904,7 @@ do_snap_create() {
 		json_ids="${json_ids%,}"
 		if [[ -z "$json_ids" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No valid volumes resolved from '$volumes_to_snap'."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - No valid volumes resolved from '$volumes_to_snap'." 1
 		fi
 	fi
 	# Construir payload JSON (ACTIONS) só com name, description, volumeIDs
@@ -1826,14 +1924,14 @@ do_snap_create() {
 	if [ $? -ne 0 ] || [[ -z "$resp" ]]
 	then
 		echo "$resp" >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error calling snapshot create API. Check log above this line..."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error calling snapshot create API. Check log above this line..." 1
 	fi
 
 	# Verificar se veio algum erro no JSON
 	if echo "$resp" | jq -e '.error? // .errors? | length > 0' >/dev/null 2>&1
 	then
 		echo "$resp" | jq >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot creation returned error. Check log above this line..."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot creation returned error. Check log above this line..." 1
 	fi
 
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Snapshot $snap_name to reach 100%..." "1"
@@ -1848,7 +1946,7 @@ do_snap_create() {
 	fi
 	if [[ -z "$snap_id" || "$snap_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve snapshot ID for $snap_name. Check IBM Cloud portal / API."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve snapshot ID for $snap_name. Check IBM Cloud portal / API." 1
 	fi
 	# Loop de monitorização do percentComplete
 	local snap_percent=0
@@ -1861,7 +1959,7 @@ do_snap_create() {
 		if [ $? -ne 0 ] || [[ -z "$status_json" ]]
 		then
 			echo "$status_json" >>"$log_file"
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading snapshot status from API."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading snapshot status from API." 1
 		fi
 		# Fix (1.18.1): a snapshot that has left the list yields nothing from select,
 		# snap_percent became empty, the coercion below made it 0, and "while [ -lt 100 ]"
@@ -1872,7 +1970,7 @@ do_snap_create() {
 			'.snapshots[]? | select(.snapshotID == $id) | .snapshotID' 2>>"$log_file")
 		if [ -z "$snap_present" ] || [ "$snap_present" = "null" ]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot $snap_name (ID $snap_id) is no longer in the list; creation did not complete."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot $snap_name (ID $snap_id) is no longer in the list; creation did not complete." 1
 		fi
 		snap_percent=$(echo "$status_json" | jq -r --arg id "$snap_id" '
 			.snapshots[]? | select(.snapshotID == $id) | .percentComplete // 0
@@ -1909,17 +2007,17 @@ do_snap_update() {
 		fi
 	fi
 	if [[ -z "$actions" ]]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR - No fields to update for snapshot $snap_name (ACTIONS empty)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR - No fields to update for snapshot $snap_name (ACTIONS empty)." 1
 	fi
 	ACTIONS="$actions"
 	if [[ -z "$SNAP_ID" ]]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR - SNAP_ID not set before do_snap_update."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - INTERNAL ERROR - SNAP_ID not set before do_snap_update." 1
 	fi
 	local resp
 	resp=$(snap_upd 2>>"$log_file")
 	if [ $? -ne 0 ] || [[ -z "$resp" ]]; then
 		echo "$resp" >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error calling snapshot update API. Check log above this line..."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error calling snapshot update API. Check log above this line..." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name updated $new_name_echo $new_description_echo - Done!" "1"
 }
@@ -1930,7 +2028,7 @@ do_snap_restore() {
 	# 1) Confirmar estado da VSI antes de fazer restore
 	vsi_status=$(ins_get 2>>"$log_file" | jq -r '.status // empty' 2>>"$log_file")
 	if [[ -z "$vsi_status" || "$vsi_status" == "null" ]]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve VSI status for $vsi (PVM_ID $PVM_ID). Aborting snapshot restore."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve VSI status for $vsi (PVM_ID $PVM_ID). Aborting snapshot restore." 1
 	fi
 	# Regra: SÓ fazemos restore se estiver SHUTOFF
 	if [[ "$vsi_status" != "SHUTOFF" ]]; then
@@ -1941,7 +2039,7 @@ do_snap_restore() {
 	# 2) List snapshots in this workspace
 	snaps_json=$(snap_ls 2>>"$log_file")
 	if [[ -z "$snaps_json" ]]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list snapshots in current workspace. Check log file $log_file."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list snapshots in current workspace. Check log file $log_file." 1
 	fi
 	# 3) Encontrar snapshot por NOME + PVM_ID (para evitar confusões entre VSIs)
 	SNAP_ID=$(
@@ -1953,7 +2051,7 @@ do_snap_restore() {
 	)
 
 	if [[ -z "$SNAP_ID" || "$SNAP_ID" == "null" ]]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID) not found in this workspace."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot with name $snap_name for VSI $vsi (PVM_ID $PVM_ID) not found in this workspace." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot $snap_name found with ID: $SNAP_ID" "1"
 	# 4) Chamar API de restore
@@ -1966,12 +2064,12 @@ do_snap_restore() {
 	echo "$restore_output" >>"$log_file"
 	# Se o curl falhar, já é erro
 	if [ $ret -ne 0 ]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - curl error calling snapshot restore API. Check log file $log_file."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - curl error calling snapshot restore API. Check log file $log_file." 1
 	fi
 
 	# Confirmar que é JSON válido
 	if ! echo "$restore_output" | jq . >/dev/null 2>&1; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot restore API did not return valid JSON. Raw output logged above."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot restore API did not return valid JSON. Raw output logged above." 1
 	fi
 
 	# Verificar erros no JSON: .error/.errors/.code
@@ -1982,7 +2080,7 @@ do_snap_restore() {
 	err_code=$(echo "$restore_output" | jq -r '.code // empty' 2>>"$log_file")
 	err_msg=$(echo "$restore_output" | jq -r '.message // empty' 2>>"$log_file")
 	if [[ "$has_error_fields" == "yes" ]] || { [[ -n "$err_code" ]] && [[ "$err_code" != "0" ]] && [[ "$err_code" != "200" ]]; }; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot restore API returned an error (code=$err_code, message=\"$err_msg\"). Check log file $log_file."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot restore API returned an error (code=$err_code, message=\"$err_msg\"). Check log file $log_file." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot restore request accepted by API. Starting monitoring..." "1"
 	# 5) Monitorizar progresso do restore (sem timeout, até 100%)
@@ -1994,7 +2092,7 @@ do_snap_restore() {
 		snaps_json=$(snap_ls 2>>"$log_file")
 		if [[ -z "$snaps_json" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading snapshot status during restore monitoring."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading snapshot status during restore monitoring." 1
 		fi
 		# Ler status e percentComplete do snapshot específico
 		snap_status=$(echo "$snaps_json" | jq -r --arg id "$SNAP_ID" '.snapshots // [] | .[] | select(.snapshotID == $id) | .status // empty' 2>>"$log_file")
@@ -2002,7 +2100,7 @@ do_snap_restore() {
 		snap_percent=$(echo "$snaps_json" | jq -r --arg id "$SNAP_ID" '.snapshots // [] | .[] | select(.snapshotID == $id) | .percentComplete // 0' 2>>"$log_file")
 		if [[ -z "$snap_status" || "$snap_status" == "null" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot ID $SNAP_ID not found in list while monitoring restore."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Snapshot ID $SNAP_ID not found in list while monitoring restore." 1
 		fi
 		[[ "$snap_percent" =~ ^[0-9]+$ ]] || snap_percent=0
 		# Só escreve no log quando há alteração de percentagem
@@ -2042,7 +2140,7 @@ do_snap_delete() {
 	# Check API response
 	if echo "$resp" | grep -q '"error"'
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED deleting snapshot '$snap_name'. API error: $resp"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED deleting snapshot '$snap_name'. API error: $resp" 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Snapshot '$snap_name' delete request sent successfully." "1"
 	# Optional: Poll snapshot list until it disappears
@@ -2092,7 +2190,7 @@ do_volume_clone_execute() {
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Executing Volume Clone with name $vclone_name ..." "1"
 	if [[ -z "$vclone_id" ]]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_execute."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_execute." 1
 	fi
 	VOL_CLONE_ID="$vclone_id"
 	ACTIONS="\"name\":\"$base_name\",\"rollbackPrepare\": $rollback,\"targetReplicationEnabled\": $replication, \"targetStorageTier\":\"$target_tier\""
@@ -2104,13 +2202,13 @@ do_volume_clone_execute() {
 	if [[ $rc -ne 0 || -z "$resp_ex" ]]
 	then
 		echo "$resp_ex" >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error executing Volume Clone $vclone_name (API call failed or empty response)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error executing Volume Clone $vclone_name (API call failed or empty response)." 1
 	fi
 	# 2) response must be valid JSON (otherwise jq will blow up later)
 	if ! echo "$resp_ex" | jq . >/dev/null 2>&1
 	then
 		echo "$resp_ex" >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone execute returned non-JSON response. Check log for raw payload."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone execute returned non-JSON response. Check log for raw payload." 1
 	fi
 	# 3) if API returned an error payload (e.g., {"code":400,"message":"..."}) abort immediately
 	api_code=$(echo "$resp_ex" | jq -r '.code // empty' 2>>"$log_file")
@@ -2119,7 +2217,7 @@ do_volume_clone_execute() {
 	if [[ -n "$api_code" && "$api_code" != "null" ]]
 	then
 		echo "$resp_ex" >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone execute API error (code=$api_code): $api_msg"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone execute API error (code=$api_code): $api_msg" 1
 	fi
 
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone $vclone_name execution to finish..." "1"
@@ -2168,7 +2266,7 @@ do_volume_clone_start() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - == Starting Volume Clone with name $vclone_name ..." "1"
 	# Garantir que temos o ID do clone na variável global
 	if [[ -z "$vclone_id" ]]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_start."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vclone_id not set before do_volume_clone_start." 1
 	fi
 	VOL_CLONE_ID="$vclone_id"
 	local resp_start
@@ -2176,25 +2274,42 @@ do_volume_clone_start() {
 	if [ $? -ne 0 ]
 	then
 		echo "$resp_start" >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting Volume Clone $vclone_name (API call failed)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting Volume Clone $vclone_name (API call failed)." 1
 	fi
-	local status_json
-	status_json=$(vol_cl_get 2>>"$log_file")
-	if [ $? -ne 0 ] || [ -z "$status_json" ]
-	then
-		echo "$status_json" >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading status after start for Volume Clone $vclone_name."
-	fi
-	local vclone_start_action vclone_start_status
-	vclone_start_action=$(echo "$status_json" | jq -r '.action // .status.action // empty')
-	vclone_start_status=$(echo "$status_json" | jq -r '.status // .state // .status.state // empty')
-	if [[ "$vclone_start_action" == "start" && "$vclone_start_status" == "available" ]]
-	then
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name Started and ready to execute..." "1"
-	else
-		echo "$status_json" >>"$log_file"
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone $vclone_name not in expected state after start (action=$vclone_start_action status=$vclone_start_status)."
-	fi
+	# (1.19.0) The start POST only asks the API to begin the state transition; checking
+	# status once, immediately after, could catch it still mid-transition and fail a
+	# start that was actually fine. Poll every 5s, the same failure/time-bound helpers
+	# do_volume_clone_execute already uses, until it actually reaches action=start and
+	# status=available.
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting for Volume Clone $vclone_name to reach action=start/status=available..." "1"
+	local vclonest_started
+	vclonest_started=$(date +%s)
+	local status_json vclone_start_action vclone_start_status vclone_fail_reason
+	while :
+	do
+		sleep 5
+		vclone_time_left "$vclonest_started" "Volume Clone $vclone_name start"
+		status_json=$(vol_cl_get 2>>"$log_file")
+		if [ $? -ne 0 ] || [ -z "$status_json" ]
+		then
+			echo "$status_json" >>"$log_file"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error reading status after start for Volume Clone $vclone_name." 1
+		fi
+		vclone_fail_reason=$(vclone_failure "$status_json")
+		if [ -n "$vclone_fail_reason" ]
+		then
+			echo "$status_json" >>"$log_file"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Volume Clone $vclone_name start failed: $vclone_fail_reason" 1
+		fi
+		vclone_start_action=$(echo "$status_json" | jq -r '.action // .status.action // empty')
+		vclone_start_status=$(echo "$status_json" | jq -r '.status // .state // .status.state // empty')
+		if [[ "$vclone_start_action" == "start" && "$vclone_start_status" == "available" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name Started and ready to execute..." "1"
+			break
+		fi
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volume Clone $vclone_name not ready yet (action=$vclone_start_action status=$vclone_start_status). Waiting..." "1"
+	done
 }
 ####  END:FUNCTION -  Do the Volume Clone Start ####
 
@@ -2228,7 +2343,7 @@ do_volume_clone() {
 		vclone_id=$(vol_cl_ls 2>>"$log_file" | jq -r --arg name "$vclone_name" '.volumesClone[]? | select(.name == $name) | .volumesCloneID' | head -n1)
 		if [[ -z "$vclone_id" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve Volume Clone Request ID for $vclone_name. Check the log above this line..."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not retrieve Volume Clone Request ID for $vclone_name. Check the log above this line..." 1
 		fi
 		vclone_percent=0
 		local vclone_started vclone_obj vclone_fail_reason
@@ -2260,7 +2375,7 @@ do_volume_clone() {
 			fi
 		done
 	else
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error creating Volume Clone Request $vclone_name (API call failed). See $log_file for details."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error creating Volume Clone Request $vclone_name (API call failed). See $log_file for details." 1
 	fi
 }
 ####  END:FUNCTION -  Do the Volume Clone ####
@@ -2274,7 +2389,7 @@ vsi_id_bluexscrt() {
 
 	if [[ -z "$vsi_id" || "$vsi_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI ID missing or VSI Name '$vsi' not found in $bluexscrt. Please add it to the JSON or check the name."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - VSI ID missing or VSI Name '$vsi' not found in $bluexscrt. Please add it to the JSON or check the name." 1
 	fi
 #	vsi_ip=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .ip' "$bluexscrt")
 #	vsi_id=$(jq -r --arg name "$vsi" '.systems[] | select(.name == $name) | .pvmInstanceID' "$bluexscrt")
@@ -2309,21 +2424,30 @@ vchtier() {
 		VOL_ID="$vol"
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Changing volume $vol_name with Volume ID $vol to tier $tier" "1"
 		ACTIONS="\"targetStorageTier\": \"$tier\""
-		resp=$(vol_act 2>&1 | tee -a "$log_file")
+		# (1.19.0) The call's own HTTP status decides success, not a grep for "Failed"/
+		# "Performing" in the accumulated JSON (which never matched real API output and
+		# so never fired) - vol_act's status used to be discarded entirely.
+		resp_raw=$(vol_act_status 2>&1)
+		http_code="${resp_raw##*$'\n'}"
+		resp="${resp_raw%$'\n'*}"
+		printf '%s\n' "$resp" | tee -a "$log_file" >/dev/null
 		echo "$resp" > "$vol_failed_tst"
-		# 1º caso especial: já está no mesmo tier -> NÃO é erro "a sério"
-		if echo "$resp" | grep -q "current storage tier"
+		if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]
 		then
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume $vol_name ($vol) changed to tier $tier." "1"
+		elif echo "$resp" | grep -q "current storage tier"
+		then
+			# Already at the requested tier - not an error.
 			same_tier=1
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume $vol_name ($vol) is already in tier $tier, no change required." "1"
-		# 2º qualquer outro erro com campo "error" -> erro real
-		elif echo "$resp" | grep -q '"error"'
-		then
+		else
 			api_error=1
-		echo "$resp" >> "$vol_ch_tier"
+			failed_vol="$failed_vol $vol"
+			err_msg=$(printf '%s' "$resp" | jq -r '.description // .message // .error // empty' 2>/dev/null)
+			echo "$resp" >> "$vol_ch_tier"
+			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - FAILED changing volume $vol_name ($vol) to tier $tier (HTTP $http_code): ${err_msg:-$resp}" "1"
 		fi
 	done
-	failed_vol=$(grep -B2 Failed "$vol_ch_tier" | grep Performing | awk '{print $5}')
 	if [[ -n "$failed_vol" || $api_error -ne 0 ]]
 	then
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Some volumes failed to change tier!" "1"
@@ -2332,7 +2456,7 @@ vchtier() {
 		do
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - vol_act for volume ID: $vol change to tier $tier" "1"
 		done
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Tier change finished, but there were errors! Please check the log above..."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Tier change finished, but there were errors! Please check the log above..." 1
 	fi
 	if [ $same_tier -eq 1 ]
 	then
@@ -2524,11 +2648,11 @@ do_object_restore_from_archive() {
 	fi
 	if [[ "$bucket_code" == "403" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Access denied when accessing bucket '$bucket_name' (HEAD returned 403). Check COS credentials/policies."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Access denied when accessing bucket '$bucket_name' (HEAD returned 403). Check COS credentials/policies." 1
 	fi
 	if [[ -z "$bucket_code" || "$bucket_code" != "200" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Unexpected response when checking bucket '$bucket_name' (HTTP $bucket_code). Check connectivity/credentials/region."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Unexpected response when checking bucket '$bucket_name' (HTTP $bucket_code). Check connectivity/credentials/region." 1
 	fi
 
 	# 2) Check object exists (HEAD object)
@@ -2541,11 +2665,11 @@ do_object_restore_from_archive() {
 	fi
 	if [[ "$obj_code" == "403" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Access denied when accessing object '$object_key' in bucket '$bucket_name' (HEAD returned 403)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Access denied when accessing object '$object_key' in bucket '$bucket_name' (HEAD returned 403)." 1
 	fi
 	if [[ -z "$obj_code" || "$obj_code" != "200" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Unexpected response when checking object '$object_key' (HTTP $obj_code)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Unexpected response when checking object '$object_key' (HTTP $obj_code)." 1
 	fi
 
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Object storage class detected: ${COS_OBJ_STORAGE_CLASS:-UNKNOWN}" "1"
@@ -2631,7 +2755,7 @@ create_grs() {
 	VOLUME_GROUP_ID=$(vg_ls | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .id' 2>>"$log_file")
 	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find Volume Group ID for $vg_name after creation."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find Volume Group ID for $vg_name after creation." 1
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Group $vg_name created with ID $VOLUME_GROUP_ID." "1"
 	# 2.6 / 2.8 – Esperar VG estabilizar e ter TODOS os aux volumes
@@ -2680,7 +2804,7 @@ create_grs() {
 	cgname=$(vg_ls 2>>"$log_file" | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .consistencyGroupName')
 	if [[ -z "$cgname" || "$cgname" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not retrieve consistencyGroupName for VG $vg_name."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not retrieve consistencyGroupName for VG $vg_name." 1
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Consistency group name: $cgname" "1"
 	###################################
@@ -2721,16 +2845,16 @@ EOF
 	if echo "$resp_on" | jq -e '.code? != null' >/dev/null 2>&1
 	then
 		errmsg=$(echo "$resp_on" | jq -r '.message // .error // "Unknown error"' 2>/dev/null)
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error creating volume onboarding: $errmsg"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error creating volume onboarding: $errmsg" 1
 	fi
 	VOLUME_ONBOARDING_ID=$(on_ls | jq -r --arg desc "$ondesc" '[.onboardings[]? | select(.description == $desc)][-1].id' 2>>"$log_file")
 	if [[ -z "$VOLUME_ONBOARDING_ID" || "$VOLUME_ONBOARDING_ID" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find onboarding ID for description $ondesc."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find onboarding ID for description $ondesc." 1
 	fi
 	if [[ -z "$VOLUME_ONBOARDING_ID" || "$VOLUME_ONBOARDING_ID" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find onboarding ID for description $ondesc."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not find onboarding ID for description $ondesc." 1
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Onboarding request ID: $VOLUME_ONBOARDING_ID" "1"
 	# 2.11 – Monitor onboarding
@@ -2739,7 +2863,7 @@ EOF
 	VOLUME_GROUP_ID=$(vg_ls | jq -r --arg cgname "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cgname) | .id' 2>>"$log_file")
 	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Onboarding finished, but target Volume Group with consistencyGroupName $cgname not found."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Onboarding finished, but target Volume Group with consistencyGroupName $cgname not found." 1
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - GRS completed. Target Volume Group ID: $VOLUME_GROUP_ID" "1"
 	abort "`date +%Y-%m-%d_%H:%M:%S` - === GRS successfully configured between $source_vsi -> $target_vsi (VG: $vg_name). ==="
@@ -2762,13 +2886,13 @@ delete_grs() {
 		.volumeGroups[]? | select(.name == $vg) | .id
 	' 2>>"$log_file")
 	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Group $vg_name not found in source workspace. Aborting GRS delete."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Group $vg_name not found in source workspace. Aborting GRS delete." 1
 	fi
 	cgname=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '
 		.volumeGroups[]? | select(.name == $vg) | .consistencyGroupName
 	' 2>>"$log_file")
 	if [[ -z "$cgname" || "$cgname" == "null" ]]; then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for VG $vg_name in source workspace."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for VG $vg_name in source workspace." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG $vg_name has ID $VOLUME_GROUP_ID and consistencyGroupName $cgname." "1"
 	# 1.1 Remover volumes do VG (source)
@@ -2953,13 +3077,13 @@ do_grs_failover() {
 	source_vg_id=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .id' 2>>"$log_file")
 	if [[ -z "$source_vg_id" || "$source_vg_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting failover."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting failover." 1
 	fi
 	local cgname
 	cgname=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .consistencyGroupName' 2>>"$log_file")
 	if [[ -z "$cgname" || "$cgname" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source workspace: $source_ws_name (id=$source_cloud_instance_id_local) - Source VG ID=$source_vg_id - consistencyGroupName=$cgname" "1"
 
@@ -2968,7 +3092,7 @@ do_grs_failover() {
 	boot_aux_name=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | select(.bootable == true) | .auxVolumeName // empty' 2>>"$log_file" | head -n1)
 	if [[ -z "$boot_aux_name" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not determine boot auxiliary volume name from source VSI $source_vsi. Aborting."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not determine boot auxiliary volume name from source VSI $source_vsi. Aborting." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Boot auxiliary volume name (from source): $boot_aux_name" "1"
 
@@ -2978,7 +3102,7 @@ do_grs_failover() {
 	aux_names=$(vg_rcr 2>>"$log_file" | jq -r '.remoteCopyRelationships[]? | select(.primaryRole=="master") | .auxVolumeName' 2>>"$log_file")
 	if [[ -z "$aux_names" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve auxiliary volumes from remote-copy relationships for source VG $vg_name. Aborting."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve auxiliary volumes from remote-copy relationships for source VG $vg_name. Aborting." 1
 	fi
 	local aux_count
 	aux_count=$(echo "$aux_names" | wc -w | awk '{print $1}')
@@ -3032,7 +3156,7 @@ do_grs_failover() {
 
 	if [[ -z "$target_vg_id" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not find target Volume Group with consistencyGroupName $cgname in any other configured workspace. Aborting failover."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not find target Volume Group with consistencyGroupName $cgname in any other configured workspace. Aborting failover." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target workspace found: $target_ws_name (id=$target_cloud_instance_id) - Target VG ID=$target_vg_id" "1"
 
@@ -3050,12 +3174,12 @@ do_grs_failover() {
 	echo "$resp_act" >>"$log_file"
 	if ! echo "$resp_act" | jq . >/dev/null 2>&1
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON when activating target. Raw output logged."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON when activating target. Raw output logged." 1
 	fi
 	if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 	then
 		errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error activating target VG (stop access): $errmsg"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error activating target VG (stop access): $errmsg" 1
 	fi
 
 	# Wait until VG becomes idling (or a stable state)
@@ -3073,12 +3197,12 @@ do_grs_failover() {
 		# If API returns empty, treat as error
 		if [[ -z "$t_state" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read target VG storage-details/state while waiting for failover."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read target VG storage-details/state while waiting for failover." 1
 		fi
 		i=$((i + 1))
 		if (( i >= max_wait ))
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Target VG did not reach state 'idling' after $max_wait minutes (last state=$t_state)."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Target VG did not reach state 'idling' after $max_wait minutes (last state=$t_state)." 1
 		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG state is '$t_state'. Waiting 60 seconds..." "1"
 		sleep 60
@@ -3114,14 +3238,14 @@ do_grs_failover() {
 	target_vols_json=$(vol_ls 2>>"$log_file")
 	if [[ -z "$target_vols_json" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volumes in target workspace $target_ws_name."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volumes in target workspace $target_ws_name." 1
 	fi
 
 	local boot_vol_id
 	boot_vol_id=$(echo "$target_vols_json" | jq -r --arg n "$boot_aux_name" '.volumes[]? | select(.name == $n) | .volumeID' 2>>"$log_file" | head -n1)
 	if [[ -z "$boot_vol_id" || "$boot_vol_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not resolve boot auxiliary volume name $boot_aux_name to a volumeID in target workspace $target_ws_name."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not resolve boot auxiliary volume name $boot_aux_name to a volumeID in target workspace $target_ws_name." 1
 	fi
 
 	# Attach boot volume first
@@ -3132,7 +3256,7 @@ do_grs_failover() {
 	if echo "$resp_att_boot" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 	then
 		errmsg=$(echo "$resp_att_boot" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error attaching boot volume to $target_vsi: $errmsg"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error attaching boot volume to $target_vsi: $errmsg" 1
 	fi
 
 	# IMPORTANT: Wait until the BOOT volume is effectively attached before attaching other volumes.
@@ -3152,7 +3276,7 @@ do_grs_failover() {
 		boot_try=$((boot_try + 1))
 		if (( boot_try >= max_boot_wait ))
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Boot volume ($boot_aux_name / $boot_vol_id) did not become attached/visible on $target_vsi after ~10 minutes. Aborting."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Boot volume ($boot_aux_name / $boot_vol_id) did not become attached/visible on $target_vsi after ~10 minutes. Aborting." 1
 		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Boot volume still attaching on $target_vsi... waiting 10 seconds (attempt $boot_try/$max_boot_wait)" "1"
 		sleep 10
@@ -3173,7 +3297,7 @@ do_grs_failover() {
 		vid=$(echo "$target_vols_json" | jq -r --arg n "$aux_name" '.volumes[]? | select(.name == $n) | .volumeID' 2>>"$log_file" | head -n1)
 		if [[ -z "$vid" || "$vid" == "null" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not resolve auxiliary volume name $aux_name to a volumeID in target workspace $target_ws_name."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not resolve auxiliary volume name $aux_name to a volumeID in target workspace $target_ws_name." 1
 		fi
 		json_ids="$json_ids\"$vid\","
 	done
@@ -3188,7 +3312,7 @@ do_grs_failover() {
 		if echo "$resp_att" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 		then
 			errmsg=$(echo "$resp_att" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error attaching auxiliary volumes to $target_vsi: $errmsg"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error attaching auxiliary volumes to $target_vsi: $errmsg" 1
 		fi
 	else
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No additional auxiliary volumes to attach (only boot)." "1"
@@ -3218,7 +3342,7 @@ do_grs_failover() {
 		tgt_count=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file")
 		if [[ -z "$tgt_count" || "$tgt_count" == "null" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read attached volumes count on TARGET_VSI $target_vsi while waiting for volume attaches."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read attached volumes count on TARGET_VSI $target_vsi while waiting for volume attaches." 1
 		fi
 
 		if (( tgt_count >= expected_attached ))
@@ -3228,7 +3352,7 @@ do_grs_failover() {
 		att_try=$((att_try + 1))
 		if (( att_try >= max_attach_wait ))
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - TARGET_VSI $target_vsi did not reach $expected_attached attached volumes after ~10 minutes (last count=$tgt_count)."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - TARGET_VSI $target_vsi did not reach $expected_attached attached volumes after ~10 minutes (last count=$tgt_count)." 1
 		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Volumes still attaching on $target_vsi... currently $tgt_count/$expected_attached attached. Waiting 10 seconds (attempt $att_try/$max_attach_wait)" "1"
 		sleep 10
@@ -3275,13 +3399,13 @@ do_grs_cancel_failover() {
 	source_vg_id=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .id' 2>>"$log_file")
 	if [[ -z "$source_vg_id" || "$source_vg_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting cancel failover."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting cancel failover." 1
 	fi
 	local cgname
 	cgname=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .consistencyGroupName' 2>>"$log_file")
 	if [[ -z "$cgname" || "$cgname" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source workspace: $source_ws_name (id=$source_cloud_instance_id_local) - Source VG ID=$source_vg_id - consistencyGroupName=$cgname" "1"
 
@@ -3333,7 +3457,7 @@ do_grs_cancel_failover() {
 
 	if [[ -z "$target_vg_id" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not find target Volume Group with consistencyGroupName $cgname in any other configured workspace. Aborting cancel failover."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not find target Volume Group with consistencyGroupName $cgname in any other configured workspace. Aborting cancel failover." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target workspace found: $target_ws_name (id=$target_cloud_instance_id) - Target VG ID=$target_vg_id" "1"
 
@@ -3371,12 +3495,12 @@ do_grs_cancel_failover() {
 			echo "$resp_det" >>"$log_file"
 			if ! echo "$resp_det" | jq . >/dev/null 2>&1
 			then
-				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - ins_vol_bdet did not return valid JSON when detaching volumes. Raw output logged."
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - ins_vol_bdet did not return valid JSON when detaching volumes. Raw output logged." 1
 			fi
 			if echo "$resp_det" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 			then
 				errmsg=$(echo "$resp_det" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error detaching volumes from $target_vsi: $errmsg"
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error detaching volumes from $target_vsi: $errmsg" 1
 			fi
 
 			# Wait until no volumes are attached
@@ -3412,7 +3536,7 @@ do_grs_cancel_failover() {
 	s_state_pre=$(vg_sd 2>>"$log_file" | jq -r '.state // empty' 2>>"$log_file")
 	if [[ -z "$s_state_pre" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read SOURCE VG storage-details/state before stop."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read SOURCE VG storage-details/state before stop." 1
 	fi
 	if [[ "$s_state_pre" == "idling" ]]
 	then
@@ -3424,12 +3548,12 @@ do_grs_cancel_failover() {
 		echo "$resp_stop" >>"$log_file"
 		if ! echo "$resp_stop" | jq . >/dev/null 2>&1
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (stop access). Raw output logged."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (stop access). Raw output logged." 1
 		fi
 		if echo "$resp_stop" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 		then
 			errmsg=$(echo "$resp_stop" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error stopping SOURCE VG (stop access): $errmsg"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error stopping SOURCE VG (stop access): $errmsg" 1
 		fi
 	fi
 
@@ -3447,12 +3571,12 @@ do_grs_cancel_failover() {
 		fi
 		if [[ -z "$s_state" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read SOURCE VG storage-details/state while waiting for stop."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read SOURCE VG storage-details/state while waiting for stop." 1
 		fi
 		i=$((i + 1))
 		if (( i >= max_wait ))
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - SOURCE VG did not reach state 'idling' after $max_wait minutes (last state=$s_state)."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - SOURCE VG did not reach state 'idling' after $max_wait minutes (last state=$s_state)." 1
 		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG state is '$s_state'. Waiting 60 seconds..." "1"
 		sleep 60
@@ -3465,12 +3589,12 @@ do_grs_cancel_failover() {
 	echo "$resp_start" >>"$log_file"
 	if ! echo "$resp_start" | jq . >/dev/null 2>&1
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (start master). Raw output logged."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (start master). Raw output logged." 1
 	fi
 	if echo "$resp_start" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 	then
 		errmsg=$(echo "$resp_start" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting SOURCE VG as master: $errmsg"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting SOURCE VG as master: $errmsg" 1
 	fi
 
 	# Wait until replication is active again (consistent_copying expected)
@@ -3486,12 +3610,12 @@ do_grs_cancel_failover() {
 		fi
 		if [[ -z "$state_now" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read SOURCE VG storage-details/state while waiting for consistent_copying."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read SOURCE VG storage-details/state while waiting for consistent_copying." 1
 		fi
 		i=$((i + 1))
 		if (( i >= max_wait ))
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - SOURCE VG did not reach state 'consistent_copying' after $max_wait minutes (last state=$state_now)."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - SOURCE VG did not reach state 'consistent_copying' after $max_wait minutes (last state=$state_now)." 1
 		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - SOURCE VG state is '$state_now'. Waiting 60 seconds..." "1"
 		sleep 60
@@ -3532,7 +3656,7 @@ do_grs_cancel_failover() {
 		t_try=$((t_try + 1))
 		if (( t_try >= t_max_wait ))
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - TARGET VG did not reach replicationStatus=enabled after $t_max_wait minutes (last replicationStatus=$t_rep, state=$t_state)."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - TARGET VG did not reach replicationStatus=enabled after $t_max_wait minutes (last replicationStatus=$t_rep, state=$t_state)." 1
 		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds for TARGET VG replicationStatus to become enabled (attempt $t_try/$t_max_wait)..." "1"
 		sleep 60
@@ -3656,21 +3780,21 @@ do_grs_failback() {
 	vg_json=$(vg_ls 2>>"$log_file")
 	if [[ -z "$vg_json" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in source workspace $source_ws_name."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in source workspace $source_ws_name." 1
 	fi
 
 	local source_vg_id
 	source_vg_id=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .id' 2>>"$log_file")
 	if [[ -z "$source_vg_id" || "$source_vg_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting failback."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting failback." 1
 	fi
 
 	local cgname
 	cgname=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .consistencyGroupName' 2>>"$log_file")
 	if [[ -z "$cgname" || "$cgname" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source workspace: $source_ws_name (id=$source_cloud_instance_id_local) - Source VG ID=$source_vg_id - consistencyGroupName=$cgname" "1"
 
@@ -3686,14 +3810,14 @@ do_grs_failback() {
 	t_vg_json=$(vg_ls 2>>"$log_file")
 	if [[ -z "$t_vg_json" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in target workspace $target_ws_name."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in target workspace $target_ws_name." 1
 	fi
 
 	local target_vg_id
 	target_vg_id=$(echo "$t_vg_json" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file" | head -n1)
 	if [[ -z "$target_vg_id" || "$target_vg_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group with consistencyGroupName $cgname not found in target workspace $target_ws_name. Aborting failback."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group with consistencyGroupName $cgname not found in target workspace $target_ws_name. Aborting failback." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target workspace: $target_ws_name (id=$target_cloud_instance_id_local) - Target VG ID=$target_vg_id" "1"
 
@@ -3707,7 +3831,7 @@ do_grs_failback() {
 	ret=$?
 	if [ $ret -eq 2 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read TARGET VG status before starting aux->master sync."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read TARGET VG status before starting aux->master sync." 1
 	fi
 	if [ $ret -eq 0 ]
 	then
@@ -3719,12 +3843,12 @@ do_grs_failback() {
 		echo "$resp_act" >>"$log_file"
 		if ! echo "$resp_act" | jq . >/dev/null 2>&1
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.1. Raw output logged."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.1. Raw output logged." 1
 		fi
 		if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 		then
 			errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.1 failed: $errmsg"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.1 failed: $errmsg" 1
 		fi
 
 		# Monitor TARGET until aux->master steady state is reached
@@ -3753,12 +3877,12 @@ do_grs_failback() {
 		echo "$resp_act" >>"$log_file"
 		if ! echo "$resp_act" | jq . >/dev/null 2>&1
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.2. Raw output logged."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.2. Raw output logged." 1
 		fi
 		if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 		then
 			errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.2 failed: $errmsg"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.2 failed: $errmsg" 1
 		fi
 	fi
 
@@ -3772,7 +3896,7 @@ do_grs_failback() {
 
 		if [[ -z "$rep_status" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read source VG replicationStatus while monitoring Step 4.2."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read source VG replicationStatus while monitoring Step 4.2." 1
 		fi
 
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG status: state=${s_state:-UNKNOWN}, replicationStatus=$rep_status" "1"
@@ -3786,7 +3910,7 @@ do_grs_failback() {
 		i=$((i + 1))
 		if (( i >= max_wait ))
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Source VG replicationStatus did not reach 'disabled' after $max_wait minutes (last: $rep_status)."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Source VG replicationStatus did not reach 'disabled' after $max_wait minutes (last: $rep_status)." 1
 		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
 		sleep 60
@@ -3801,12 +3925,12 @@ do_grs_failback() {
 	echo "$resp_act" >>"$log_file"
 	if ! echo "$resp_act" | jq . >/dev/null 2>&1
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.3. Raw output logged."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.3. Raw output logged." 1
 	fi
 	if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 	then
 		errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.3 failed: $errmsg"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.3 failed: $errmsg" 1
 	fi
 
 	# Wait for replicationStatus=enabled and state=consistent_copying on SOURCE VG
@@ -3819,7 +3943,7 @@ do_grs_failback() {
 
 		if [[ -z "$rep_status" || -z "$s_state" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read source VG status while monitoring Step 4.3."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read source VG status while monitoring Step 4.3." 1
 		fi
 
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG status: state=$s_state, replicationStatus=$rep_status" "1"
@@ -3833,7 +3957,7 @@ do_grs_failback() {
 		i=$((i + 1))
 		if (( i >= max_wait ))
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Source VG did not reach replicationStatus=enabled and state=consistent_copying after $max_wait minutes (last: state=$s_state, replicationStatus=$rep_status)."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Source VG did not reach replicationStatus=enabled and state=consistent_copying after $max_wait minutes (last: state=$s_state, replicationStatus=$rep_status)." 1
 		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Waiting 60 seconds..." "1"
 		sleep 60
@@ -3858,7 +3982,7 @@ do_grs_failback() {
 
 		if [[ -z "$t_rep" || -z "$t_state2" ]]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read target VG status while monitoring replication re-enable."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read target VG status while monitoring replication re-enable." 1
 		fi
 
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG status: state=$t_state2, replicationStatus=$t_rep" "1"
@@ -3962,21 +4086,21 @@ do_grs_reverse_replica() {
 	vg_json=$(vg_ls 2>>"$log_file")
 	if [[ -z "$vg_json" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in source workspace $source_ws_name."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in source workspace $source_ws_name." 1
 	fi
 
 	local source_vg_id
 	source_vg_id=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .id' 2>>"$log_file")
 	if [[ -z "$source_vg_id" || "$source_vg_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting reverse replica."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name not found in source workspace $source_ws_name. Aborting reverse replica." 1
 	fi
 
 	local cgname
 	cgname=$(echo "$vg_json" | jq -r --arg vg "$vg_name" '.volumeGroups[]? | select(.name == $vg) | .consistencyGroupName' 2>>"$log_file")
 	if [[ -z "$cgname" || "$cgname" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for source VG $vg_name (workspace $source_ws_name)." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source workspace: $source_ws_name (id=$source_cloud_instance_id_local) - Source VG ID=$source_vg_id - consistencyGroupName=$cgname" "1"
 
@@ -3992,14 +4116,14 @@ do_grs_reverse_replica() {
 	t_vg_json=$(vg_ls 2>>"$log_file")
 	if [[ -z "$t_vg_json" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in target workspace $target_ws_name."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in target workspace $target_ws_name." 1
 	fi
 
 	local target_vg_id
 	target_vg_id=$(echo "$t_vg_json" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file" | head -n1)
 	if [[ -z "$target_vg_id" || "$target_vg_id" == "null" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group for consistencyGroupName $cgname not found in target workspace $target_ws_name. Aborting reverse replica."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group for consistencyGroupName $cgname not found in target workspace $target_ws_name. Aborting reverse replica." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target workspace: $target_ws_name (id=$target_cloud_instance_id_local) - Target VG ID=$target_vg_id" "1"
 
@@ -4013,7 +4137,7 @@ do_grs_reverse_replica() {
 	ret=$?
 	if [ $ret -eq 2 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read TARGET VG status before starting aux->master sync."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read TARGET VG status before starting aux->master sync." 1
 	fi
 	if [ $ret -eq 0 ]
 	then
@@ -4025,12 +4149,12 @@ do_grs_reverse_replica() {
 		echo "$resp_act" >>"$log_file"
 		if ! echo "$resp_act" | jq . >/dev/null 2>&1
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 3. Raw output logged."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 3. Raw output logged." 1
 		fi
 		if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 		then
 			errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 3 failed: $errmsg"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 3 failed: $errmsg" 1
 		fi
 
 		# Monitor TARGET until aux->master steady state is reached
@@ -4060,7 +4184,7 @@ do_grs_reverse_replica() {
 do_start_vsi() {
 	local vsi="$1"
 	if [[ -z "$vsi" ]]; then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME is missing. Syntax: bluexport_api.sh -vsistart VSI_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME is missing. Syntax: bluexport_api.sh -vsistart VSI_NAME" 1
 	fi
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting VSI $vsi ===" "1"
@@ -4107,12 +4231,12 @@ do_vsi_oper() {
 	# Validate BOOT_MODE
 	case "$boot_mode" in
 		a|b|c|d) ;;
-		*) abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid BOOT_MODE '$boot_mode'. Valid values: a, b, c, d." ;;
+		*) abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid BOOT_MODE '$boot_mode'. Valid values: a, b, c, d." 1 ;;
 	esac
 	# Validate OPERATING_MODE
 	case "$operating_mode" in
 		manual|normal) ;;
-		*) abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid OPERATING_MODE '$operating_mode'. Valid values: normal, manual." ;;
+		*) abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid OPERATING_MODE '$operating_mode'. Valid values: normal, manual." 1 ;;
 	esac
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Setting VSI operation for $vsi ===" "1"
 	# Resolver VSI e workspace
@@ -4143,7 +4267,7 @@ do_vsi_task() {
 		dston|retrydump|consoleservice|iopreset|remotedstoff|remotedston|iopdump|dumprestart)
 			;;
 		*)
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid TASK '$task'. Valid values: dston, retrydump, consoleservice, iopreset, remotedstoff, remotedston, iopdump, dumprestart."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid TASK '$task'. Valid values: dston, retrydump, consoleservice, iopreset, remotedstoff, remotedston, iopdump, dumprestart." 1
 			;;
 	esac
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Running VSI task '$task' on $vsi ===" "1"
@@ -4175,13 +4299,13 @@ do_vsi_srcmon() {
 
 	if [[ -z "$vsi_name" || -z "$mode" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME or MODE is missing. Syntax: bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME or MODE is missing. Syntax: bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF" 1
 	fi
 
 	mode_u=$(echo "$mode" | tr '[:lower:]' '[:upper:]')
 	if [[ "$mode_u" != "START" && "$mode_u" != "SHUTOFF" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid MODE '$mode'. Use START or SHUTOFF. Syntax: bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid MODE '$mode'. Use START or SHUTOFF. Syntax: bluexport_api.sh -vsisrcmon VSI_NAME START|SHUTOFF" 1
 	fi
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Monitoring SRC/Status for VSI $vsi_name (mode: $mode_u) ===" "1"
@@ -4218,7 +4342,7 @@ do_vsi_srcmon() {
 	local srcmon_timeout_secs="${BLUEXPORT_SRCMON_TIMEOUT:-14400}"
 	local srcmon_fail_count=0
 	local srcmon_max_fail=10
-	local token_refresh_secs=2700
+	local token_refresh_secs="${iam_refresh_secs:-2700}"
 	local srcmon_now_ts srcmon_elapsed vsi_raw http_code
 
 	while true
@@ -4377,7 +4501,7 @@ do_vsi_attach_volumes() {
 
 	if [[ -z "$vol_common_name" || -z "$vsi_name" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments missing!! Syntax: bluexport_api.sh -attachvolumes VOLUMES_COMMON_NAME VSI_NAME" 1
 	fi
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Attaching volumes matching '$vol_common_name' to VSI $vsi_name ===" "1"
@@ -4410,7 +4534,7 @@ do_vsi_attach_volumes() {
 	vols_json=$(vol_ls 2>>"$log_file")
 	if [[ -z "$vols_json" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not list volumes via API (vol_ls)."
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not list volumes via API (vol_ls)." 1
 	fi
 
 	local match_lines
@@ -4505,7 +4629,7 @@ do_vsi_attach_volumes() {
 	then
 		if [[ -z "$boot_vol_id" ]]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name has no volumes attached, and I could not identify a boot volume among matches for '$vol_common_name'. Ensure the boot volume name includes the common string, or contains 'boot' in the name."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name has no volumes attached, and I could not identify a boot volume among matches for '$vol_common_name'. Ensure the boot volume name includes the common string, or contains 'boot' in the name." 1
 		fi
 
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - VSI has no volumes attached. Attaching BOOT volume first: $boot_vol_name ($boot_vol_id)" "1"
@@ -4516,7 +4640,7 @@ do_vsi_attach_volumes() {
 		if echo "$resp_boot" | jq -e '.code? != null or .error? != null or .description? != null' >/dev/null 2>&1
 		then
 			errmsg=$(echo "$resp_boot" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error attaching boot volume to $vsi_name: $errmsg"
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error attaching boot volume to $vsi_name: $errmsg" 1
 		fi
 
 		# Wait until boot volume is visible on VSI
@@ -4534,7 +4658,7 @@ do_vsi_attach_volumes() {
 			boot_try=$((boot_try + 1))
 			if (( boot_try >= max_boot_wait ))
 			then
-				abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Boot volume ($boot_vol_name / $boot_vol_id) did not become attached/visible on $vsi_name after ~10 minutes. Aborting."
+				abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Boot volume ($boot_vol_name / $boot_vol_id) did not become attached/visible on $vsi_name after ~10 minutes. Aborting." 1
 			fi
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Boot volume still attaching on $vsi_name... waiting 10 seconds (attempt $boot_try/$max_boot_wait)" "1"
 			sleep 10
@@ -4561,7 +4685,7 @@ do_vsi_attach_volumes() {
 		if echo "$resp_att" | jq -e '.code? != null or .error? != null or .description? != null' >/dev/null 2>&1
 		then
 			errmsg=$(echo "$resp_att" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error attaching volumes to $vsi_name: $errmsg"
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error attaching volumes to $vsi_name: $errmsg" 1
 		fi
 	fi
 
@@ -4592,7 +4716,7 @@ do_vsi_attach_volumes() {
 		cur=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file")
 		if [[ -z "$cur" || "$cur" == "null" ]]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not read attached volumes count while waiting for attaches."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not read attached volumes count while waiting for attaches." 1
 		fi
 		if (( cur >= expected_min ))
 		then
@@ -4601,7 +4725,7 @@ do_vsi_attach_volumes() {
 		i=$((i + 1))
 		if (( i >= max_wait ))
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name did not reach $expected_min attached volumes after ~10 minutes (last count=$cur)."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name did not reach $expected_min attached volumes after ~10 minutes (last count=$cur)." 1
 		fi
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes still attaching on $vsi_name... currently $cur/$expected_min attached. Waiting 10 seconds (attempt $i/$max_wait)" "1"
 		sleep 10
@@ -4623,7 +4747,7 @@ do_vsi_detach_volumes() {
 	local vsi_name="$1"
 	if [[ -z "$vsi_name" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME is missing. Syntax: bluexport_api.sh -detachvolumes VSI_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - VSI_NAME is missing. Syntax: bluexport_api.sh -detachvolumes VSI_NAME" 1
 	fi
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Detaching ALL volumes from VSI $vsi_name ===" "1"
@@ -4665,7 +4789,7 @@ do_vsi_detach_volumes() {
 	if echo "$resp_det" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
 	then
 		errmsg=$(echo "$resp_det" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error detaching volumes from $vsi_name: $errmsg"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error detaching volumes from $vsi_name: $errmsg" 1
 	fi
 
 	# Wait until no volumes are attached (async)
@@ -4677,7 +4801,7 @@ do_vsi_detach_volumes() {
 		cur_count=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes | length' 2>>"$log_file")
 		if [[ -z "$cur_count" || "$cur_count" == "null" ]]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not read attached volumes count while waiting for detaches."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not read attached volumes count while waiting for detaches." 1
 		fi
 		if (( cur_count == 0 ))
 		then
@@ -4686,7 +4810,7 @@ do_vsi_detach_volumes() {
 		i=$((i + 1))
 		if (( i >= max_wait ))
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name still has $cur_count attached volumes after ~10 minutes."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - VSI $vsi_name still has $cur_count attached volumes after ~10 minutes." 1
 		fi
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volumes still detaching from $vsi_name... currently $cur_count attached. Waiting 10 seconds (attempt $i/$max_wait)" "1"
 		sleep 10
@@ -4701,7 +4825,7 @@ do_img_delete() {
 	local img_name="$1"
 	if [[ -z "$img_name" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - IMG_NAME is missing. Syntax: bluexport_api.sh -imgdel IMG_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - IMG_NAME is missing. Syntax: bluexport_api.sh -imgdel IMG_NAME" 1
 	fi
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Starting Image Delete for $img_name in all Workspaces ===" "1"
 	# Workspaces: use keys list, and ALWAYS resolve display name from JSON (no fragile wsname/allws ordering tricks)
@@ -4929,13 +5053,12 @@ img_import() {
 	local cos_endpoint head_http head_body
 	cos_endpoint="https://s3.${cos_region}.cloud-object-storage.appdomain.cloud/${import_bucket}/${img_name}"
 	head_body="/tmp/bluexport_imgimport_head_$$.out"
-	if [[ "$account_type" == "OTHERACCOUNT" ]]
-	then
-		curl --help all 2>/dev/null | grep -q -- '--aws-sigv4' || abort "$(date +%Y-%m-%d_%H:%M:%S) - This system's curl does not support --aws-sigv4 (requires curl 7.75+, used for the OTHERACCOUNT COS bucket/object pre-check). On IBM i PASE, install a newer curl via yum/dnf from /QOpenSys/pkgs, or use the CURRACCOUNT bearer-auth path instead." 1
-		head_http=$(curl -sS -o "$head_body" -w "%{http_code}" --connect-timeout 30 --max-time 120 --aws-sigv4 "aws:amz:${cos_region}:s3" --user "${cos_accesskey}:${cos_secretkey}" -I "$cos_endpoint" 2>>"$log_file")
-	else
-		head_http=$(curl -sS -o "$head_body" -w "%{http_code}" --connect-timeout 30 --max-time 120 -I "$cos_endpoint" -H "$header_auth" 2>>"$log_file")
-	fi
+	# (1.19.0) Always --aws-sigv4 with the same cos_accesskey:cos_secretkey that go into
+	# the import payload - never an IAM bearer token, even for CURRACCOUNT - so this
+	# pre-check validates the exact credentials the import itself will use, same as
+	# the export pre-check already does (see its own comment above).
+	curl --help all 2>/dev/null | grep -q -- '--aws-sigv4' || abort "$(date +%Y-%m-%d_%H:%M:%S) - This system's curl does not support --aws-sigv4 (requires curl 7.75+, used for the COS bucket/object pre-check). On IBM i PASE, install a newer curl via yum/dnf from /QOpenSys/pkgs." 1
+	head_http=$(curl -sS -o "$head_body" -w "%{http_code}" --connect-timeout 30 --max-time 120 --aws-sigv4 "aws:amz:${cos_region}:s3" --user "${cos_accesskey}:${cos_secretkey}" -I "$cos_endpoint" 2>>"$log_file")
 	cat "$head_body" >> "$log_file" 2>/dev/null
 	rm -f "$head_body"
 	case "$head_http" in
@@ -5149,9 +5272,11 @@ img_export() {
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Target Bucket Region: $export_bucket_region" "1"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Account Type: $account_type" "1"
 
-	# Procurar a imagem por nome em todas as workspaces (mesmo padrão do do_img_delete)
+	# (1.19.0) Every workspace is searched and every match counted, same as do_img_delete
+	# since 1.18.6 - before, the first match in the first workspace won (head -n1, then
+	# break), so an ambiguous name silently exported whichever image the API listed first.
 	read -r -a allws_array <<< "$allws"
-	local IMAGE_ID="" found_ws="" found_ws_name=""
+	local IMAGE_ID="" found_ws="" found_ws_name="" match_count=0 match_list=""
 	for ws in "${allws_array[@]}"
 	do
 		CRN=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$bluexscrt")
@@ -5179,18 +5304,28 @@ img_export() {
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Could not retrieve image list via API in workspace $full_ws_name, skipping." "1"
 			continue
 		fi
-		IMAGE_ID=$(echo "$imgs_json" | jq -r --arg name "$img_name" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file" | head -n1)
-		if [[ -n "$IMAGE_ID" && "$IMAGE_ID" != "null" ]]
-		then
+		local ws_ids one_id
+		ws_ids=$(echo "$imgs_json" | jq -r --arg name "$img_name" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file")
+		for one_id in $ws_ids
+		do
+			[ -z "$one_id" ] && continue
+			[ "$one_id" = "null" ] && continue
+			match_count=$((match_count + 1))
+			match_list="$match_list
+  - $full_ws_name: $one_id"
+			IMAGE_ID="$one_id"
 			found_ws="$ws"
 			found_ws_name="$full_ws_name"
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image $img_name found in Workspace $found_ws_name with ID: $IMAGE_ID" "1"
-			break
-		fi
+		done
 	done
-	if [[ -z "$IMAGE_ID" || "$IMAGE_ID" == "null" ]]
+	if [ "$match_count" -eq 0 ]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Image with name $img_name not found in any Workspace." 1
+	fi
+	if [ "$match_count" -gt 1 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image name $img_name is ambiguous: $match_count images carry it. Nothing exported. Matches:$match_list" 1
 	fi
 
 	local cos_accesskey cos_secretkey cos_region
@@ -5301,8 +5436,11 @@ img_export_monitor() {
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - === Looking up last export job for image $img_name ===" "1"
 
+	# (1.19.0) Every workspace is searched and every match counted, same as do_img_delete
+	# since 1.18.6 - before, the first match in the first workspace won (head -n1, then
+	# break), so an ambiguous name silently reattached to whichever image the API listed first.
 	read -r -a allws_array <<< "$allws"
-	local IMAGE_ID="" found_ws="" found_ws_name=""
+	local IMAGE_ID="" found_ws="" found_ws_name="" match_count=0 match_list=""
 	for ws in "${allws_array[@]}"
 	do
 		CRN=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$bluexscrt")
@@ -5330,18 +5468,28 @@ img_export_monitor() {
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Could not retrieve image list via API in workspace $full_ws_name, skipping." "1"
 			continue
 		fi
-		IMAGE_ID=$(echo "$imgs_json" | jq -r --arg name "$img_name" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file" | head -n1)
-		if [[ -n "$IMAGE_ID" && "$IMAGE_ID" != "null" ]]
-		then
+		local ws_ids one_id
+		ws_ids=$(echo "$imgs_json" | jq -r --arg name "$img_name" '.images[]? | select(.name == $name) | .imageID' 2>>"$log_file")
+		for one_id in $ws_ids
+		do
+			[ -z "$one_id" ] && continue
+			[ "$one_id" = "null" ] && continue
+			match_count=$((match_count + 1))
+			match_list="$match_list
+  - $full_ws_name: $one_id"
+			IMAGE_ID="$one_id"
 			found_ws="$ws"
 			found_ws_name="$full_ws_name"
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Image $img_name found in Workspace $found_ws_name with ID: $IMAGE_ID" "1"
-			break
-		fi
+		done
 	done
-	if [[ -z "$IMAGE_ID" || "$IMAGE_ID" == "null" ]]
+	if [ "$match_count" -eq 0 ]
 	then
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Image with name $img_name not found in any Workspace." 1
+	fi
+	if [ "$match_count" -gt 1 ]
+	then
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Image name $img_name is ambiguous: $match_count images carry it. Nothing done. Matches:$match_list" 1
 	fi
 
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Retrieving last image export job for image $img_name..." "1"
@@ -5792,7 +5940,7 @@ case $1 in
 	then
 		echoscreen "Flag -j selected, but Arguments Missing!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
 		usage_j
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but Arguments Missing!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Flag -j selected, but Arguments Missing!! Syntax: bluexport_api.sh -j VSI_NAME IMAGE_NAME" 1
 	fi
 	if [ $# -gt 3 ]
 	then
@@ -5820,12 +5968,12 @@ case $1 in
 	if [ $# -lt 5 ]
 	then
 		usage_a
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single" 1
 	fi
 	if [ $# -gt 5 ]
 	then
 		usage_a
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single" 1
 	fi
 	destination=$4
 	capture_img_name=${3^^}
@@ -5834,7 +5982,7 @@ case $1 in
 	then
 		if [[ $destination == "both" ]] || [[ $destination == "cloud-storage" ]]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Destination $destination is not valid with hourly and daily parameter!! Only image-catalog is possible."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Destination $destination is not valid with hourly and daily parameter!! Only image-catalog is possible." 1
 		fi
 		if [[ $5 == "hourly" ]]
 		then
@@ -5856,7 +6004,7 @@ case $1 in
 	then
 		single=1
 	else
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Reocurrence must be weekly or monthly or single!"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Reocurrence must be weekly or monthly or single!" 1
 	fi
 	if [[ $1 == "-ta" ]]
 	then
@@ -5891,12 +6039,12 @@ case $1 in
 	if [ $# -lt 6 ]
 	then
 		usage_x
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single" 1
 	fi
 	if [ $# -gt 6 ]
 	then
 		usage_x
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 EXCLUDE_NAME VSI_NAME IMAGE_NAME both|image-catalog|cloud-storage hourly|daily|weekly|monthly|single" 1
 	fi
 	# Fix (1.18.4): destination is assigned HERE, before the recurrence check reads it.
 	# It used to be assigned 46 lines further down, so the check below compared an empty
@@ -5909,7 +6057,7 @@ case $1 in
 	then
 		if [[ $destination == "both" ]] || [[ $destination == "cloud-storage" ]]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Destination $destination is not valid with hourly and daily parameter!! Only image-catalog is possible."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Destination $destination is not valid with hourly and daily parameter!! Only image-catalog is possible." 1
 		fi
 		if [[ $6 == "hourly" ]]
 		then
@@ -5938,7 +6086,7 @@ case $1 in
 	then
 		single=1
 	else
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Reocurrence must be weekly or monthly or single!"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Reocurrence must be weekly or monthly or single!" 1
 	fi
 	if [[ $1 == "-tx" ]]
 	then
@@ -5978,17 +6126,17 @@ case $1 in
 	if [ $# -lt 4 ]
 	then
 		usage_vchtier
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO" 1
 	fi
 	if [ $# -gt 4 ]
 	then
 		usage_vchtier
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO" 1
 	fi
 	# Validate STORAGE TIER (vchtier)
 	if [[ "$tier" != "tier0" && "$tier" != "tier1" && "$tier" != "tier3" && "$tier" != "tier5k" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Invalid STORAGE TIER '$tier'. Valid values: 0 | 1 | 3 | 5k"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Invalid STORAGE TIER '$tier'. Valid values: 0 | 1 | 3 | 5k" 1
 	fi
 	IFS=' ' read -r -a volchtier_names <<< "$3"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Common name of volumes to change to tier $tier: ${volchtier_names[*]}" "1"
@@ -5999,6 +6147,7 @@ case $1 in
 	ins_vol_ls | jq -r --argjson patterns "$vol_patterns_json" '.volumes[]? | select([ $patterns[] as $p | (.name | contains($p)) ] | any) | "\(.volumeID) \(.name)"' > "$volumes_file" 2>>"$log_file"
 	volumes=$(awk '{print $1}' "$volumes_file" | paste -sd, -)
 	volumes_name=$(awk '{print $2}' "$volumes_file" | tr '\n' ' ')
+	confirm_or_abort "Change tier of volumes matching \"${volchtier_names[*]}\" on VSI $vsi to $tier: $volumes_name" "$vsi"
 	vchtier
     ;;
 
@@ -6009,17 +6158,17 @@ case $1 in
 	if [ $# -lt 3 ]
 	then
 		usage_insvchtier
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport_api.sh $1 VSI_NAME TIER_TO_CHANGE_TO"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments missing! Syntax: bluexport_api.sh $1 VSI_NAME TIER_TO_CHANGE_TO" 1
 	fi
 	if [ $# -gt 3 ]
 	then
 		usage_insvchtier
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME TIER_TO_CHANGE_TO"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments! Syntax: bluexport_api.sh $1 VSI_NAME TIER_TO_CHANGE_TO" 1
 	fi
 	# Validate STORAGE TIER (insvchtier)
 	if [[ "$tier" != "tier0" && "$tier" != "tier1" && "$tier" != "tier3" && "$tier" != "tier5k" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Invalid STORAGE TIER '$tier'. Valid values: 0 | 1 | 3 | 5k"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Invalid STORAGE TIER '$tier'. Valid values: 0 | 1 | 3 | 5k" 1
 	fi
 	vsi=$2
 	vsi_id_bluexscrt
@@ -6028,6 +6177,7 @@ case $1 in
 	ins_vol_ls | jq -r '.volumes[]? | "\(.volumeID) \(.name)"' > "$volumes_file" 2>>"$log_file"
 	volumes=$(awk '{print $1}' "$volumes_file" | paste -sd, -)
 	volumes_name=$(awk '{print $2}' "$volumes_file" | tr '\n' ' ')
+	confirm_or_abort "Change tier of ALL volumes attached to VSI $vsi to $tier: $volumes_name" "$vsi"
 	vchtier
     ;;
 
@@ -6051,7 +6201,7 @@ case $1 in
 		if [ $# -gt 2 ]
 		then
 			usage_chscrt
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -chscrt bluexscrt_file_name  (use full path, e.g. /home/user/bluexscrt_new.json)"
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh -chscrt bluexscrt_file_name  (use full path, e.g. /home/user/bluexscrt_new.json)" 1
 		fi
 		new_scrt="$2"
 		if [ ! -f "$new_scrt" ]
@@ -6088,11 +6238,11 @@ case $1 in
 		# Validate choice
 		if ! [[ "$choice" =~ ^[0-9]+$ ]]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid selection (not a number)."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid selection (not a number)." 1
 		fi
 		if (( choice < 1 || choice > ${#scrt_files[@]} ))
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid selection (out of range)."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid selection (out of range)." 1
 		fi
 		new_scrt="${scrt_files[$((choice-1))]}"
 	fi
@@ -6127,7 +6277,7 @@ case $1 in
 				mkdir -p "$log_dir" 2>/dev/null
 				if [ $? -ne 0 ]
 				then
-					abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not create directory $log_dir. Aborting..."
+					abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not create directory $log_dir. Aborting..." 1
 				fi
 			else
 				abort "`date +%Y-%m-%d_%H:%M:%S` - Aborting by user choice (log directory not created)."
@@ -6143,7 +6293,7 @@ case $1 in
 				: > "$new_log" 2>/dev/null
 				if [ $? -ne 0 ]
 				then
-					abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not create log file $new_log. Aborting..."
+					abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not create log file $new_log. Aborting..." 1
 				fi
 				chmod 600 "$new_log" 2>/dev/null
 			else
@@ -6165,7 +6315,7 @@ case $1 in
   -viewscrt)
     if [ $# -gt 1 ]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1" 1
 	fi
 	scrt_in_use=$(jq -r '.bluexscrt' "$conf_file")
 	abort "`date +%Y-%m-%d_%H:%M:%S` - Secret file in use is $scrt_in_use"
@@ -6176,12 +6326,12 @@ case $1 in
 	if [ $# -lt 5 ]
 	then
 		usage_snapcr
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|\"VOL1,VOL2,...\""
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|\"VOL1,VOL2,...\"" 1
 	fi
 	if [ $# -gt 5 ]
 	then
 		usage_snapcr
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|\"VOL1,VOL2,...\""
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|\"DESCRIPTION\" 0|\"VOL1,VOL2,...\"" 1
 	fi
 	vsi="$2"
 	vsi_id_bluexscrt
@@ -6210,7 +6360,7 @@ case $1 in
 		then
 			snap_description=""
 		else
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|\"VOL1,VOL2,...\""
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|\"VOL1,VOL2,...\"" 1
 		fi
 	else
 		snap_description="$description_arg"
@@ -6224,7 +6374,7 @@ case $1 in
 			volumes_to_snap=""
 			volumes_to_echo="ALL"
 		else
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument VOLUMES must be 0 or comma separated volume names or IDs!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|\"VOL1,VOL2,...\""
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument VOLUMES must be 0 or comma separated volume names or IDs!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME 0|[\"DESCRIPTION\"] 0|\"VOL1,VOL2,...\"" 1
 		fi
 	else
 		volumes_to_snap="$volumes_arg"
@@ -6241,12 +6391,12 @@ case $1 in
 	if [ $# -lt 4 ]
 	then
 		usage_snapupd
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]" 1
 	fi
 	if [ $# -gt 4 ]
 	then
 	usage_snapupd
-	abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]" 1
 	fi
 	test=0
 	flagj=1
@@ -6274,7 +6424,7 @@ case $1 in
 				# 0 = manter o nome atual
 				new_name_echo=""
 			else
-				abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument NEW_SNAPSHOT_NAME must be 0 or a name!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument NEW_SNAPSHOT_NAME must be 0 or a name!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]" 1
 			fi
 		else
 			# Nome novo e diferente do atual
@@ -6298,7 +6448,7 @@ case $1 in
 				# 0 = manter descrição atual (vamos buscar ao snapshot)
 				keep_current_desc=1
 			else
-				abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]"
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Argument DESCRIPTION must be 0 or a phrase inside quotes!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME 0|[NEW_SNAPSHOT_NAME] 0|[\"DESCRIPTION\"]" 1
 			fi
 		else
 			# Nova descrição
@@ -6375,12 +6525,12 @@ case $1 in
 	if [ $# -lt 2 ]
 	then
 		usage_snapdel
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME" 1
 	fi
 	if [ $# -gt 2 ]
 	then
 		usage_snapdel
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SNAPSHOT_NAME" 1
 	fi
 	test=0
 	flagj=1
@@ -6430,12 +6580,12 @@ case $1 in
 	if [ $# -lt 3 ]
 	then
 		usage_snapres
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME" 1
 	fi
 	if [ $# -gt 3 ]
 	then
 		usage_snapres
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 VSI_NAME SNAPSHOT_NAME" 1
 	fi
 	test=0
 	flagj=1
@@ -6453,7 +6603,7 @@ case $1 in
 	# Too many arguments?
 	if [ $# -gt 1 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1" 1
 	fi
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing all snapshots in all workspaces!" "1"
@@ -6527,7 +6677,7 @@ case $1 in
 	# Too many arguments?
 	if [ $# -gt 1 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1" 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing compute and licences for all LPARs in all workspaces!" "1"
 	read -r -a allws_array <<< "$allws"
@@ -6591,7 +6741,7 @@ case $1 in
   -imglsall)
 	if [ $# -gt 1 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1" 1
 	fi
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Captured Images in all Workspaces !" "1"
@@ -6689,7 +6839,7 @@ case $1 in
 	# Too many arguments?
 	if [ $# -gt 1 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1" 1
 	fi
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all Volume Clones in all Workspaces !" "1"
@@ -6744,16 +6894,18 @@ case $1 in
     ;;
 
   -vclone)
-	# Args: REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME Replication(True|False) Rollback(True|False) TARGET_TIER volumes(ALL|id1,id2,...)
+	# (1.19.0) VOLUMES was documented here as IDs; it is names (ALL|name1,name2,...),
+	# resolved against ins_vol_ls below - see usage_vclone.
+	# Args: REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME Replication(True|False) Rollback(True|False) TARGET_TIER volumes(ALL|name1,name2,...)
 	if [ $# -lt 8 ]
 	then
 		usage_vclone
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) tier0|tier1|tier3|tier5k ALL|\"VOL1,VOL2,...\""
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) tier0|tier1|tier3|tier5k ALL|\"VOL1,VOL2,...\"" 1
 	fi
 	if [ $# -gt 8 ]
 	then
 		usage_vclone
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) tier0|tier1|tier3|tier5k ALL|\"VOL1,VOL2,...\""
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME VOLUME_BASE_NAME LPAR_NAME True|False(replication-enabled) True|False(rollback-prepare) tier0|tier1|tier3|tier5k ALL|\"VOL1,VOL2,...\"" 1
 	fi
 	test=0
 	vclone_name="$2"
@@ -6768,16 +6920,16 @@ case $1 in
 	# Validar replication / rollback
 	if [[ "$replication" != "true" && "$replication" != "false" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Replication value must be True or False...!"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Replication value must be True or False...!" 1
 	fi
 	if [[ "$rollback" != "true" && "$rollback" != "false" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Rollback value must be True or False...!"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Rollback value must be True or False...!" 1
 	fi
 	# Validar tier
 	if [[ "$target_tier" != "tier0" && "$target_tier" != "tier1" && "$target_tier" != "tier3" && "$target_tier" != "tier5k" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Tier must be tier0 or tier1 or tier3 or tier5k...!"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Tier must be tier0 or tier1 or tier3 or tier5k...!" 1
 	fi
 	# Garantir que não existe já um Volume Clone com este nome (via API)
 	existing_vclone_json=$(vol_cl_ls 2>>"$log_file")
@@ -6795,8 +6947,37 @@ case $1 in
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - No volumes found attached to VSI $vsi to clone."
 		fi
 	else
-		# Lista explícita de IDs, tal como passado na linha de comando
-		volumes_to_clone="$volumes_to_clone_arg"
+		# (1.19.0) The tokens are volume NAMES (see usage_vclone), not volumeIDs, but used
+		# to be sent to the API verbatim as volumeIDs. Resolve each comma-separated token
+		# against the volumes attached to this VSI: an exact name match uses that volume's
+		# volumeID, an exact volumeID match is used as-is, and a token that matches
+		# neither (or a name shared by more than one volume) aborts naming it.
+		vclone_vol_json=$(ins_vol_ls 2>>"$log_file")
+		vclone_resolved_ids=""
+		IFS=',' read -r -a vclone_req_array <<< "$volumes_to_clone_arg"
+		for vclone_tok in "${vclone_req_array[@]}"
+		do
+			vclone_tok_trimmed=$(echo "$vclone_tok" | xargs)
+			[ -z "$vclone_tok_trimmed" ] && continue
+			vclone_name_matches=$(echo "$vclone_vol_json" | jq -r --arg n "$vclone_tok_trimmed" '[.volumes[]? | select(.name == $n)] | length')
+			if [ "$vclone_name_matches" -eq 1 ]
+			then
+				vclone_resolved_id=$(echo "$vclone_vol_json" | jq -r --arg n "$vclone_tok_trimmed" '.volumes[]? | select(.name == $n) | .volumeID' | head -n1)
+			elif [ "$vclone_name_matches" -gt 1 ]
+			then
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume name '$vclone_tok_trimmed' matches more than one volume attached to VSI $vsi. Use its volumeID instead." 1
+			else
+				vclone_id_matches=$(echo "$vclone_vol_json" | jq -r --arg id "$vclone_tok_trimmed" '[.volumes[]? | select(.volumeID == $id)] | length')
+				if [ "$vclone_id_matches" -ge 1 ]
+				then
+					vclone_resolved_id="$vclone_tok_trimmed"
+				else
+					abort "$(date +%Y-%m-%d_%H:%M:%S) - '$vclone_tok_trimmed' is neither a volume name nor a volumeID attached to VSI $vsi." 1
+				fi
+			fi
+			vclone_resolved_ids="${vclone_resolved_ids:+$vclone_resolved_ids,}$vclone_resolved_id"
+		done
+		volumes_to_clone="$vclone_resolved_ids"
 	fi
 	# Validar que temos pelo menos 2 volumes
 	IFS=',' read -r -a vclone_array <<< "$volumes_to_clone"
@@ -6808,6 +6989,7 @@ case $1 in
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - This is the list of volumes that will be cloned: $volumes_to_clone" "1"
 	# Guardar a lista para as funções seguintes
 	volumes_to_clone="$volumes_to_clone"
+	confirm_or_abort "Create Volume Clone Request '$vclone_name' cloning volumes: $volumes_to_clone (target tier $target_tier)" "$vclone_name"
 	do_volume_clone
 	do_volume_clone_start
 	do_volume_clone_execute
@@ -6819,12 +7001,12 @@ case $1 in
 	if [ $# -lt 2 ]
 	then
 		usage_vclonedel
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes" 1
 	fi
 	if [ $# -gt 3 ]
 	then
 	usage_vclonedel
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes"
+	abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes" 1
 	fi
 	test=0
 	found=0
@@ -6833,7 +7015,13 @@ case $1 in
 	# Validar o modo
 	if [[ "$delete_mode" != "0" && "$delete_mode" != "delete_volumes" ]]
 	then
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid parameter for delete_volumes. Use 0 or delete_volumes. Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Invalid parameter for delete_volumes. Use 0 or delete_volumes. Syntax: bluexport_api.sh $1 REQUEST_CLONE_NAME 0|delete_volumes" 1
+	fi
+	if [[ "$delete_mode" == "delete_volumes" ]]
+	then
+		confirm_or_abort "Delete Volume Clone Request '$vclone_name' AND delete the volumes it produced" "$vclone_name"
+	else
+		confirm_or_abort "Delete Volume Clone Request '$vclone_name' (the cloned volumes themselves are kept)" "$vclone_name"
 	fi
 	# Converter 'wsnames' (colon-separated) para array
 	IFS=':' read -r -a wsnames_array <<< "$wsnames"
@@ -6870,7 +7058,7 @@ case $1 in
 		VOL_CLONE_ID=$(vol_cl_ls | jq -r --arg vclname "$vclone_name" '.volumesClone[]? | select(.name == $vclname) | .volumesCloneID')
 		if [[ -z "$VOL_CLONE_ID" || "$VOL_CLONE_ID" == "null" ]]
 		then
-			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not retrieve volumesCloneID for $vclone_name in workspace $full_ws_name."
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not retrieve volumesCloneID for $vclone_name in workspace $full_ws_name." 1
 		fi
 		# Se o utilizador pediu delete_volumes, apagar primeiro os volumes clone
 		if [[ "$delete_mode" == "delete_volumes" ]]
@@ -6906,7 +7094,7 @@ EOF
 					# 1) Transport-level failure (curl really failed)
 					if [[ $ret -ne 0 ]]
 					then
-						abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - vol_bdel call failed (curl rc=$ret) while deleting cloned volumes for $vclone_name."
+						abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - vol_bdel call failed (curl rc=$ret) while deleting cloned volumes for $vclone_name." 1
 					fi
 					# 2) API-level failure (HTTP 400 etc, returned as JSON but curl rc=0)
 					if [[ -n "$resp_bdel" ]] && echo "$resp_bdel" | jq . >/dev/null 2>&1
@@ -6915,13 +7103,13 @@ EOF
 						if echo "$resp_bdel" | jq -e '(.code? != null) or (.error? != null) or (.errors? != null)' >/dev/null 2>&1
 						then
 							errmsg=$(echo "$resp_bdel" | jq -r '.description // .message // .error // (.errors[0] // empty) // "Unknown API error"' 2>/dev/null)
-							abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error deleting cloned volumes for $vclone_name: $errmsg"
+							abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error deleting cloned volumes for $vclone_name: $errmsg" 1
 						fi
 					else
 						# Non-JSON error body fallback
 						if echo "$resp_bdel" | grep -qi "Bad Request\|in-use\|migrating\|cannot be deleted"
 						then
-							abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error deleting cloned volumes for $vclone_name. API response indicates volumes cannot be deleted (in-use/migrating/group)."
+							abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error deleting cloned volumes for $vclone_name. API response indicates volumes cannot be deleted (in-use/migrating/group)." 1
 						fi
 					fi
 					echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Cloned volumes successfully deleted for $vclone_name." "1"
@@ -6951,12 +7139,12 @@ EOF
 	if [ $# -lt 5 ]
 	then
 		usage_creategrs
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME" 1
 	fi
 	if [ $# -gt 5 ]
 	then
 		usage_creategrs
-		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME"
+		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUMES_NAME" 1
 	fi
 	test=0
 	flagj=1    # não precisamos de iASP / flush aqui
@@ -7028,12 +7216,12 @@ EOF
 	if [ $# -lt 5 ]
 	then
 		usage_deletegrs
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES" 1
 	fi
 	if [ $# -gt 5 ]
 	then
 		usage_deletegrs
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME SOURCE_VOLUME_NAMES" 1
 	fi
 	test=0
 	flagj=1    # não precisamos de iASP / flush aqui
@@ -7070,12 +7258,12 @@ EOF
 	if [ $# -lt 4 ]
 	then
 		usage_grsfailover
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]" 1
 	fi
 	if [ $# -gt 5 ]
 	then
 		usage_grsfailover
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_ATTACH|ATTACH [TARGET_VSI]" 1
 	fi
 	test=0
 	flagj=1
@@ -7092,7 +7280,7 @@ EOF
 		target_vsi="$5"
 	elif [[ "$attach_mode" != "NO_ATTACH" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Invalid MODE '$attach_mode'. Use NO_ATTACH or ATTACH."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Invalid MODE '$attach_mode'. Use NO_ATTACH or ATTACH." 1
 	fi
 	do_grs_failover
      ;;
@@ -7102,7 +7290,7 @@ EOF
 	if [ $# -ne 5 ]
 	then
 		usage_grscancelfailover
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI VG_NAME NO_DETACH|DETACH TARGET_VSI" 1
 	fi
 	test=0
 	flagj=1
@@ -7112,7 +7300,7 @@ EOF
 	target_vsi="$5"
 	if [[ "$detach_mode" != "NO_DETACH" && "$detach_mode" != "DETACH" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Invalid MODE '$detach_mode'. Use NO_DETACH or DETACH."
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Invalid MODE '$detach_mode'. Use NO_DETACH or DETACH." 1
 	fi
 	do_grs_cancel_failover
      ;;
@@ -7122,7 +7310,7 @@ EOF
 	if [ $# -ne 4 ]
 	then
 		usage_grsfailback
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME" 1
 	fi
 	test=0
 	flagj=1
@@ -7137,7 +7325,7 @@ EOF
 	if [ $# -ne 4 ]
 	then
 		usage_grsreversereplica
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing/Invalid!! Syntax: bluexport_api.sh $1 SOURCE_VSI TARGET_VSI VG_NAME" 1
 	fi
 	test=0
 	flagj=1
@@ -7219,7 +7407,7 @@ EOF
 	# Lista todos os buckets por COS instance definido em .cos_instances no bluexscrt
 	if [ $# -gt 1 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1" 1
 	fi
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting Listing all COS buckets for all COS instances defined in $bluexscrt ===" "1"
@@ -7255,7 +7443,7 @@ EOF
 		ret=$?
 		if [ $ret -ne 0 ]
 		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - COS bucket listing failed (curl rc=$ret). Likely no internet / DNS / TLS. See log: $log_file"
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - COS bucket listing failed (curl rc=$ret). Likely no internet / DNS / TLS. See log: $log_file" 1
 		fi
 		# Guardar XML bruto no log para debug
 		echo "$buckets_xml" >>"$log_file"
@@ -7300,7 +7488,7 @@ EOF
 	# Lista objetos de um bucket COS escolhido interativamente
 	if [ $# -gt 1 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh -bucketlsobjs"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh -bucketlsobjs" 1
 	fi
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting interactive COS bucket objects listing ===" "1"
@@ -7370,7 +7558,7 @@ EOF
 	ret=$?
 	if [ $ret -ne 0 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - COS bucket listing failed (curl rc=$ret). Likely no internet / DNS / TLS. See log: $log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - COS bucket listing failed (curl rc=$ret). Likely no internet / DNS / TLS. See log: $log_file" 1
 	fi
 	echo "$buckets_xml" >>"$log_file"
 	if [[ -z "$buckets_xml" ]]
@@ -7468,12 +7656,12 @@ EOF
 	if [ $# -lt 3 ]
 	then
 		usage_restorefromarchive
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Arguments Missing!! Syntax: bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]" 1
 	fi
 	if [ $# -gt 5 ]
 	then
 		usage_restorefromarchive
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh -restorefromarchive BUCKET OBJECT [DAYS] [ARCHIVE_TYPE]" 1
 	fi
 	test=0
 	bucket="$2"
@@ -7488,7 +7676,7 @@ EOF
 	# Delete a single object from a COS bucket (interactive)
 	if [ $# -gt 1 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh -bucketdelobj"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh -bucketdelobj" 1
 	fi
 	test=0
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting interactive COS bucket object delete ===" "1"
@@ -7524,7 +7712,7 @@ EOF
 	do
 		printf "Select COS instance index [1-%d]: " "$cos_count" > /dev/tty
 		if ! read -r cos_choice < /dev/tty; then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..." 1
 		fi
 		if ! echo "$cos_choice" | grep -Eq '^[0-9]+$'; then
 			echo "Invalid input. Please enter a number between 1 and $cos_count." > /dev/tty
@@ -7557,7 +7745,7 @@ EOF
 	ret=$?
 	if [ $ret -ne 0 ]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - COS bucket listing failed (curl rc=$ret). Likely no internet / DNS / TLS. See log: $log_file"
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - COS bucket listing failed (curl rc=$ret). Likely no internet / DNS / TLS. See log: $log_file" 1
 	fi
 	echo "$buckets_xml" >>"$log_file"
 	if [[ -z "$buckets_xml" ]]
@@ -7597,7 +7785,7 @@ EOF
 	do
 		printf "Select bucket index [1-%d]: " "$bucket_count" > /dev/tty
 		if ! read -r bucket_choice < /dev/tty; then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..." 1
 		fi
 		if ! echo "$bucket_choice" | grep -Eq '^[0-9]+$'; then
 			echo "Invalid input. Please enter a number between 1 and $bucket_count." > /dev/tty
@@ -7652,7 +7840,7 @@ EOF
 	do
 		printf "Select object index to DELETE [1-%d]: " "$obj_count" > /dev/tty
 		if ! read -r obj_choice < /dev/tty; then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..."
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - No input received from terminal. Aborting..." 1
 		fi
 		if ! echo "$obj_choice" | grep -Eq '^[0-9]+$'; then
 			echo "Invalid input. Please enter a number between 1 and $obj_count." > /dev/tty
@@ -7700,7 +7888,7 @@ EOF
 	then
 		help
 	fi
-	abort "`date +%Y-%m-%d_%H:%M:%S` - Missing or invalid Flag!"
+	abort "`date +%Y-%m-%d_%H:%M:%S` - Missing or invalid Flag!" 1
     ;;
 esac
 ####  END: Iniciate Log and Validate Arguments  ####

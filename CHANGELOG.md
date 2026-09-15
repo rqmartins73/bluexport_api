@@ -10,6 +10,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.19.0] - 2026-09-15 (`bluexport_api.sh`)
+
+### Fixed
+
+- **A failed run could still exit 0.** `abort()` itself is unchanged (it still exits
+  `${2:-0}`), but 198 of its call sites that report a failure (FAILED/ERROR/Invalid/
+  not found/missing/"Too many arguments"/"Arguments Missing"/not valid/must be/Could
+  not/Unable/denied/refused/No input - "cancelled by user" is not a failure and was
+  left alone) passed no exit code at all, so a scheduler or IBM i job that only checks
+  the return code saw success. Each of those 198 lines now passes `1`. **This is the
+  one behaviour change callers can notice: a scheduler now stops on a failure it used
+  to silently pass through.**
+- **A job poll that lost its status retried at a flat 30s, up to 10 times, with no
+  regard for a 429.** `job_get` now takes an optional header-file path (`curl -D`) and
+  a new `job_poll_delay()` backs `job_monitor` and `wait_for_job`'s retry off
+  exponentially (30s/60s/120s/240s, capped at 300s); on HTTP 429 the server's own
+  `Retry-After` (seconds form, read case-insensitively) is honoured when present.
+- **`dc_vsi_list` could blank `base_url`.** When the workspace's region had no matching
+  `base_<region>` variable, the indirect expansion silently produced an empty
+  `base_url` and every subsequent API call in that run would hit a bare host. It now
+  aborts (exit 1), naming the CRN and the unresolved region.
+- **`get_iam_token` ignored the token's own `expires_in`.** All three refresh timers
+  (`job_monitor`, `wait_for_job`, `vsi_source_monitor`'s poll) used a hardcoded 2700s
+  guess. `get_iam_token` now sets a global `iam_refresh_secs` to 75% of `expires_in`
+  (falling back to 2700 when it is absent, non-numeric, or under 120s), and all three
+  timers read `${iam_refresh_secs:-2700}`.
+- **`-imgexport` and `-je` (`img_export`, `img_export_monitor`) narrowed an ambiguous
+  image name to the first match** (`head -n1` then `break` on the first workspace with
+  a hit), same class of bug fixed for `-imgdel` in 1.18.6. Both now search every
+  workspace, count every match, and abort (exit 1) listing them when more than one
+  image carries the name.
+- **The image import pre-check used an IAM bearer token for CURRACCOUNT.** The export
+  pre-check has said since 1.18.6 that this check must always use `--aws-sigv4` with
+  the same `cos_accesskey:cos_secretkey` that go into the payload, so it validates the
+  credentials actually used; the import pre-check (`img_import`) now does the same
+  unconditionally, for both CURRACCOUNT and OTHERACCOUNT.
+- **`-vclone`'s explicit volume list was sent as volumeIDs even though the syntax asks
+  for volume NAMES.** Each comma-separated token is now resolved against `ins_vol_ls`:
+  an exact `name` match uses that volume's `volumeID`, an exact `volumeID` match is
+  used as-is, and a token matching neither (or a name shared by more than one volume)
+  aborts (exit 1) naming it. `ALL` is unchanged. The handler's `# Args:` comment, which
+  said `id1,id2,...`, now says `name1,name2,...` and points at `usage_vclone`.
+- **`vchtier` decided failure by grepping `Failed`/`Performing` out of accumulated JSON
+  - a pattern that never matched real API output - and never read `vol_act`'s HTTP
+  status.** A new `vol_act_status` wrapper (added alongside `vol_act`, which keeps its
+  other callers untouched) appends the HTTP status; `vchtier` now reads it per volume:
+  2xx is a change, a body containing "current storage tier" is "already at that tier"
+  (not an error), anything else is a failure reported with the API's
+  `.description // .message // .error`. The dead `grep -B2 Failed | grep Performing`
+  is removed, and the final "there were errors" abort now exits 1 (both `-vchtier` and
+  `-insvchtier` call this function).
+- **`-vclone`, `-vclonedel`, `-vchtier` and `-insvchtier` had no confirmation before
+  acting on live volumes/VSIs.** A new `confirm_or_abort "<what>" "<name>"` requires an
+  interactive operator (stdin and stdout both a TTY) to type the name back: the clone
+  request name for `-vclone`/`-vclonedel` (saying explicitly when `delete_volumes`
+  will also delete the produced volumes), the VSI name for the two tier flags. When
+  not interactive (IBM i batch, cron, pipes) or when `BLUEXPORT_ASSUME_YES=1`,
+  confirmation is skipped - one log line says so - so existing automation keeps
+  working unchanged.
+- **`do_volume_clone_start` checked the clone's status once, immediately after the
+  start POST**, which could catch it still mid-transition and fail a start that was
+  actually fine. It now polls every 5s with the same `vclone_time_left` (time bound)
+  and `vclone_failure` (added in 1.18.8) helpers `do_volume_clone_execute` already
+  uses, until `action == start` and `status == available`.
+
+### Changed
+
+- `BLUEXPORT_ASSUME_YES=1` is a new environment variable: set it to skip the new
+  interactive confirmations above without changing any other behaviour.
+
+IBM i / PASE: no new external dependencies - `curl -D`/`-w`, `jq`, `awk`, `date +%s`,
+`[ ]`, `case`, `read -r ... < /dev/tty` are all already used elsewhere in this script.
+`confirm_or_abort`'s TTY check (`[ -t 0 ] && [ -t 1 ]`) is false under IBM i batch/cron,
+so scheduled jobs skip the prompt exactly as before, unless they already read from a
+terminal.
+
 ## [1.18.8] - 2026-09-15 (`bluexport_api.sh`)
 
 ### Fixed
