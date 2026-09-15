@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.20.1] - 2026-09-15 (`bluexport_api.sh`)
+
+### Fixed
+
+- **`-grsfailover` and `-grscancelfailover` still took the first workspace that had the
+  consistencyGroupName.** 1.20.0 refuses several matches inside one workspace, but the scan
+  across the other configured workspaces stopped at the first hit. It now scans them all and
+  aborts (exit 1, before any change) when more than one workspace has a match.
+
+### IBM i / PASE
+
+- `echo | wc -w` and `[ ]` only.
+
 ## [1.20.0] - 2026-09-15 (`bluexport_api.sh`)
 
 ### Fixed

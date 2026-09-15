@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.20.0
+Version=1.20.1
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -3288,6 +3288,7 @@ do_grs_failover() {
 	local target_base_url=""
 	local target_vg_id=""
 
+	local tg_ws_list=""
 	for ws in $allws_keys
 	do
 		local ws_crn
@@ -3320,15 +3321,24 @@ do_grs_failover() {
 
 		if [[ -n "$found_id" && "$found_id" != "null" ]]
 		then
-			target_ws_key="$ws"
-			target_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name' "$bluexscrt")
-			target_ws_crn="$ws_crn"
-			target_cloud_instance_id="$CLOUD_INSTANCE_ID"
-			target_base_url="$base_url"
-			target_vg_id="$found_id"
-			break
+			# (1.20.1) Keep scanning: a second workspace with the same consistencyGroupName
+			# is ambiguous and must not be resolved by workspace order.
+			tg_ws_list="$tg_ws_list $ws"
+			if [[ -z "$target_vg_id" ]]
+			then
+				target_ws_key="$ws"
+				target_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name' "$bluexscrt")
+				target_ws_crn="$ws_crn"
+				target_cloud_instance_id="$CLOUD_INSTANCE_ID"
+				target_base_url="$base_url"
+				target_vg_id="$found_id"
+			fi
 		fi
 	done
+	if [ "$(echo $tg_ws_list | wc -w)" -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Groups with consistencyGroupName $cgname exist in more than one other workspace:$tg_ws_list. Aborting; nothing was changed." 1
+	fi
 
 	if [[ -z "$target_vg_id" ]]
 	then
@@ -3596,6 +3606,7 @@ do_grs_cancel_failover() {
 	local target_base_url=""
 	local target_vg_id=""
 
+	local tg_ws_list=""
 	for ws in $allws_keys
 	do
 		local ws_crn
@@ -3628,15 +3639,24 @@ do_grs_cancel_failover() {
 
 		if [[ -n "$found_id" && "$found_id" != "null" ]]
 		then
-			target_ws_key="$ws"
-			target_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name' "$bluexscrt")
-			target_ws_crn="$ws_crn"
-			target_cloud_instance_id="$CLOUD_INSTANCE_ID"
-			target_base_url="$base_url"
-			target_vg_id="$found_id"
-			break
+			# (1.20.1) Keep scanning: a second workspace with the same consistencyGroupName
+			# is ambiguous and must not be resolved by workspace order.
+			tg_ws_list="$tg_ws_list $ws"
+			if [[ -z "$target_vg_id" ]]
+			then
+				target_ws_key="$ws"
+				target_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name' "$bluexscrt")
+				target_ws_crn="$ws_crn"
+				target_cloud_instance_id="$CLOUD_INSTANCE_ID"
+				target_base_url="$base_url"
+				target_vg_id="$found_id"
+			fi
 		fi
 	done
+	if [ "$(echo $tg_ws_list | wc -w)" -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Volume Groups with consistencyGroupName $cgname exist in more than one other workspace:$tg_ws_list. Aborting; nothing was changed." 1
+	fi
 
 	if [[ -z "$target_vg_id" ]]
 	then
