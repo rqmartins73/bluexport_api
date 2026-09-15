@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.19.3
+Version=1.20.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -696,6 +696,13 @@ ins_vol_bdet() {
 	curl -sX DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
+# (1.20.0) Same request as ins_vol_bdet(), with the HTTP status appended as the last line,
+# used at the GRS delete/cancel-failover call sites (see grs_check_write). Other callers of
+# ins_vol_bdet() are unchanged.
+ins_vol_bdet_status() {
+	curl -sX DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
+}
+
 ins_ls() {
 	curl -sX GET "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
@@ -772,12 +779,26 @@ vol_att_multi() {
 	curl -sX POST "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
+# (1.20.0) Same request as vol_att_multi(), with the HTTP status appended as the last line,
+# used at the GRS failover ATTACH call sites (see grs_check_write). Other callers of
+# vol_att_multi() are unchanged.
+vol_att_multi_status() {
+	curl -sX POST "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
+}
+
 vol_del() {
 	curl -sX DELETE "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volumes/$VOL_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
 
 vol_bdel() {
 	curl -sX DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+}
+
+# (1.20.0) Same request as vol_bdel(), with the HTTP status appended as the last line, used
+# at the GRS delete call site (see grs_check_write). Other callers of vol_bdel() are
+# unchanged.
+vol_bdel_status() {
+	curl -sX DELETE "$base_url/pcloud/v2/cloud-instances/$CLOUD_INSTANCE_ID/volumes" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
 }
 
 vol_rcr() {
@@ -828,6 +849,12 @@ vg_cr() {
 	curl -sX POST "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
+# (1.20.0) Same request as vg_cr(), with the HTTP status appended as the last line, used at
+# the GRS create call site (see grs_check_write).
+vg_cr_status() {
+	curl -sX POST "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
+}
+
 vg_ls() {
 	curl -sX GET "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
@@ -848,12 +875,30 @@ vg_act() {
 	curl -sX POST "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups/$VOLUME_GROUP_ID/action" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
 }
 
+# (1.20.0) Same request as vg_act(), with the HTTP status appended as the last line, used at
+# the GRS failover/cancel-failover/failback/reverse-replica call sites (see grs_check_write).
+vg_act_status() {
+	curl -sX POST "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups/$VOLUME_GROUP_ID/action" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
+}
+
 vg_del() {
 	curl -sX DELETE "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups/$VOLUME_GROUP_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
 
+# (1.20.0) Same request as vg_del(), with the HTTP status appended as the last line, used at
+# the GRS delete call site (see grs_check_write).
+vg_del_status() {
+	curl -sX DELETE "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups/$VOLUME_GROUP_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -w '\n%{http_code}'
+}
+
 vg_upd() {
 	curl -sX PUT "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups/$VOLUME_GROUP_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+}
+
+# (1.20.0) Same request as vg_upd(), with the HTTP status appended as the last line, used at
+# the GRS delete call sites (see grs_check_write).
+vg_upd_status() {
+	curl -sX PUT "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volume-groups/$VOLUME_GROUP_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
 }
 
 
@@ -864,6 +909,12 @@ on_ls() {
 
 on_cr() {
 	curl -sX POST "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volumes/onboarding" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}"
+}
+
+# (1.20.0) Same request as on_cr(), with the HTTP status appended as the last line, used at
+# the GRS create call site (see grs_check_write).
+on_cr_status() {
+	curl -sX POST "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volumes/onboarding" -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -d "{$ACTIONS}" -w '\n%{http_code}'
 }
 
 on_get() {
@@ -1083,6 +1134,34 @@ vg_wait_sync_aux_to_master() {
 #### END:FUNCTIONS - Helper vg_wait_sync_aux_to_master
 
 #### START:FUNCTIONS - GRS Code Helpers ####
+## Helper: checks a GRS write call's HTTP status
+# (1.20.0) The GRS write calls (vg_cr, vg_act, vg_del, vg_upd, on_cr, the replicationEnabled
+# vol_act, ins_vol_bdet, vol_att_multi, vol_bdel) used to be piped straight to the log, or
+# checked only by grepping the body for ".code"/".error" - a field a non-2xx error body does
+# not have to carry. A rejected request could look identical to a success and the flow kept
+# going onto volumes/groups the API never touched. This reads the trailing HTTP status that
+# each call's "*_status" wrapper appends (same shape as vol_act_status/ins_cap) and aborts on
+# anything but 2xx, naming the step and, when given, what earlier steps in this call already
+# reached the API.
+# Args: $1 raw response (body + trailing "\n%{http_code}" line)  $2 step description
+#       $3 optional note on what was already sent before this step
+grs_check_write() {
+	local raw="$1" desc="$2" prior="${3:-}" code body api_msg
+	code="${raw##*$'\n'}"
+	body="${raw%$'\n'*}"
+	printf '%s\n' "$body" >>"$log_file"
+	if [[ ! "$code" =~ ^2[0-9][0-9]$ ]]
+	then
+		api_msg=$(printf '%s' "$body" | jq -r '.description // .message // .error // .errors[0].message // empty' 2>/dev/null)
+		if [[ -n "$prior" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - $desc (HTTP ${code:-?}): ${api_msg:-$body}. Note: $prior." 1
+		else
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - $desc (HTTP ${code:-?}): ${api_msg:-$body}." 1
+		fi
+	fi
+}
+
 ## Helper: check and enable replication on volumes, then wait until all are replicationEnabled=true
 chk_vol_rep() {
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking and enabling replication on source volumes if needed..." "1"
@@ -1096,7 +1175,11 @@ chk_vol_rep() {
 			flag=1
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume ID: $i replicationEnabled=false. Enabling replication..." "1"
 			ACTIONS='"replicationEnabled": true'
-			vol_act 2>>"$log_file" | tee -a "$log_file" #>/dev/null
+			# (1.20.0) HTTP status checked instead of just logged: a rejected
+			# replicationEnabled=true would otherwise wait forever below for a state
+			# the API never reached.
+			resp_rep=$(vol_act_status 2>>"$log_file")
+			grs_check_write "$resp_rep" "enabling replication on volume $i"
 		fi
 	done
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Replication check done." "1"
@@ -1104,10 +1187,17 @@ chk_vol_rep() {
 	then
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Some volumes had replicationEnabled=false and were changed to true. Rechecking until all are updated..." "1"
 		sleep 10
+		# (1.20.0) Bounded: 180 checks at 10s = 30 minutes.
+		local rep_wait=0
 		while true
 		do
 			if vol_ls | jq -r '.volumes[]? | "\(.name) \(.replicationEnabled)"' | grep -w "$vol_com_name" | grep false >/dev/null
 			then
+				rep_wait=$((rep_wait + 1))
+				if [ "$rep_wait" -ge 180 ]
+				then
+					abort "`date +%Y-%m-%d_%H:%M:%S` - chk_vol_rep did not finish: some $vol_com_name volumes still show replicationEnabled=false after 30 minutes." 1
+				fi
 				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - There are still volumes with replicationEnabled=false. Waiting 10 seconds..." "1"
 				sleep 10
 			else
@@ -1120,6 +1210,12 @@ chk_vol_rep() {
 
 ## Helper: wait until all volumes with the given prefix are in consistent_copying
 chk_vol_mirror() {
+	# (1.20.0) Bounded: volumes copy whole disks, so this defaults to 24h; override in
+	# minutes with BLUEXPORT_GRS_MIRROR_MAX_MIN. The sleep interval is 180s (3 minutes),
+	# so the loop count is ceil(max_min/3).
+	local max_min="${BLUEXPORT_GRS_MIRROR_MAX_MIN:-1440}"
+	local max_loops=$(( (max_min + 2) / 3 ))
+	local loop=0
 	while true
 	do
 		# Só volumes com o padrão vol_com_name e ainda em inconsistent_copying
@@ -1183,6 +1279,11 @@ chk_vol_mirror() {
 		then
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Reached 5 vol_rcr calls in this cycle. Remaining volumes will be checked in the next cycles..." "1"
 		fi
+		loop=$((loop + 1))
+		if [ "$loop" -ge "$max_loops" ]
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - chk_vol_mirror did not finish: volumes still inconsistent_copying after ${max_min} minutes: $(printf '%s' "$inc_vols" | tr '\n' ' ')" 1
+		fi
 		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Sleeping 180 seconds..." "1"
                 sleep 180
         done
@@ -1190,12 +1291,19 @@ chk_vol_mirror() {
 
 ## Helper: monitor onboarding status until completion
 chk_on_status() {
+	# (1.20.0) Bounded: 60 checks at 60s = 60 minutes.
+	local on_wait=0
 	while true
 	do
 		on_status=$(on_get | jq -r '.status' 2>>"$log_file")
 		if [[ "$on_status" == "RUNNING" ]]
 		then
 			on_progress=$(on_get | jq -r '.progress' 2>>"$log_file")
+			on_wait=$((on_wait + 1))
+			if [ "$on_wait" -ge 60 ]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - chk_on_status did not finish: onboarding still RUNNING at ${on_progress}% after 60 minutes." 1
+			fi
 			echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Onboarding status RUNNING at ${on_progress}% - waiting 60 seconds..." "1"
 			sleep 60
 		else
@@ -2755,8 +2863,8 @@ create_grs() {
 	json_vol_ids="${json_vol_ids%,}"
 	ACTIONS="\"name\":\"$vg_name\",\"volumeIDs\":[${json_vol_ids}]"
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Creating Volume Group $vg_name in source workspace with volumeIDs: [${json_vol_ids}]..." "1"
-	resp_vg=$(vg_cr 2>>"$log_file")
-	echo "$resp_vg" >>"$log_file"
+	resp_vg=$(vg_cr_status 2>>"$log_file")
+	grs_check_write "$resp_vg" "creating Volume Group $vg_name"
 	# Confirmar ID do VG
 	VOLUME_GROUP_ID=$(vg_ls | jq -r --arg vg_name "$vg_name" '.volumeGroups[]? | select(.name == $vg_name) | .id' 2>>"$log_file")
 	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]
@@ -2845,14 +2953,8 @@ EOF
 )
 	echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Starting auxiliary volume onboarding on target workspace for VSI $target_vsi." "1"
 	# Chamada ao onboarding e validação de erro
-	resp_on=$(on_cr 2>>"$log_file")
-	echo "$resp_on" >>"$log_file"
-	# Se a API devolver um objeto com campo .code (ex.: 400), abortamos
-	if echo "$resp_on" | jq -e '.code? != null' >/dev/null 2>&1
-	then
-		errmsg=$(echo "$resp_on" | jq -r '.message // .error // "Unknown error"' 2>/dev/null)
-		abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error creating volume onboarding: $errmsg" 1
-	fi
+	resp_on=$(on_cr_status 2>>"$log_file")
+	grs_check_write "$resp_on" "creating volume onboarding" "the source Volume Group was already created"
 	VOLUME_ONBOARDING_ID=$(on_ls | jq -r --arg desc "$ondesc" '[.onboardings[]? | select(.description == $desc)][-1].id' 2>>"$log_file")
 	if [[ -z "$VOLUME_ONBOARDING_ID" || "$VOLUME_ONBOARDING_ID" == "null" ]]
 	then
@@ -2931,7 +3033,8 @@ delete_grs() {
 		json_ids="${json_ids%,}"
 		ACTIONS="\"removeVolumes\":[${json_ids}]"
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Removing source volumes from VG $vg_name: [${json_ids}]..." "1"
-		vg_upd 2>>"$log_file" | tee -a "$log_file" #>/dev/null
+		resp_upd=$(vg_upd_status 2>>"$log_file")
+		grs_check_write "$resp_upd" "removing source volumes from VG $vg_name"
 		# 1.2 Esperar o VG ficar em estado empty
 		# (1.19.2) Bounded: 60 checks at 30s.
 		local vg_empty_wait=0
@@ -2953,7 +3056,8 @@ delete_grs() {
 	fi
 	# 1.3 Apagar o VG no source
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Deleting source Volume Group $vg_name..." "1"
-	vg_del 2>>"$log_file" | tee -a "$log_file" #>/dev/null
+	resp_del=$(vg_del_status 2>>"$log_file")
+	grs_check_write "$resp_del" "deleting source Volume Group $vg_name" "its member volumes were already removed"
 	# 1.4 Desativar replication nos volumes de origem (sem os apagar)
 	if [[ -n "$src_vol_ids" ]]; then
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Disabling replication on the source VG's member volumes..." "1"
@@ -2961,7 +3065,8 @@ delete_grs() {
 		do
 			VOL_ID="$vid"
 			ACTIONS='"replicationEnabled": false'
-			vol_act 2>>"$log_file" | tee -a "$log_file" #>/dev/null
+			resp_rep=$(vol_act_status 2>>"$log_file")
+			grs_check_write "$resp_rep" "disabling replication on source volume $vid" "the source Volume Group was already deleted"
 		done
 		# Esperar até todos ficarem replicationEnabled=false
 		# (1.19.2) Checks exactly those volumes, and a volume that cannot be read counts as
@@ -3036,7 +3141,8 @@ delete_grs() {
 			tg_json_ids="${tg_json_ids%,}"
 			ACTIONS="\"removeVolumes\":[${tg_json_ids}]"
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Removing target volumes from VG (CG: $cgname): [${tg_json_ids}]..." "1"
-			vg_upd 2>>"$log_file" | tee -a "$log_file" #>/dev/null
+			resp_tupd=$(vg_upd_status 2>>"$log_file")
+			grs_check_write "$resp_tupd" "removing target volumes from VG (CG: $cgname)" "the source side was already cleaned up"
 		fi
 	fi
 	####################################
@@ -3047,7 +3153,8 @@ delete_grs() {
 	# 3.1 Detach de todos os volumes (incluindo boot) do TARGET_VSI
 	ACTIONS='"detachAllVolumes": true, "detachPrimaryBootVolume": true'
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Detaching all volumes (including boot) from target VSI $target_vsi..." "1"
-	ins_vol_bdet 2>>"$log_file" | tee -a "$log_file" #>/dev/null
+	resp_bdet=$(ins_vol_bdet_status 2>>"$log_file")
+	grs_check_write "$resp_bdet" "detaching volumes from target VSI $target_vsi" "the target VG's volumes were already removed"
 	# Esperar até não haver volumes anexados
 	# (1.19.2) Bounded: 60 checks at 30s.
 	local detach_wait=0
@@ -3095,7 +3202,8 @@ delete_grs() {
 		tg_del_ids="${tg_del_ids%,}"
 		ACTIONS="\"volumeIDs\":[${tg_del_ids}]"
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Deleting auxiliary volumes on target: [${tg_del_ids}]..." "1"
-		vol_bdel 2>>"$log_file" | tee -a "$log_file" #>/dev/null
+		resp_vbdel=$(vol_bdel_status 2>>"$log_file")
+		grs_check_write "$resp_vbdel" "deleting auxiliary volumes on target" "the target VSI was already detached"
 	else
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No auxiliary volumes to delete on target." "1"
 	fi
@@ -3199,8 +3307,16 @@ do_grs_failover() {
 		# List VGs here and look for the same consistencyGroupName
 		local vg_tmp
 		vg_tmp=$(vg_ls 2>>"$log_file")
-		local found_id
-		found_id=$(echo "$vg_tmp" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file" | head -n1)
+		local found_id found_count
+		found_id=$(echo "$vg_tmp" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file")
+		# (1.20.0) head -n1 used to silently pick the first of several matches. Count them:
+		# no write has happened yet in this function, so an ambiguous match aborts here.
+		found_count=$(printf '%s\n' "$found_id" | grep -c .)
+		if [ "$found_count" -gt 1 ]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - More than one Volume Group with consistencyGroupName $cgname in workspace $ws: $(printf '%s' "$found_id" | tr '\n' ' '). Aborting failover; nothing was changed." 1
+		fi
+		found_id=$(printf '%s\n' "$found_id" | head -n1)
 
 		if [[ -n "$found_id" && "$found_id" != "null" ]]
 		then
@@ -3230,17 +3346,8 @@ do_grs_failover() {
 
 	ACTIONS='"stop":{"access":true}'
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Performing failover: VG action stop.access=true on target VG $target_vg_id..." "1"
-	resp_act=$(vg_act 2>>"$log_file")
-	echo "$resp_act" >>"$log_file"
-	if ! echo "$resp_act" | jq . >/dev/null 2>&1
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON when activating target. Raw output logged." 1
-	fi
-	if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-	then
-		errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error activating target VG (stop access): $errmsg" 1
-	fi
+	resp_act=$(vg_act_status 2>>"$log_file")
+	grs_check_write "$resp_act" "activating target VG $target_vg_id (stop access)"
 
 	# Wait until VG becomes idling (or a stable state)
 	local max_wait=60
@@ -3301,8 +3408,17 @@ do_grs_failover() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volumes in target workspace $target_ws_name." 1
 	fi
 
-	local boot_vol_id
-	boot_vol_id=$(echo "$target_vols_json" | jq -r --arg n "$boot_aux_name" '.volumes[]? | select(.name == $n) | .volumeID' 2>>"$log_file" | head -n1)
+	local boot_vol_id boot_vol_count
+	boot_vol_id=$(echo "$target_vols_json" | jq -r --arg n "$boot_aux_name" '.volumes[]? | select(.name == $n) | .volumeID' 2>>"$log_file")
+	# (1.20.0) head -n1 used to silently pick the first of several matches. Count them:
+	# the target VG was already activated (stop.access=true) above, so this aborts before
+	# the next write (attaching the wrong volume).
+	boot_vol_count=$(printf '%s\n' "$boot_vol_id" | grep -c .)
+	if [ "$boot_vol_count" -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - More than one volume named $boot_aux_name in target workspace $target_ws_name: $(printf '%s' "$boot_vol_id" | tr '\n' ' '). Aborting before attaching; the target VG was already activated (stop.access=true)." 1
+	fi
+	boot_vol_id=$(printf '%s\n' "$boot_vol_id" | head -n1)
 	if [[ -z "$boot_vol_id" || "$boot_vol_id" == "null" ]]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not resolve boot auxiliary volume name $boot_aux_name to a volumeID in target workspace $target_ws_name." 1
@@ -3311,13 +3427,8 @@ do_grs_failover() {
 	# Attach boot volume first
 	ACTIONS="\"volumeIDs\":[\"$boot_vol_id\"]"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Attaching BOOT volume to TARGET_VSI $target_vsi (volumeID=$boot_vol_id, name=$boot_aux_name)..." "1"
-	resp_att_boot=$(vol_att_multi 2>>"$log_file")
-	echo "$resp_att_boot" >>"$log_file"
-	if echo "$resp_att_boot" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-	then
-		errmsg=$(echo "$resp_att_boot" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error attaching boot volume to $target_vsi: $errmsg" 1
-	fi
+	resp_att_boot=$(vol_att_multi_status 2>>"$log_file")
+	grs_check_write "$resp_att_boot" "attaching boot volume to $target_vsi" "the target VG was already activated (stop.access=true)"
 
 	# IMPORTANT: Wait until the BOOT volume is effectively attached before attaching other volumes.
 	# PowerVS will reject additional attaches until the primary boot volume is attached/recognized.
@@ -3353,8 +3464,17 @@ do_grs_failover() {
 		then
 			continue
 		fi
-		local vid
-		vid=$(echo "$target_vols_json" | jq -r --arg n "$aux_name" '.volumes[]? | select(.name == $n) | .volumeID' 2>>"$log_file" | head -n1)
+		local vid vid_count
+		vid=$(echo "$target_vols_json" | jq -r --arg n "$aux_name" '.volumes[]? | select(.name == $n) | .volumeID' 2>>"$log_file")
+		# (1.20.0) head -n1 used to silently pick the first of several matches. Count them:
+		# the boot volume attach above was already sent, so this aborts before the next
+		# write (attaching the wrong volume).
+		vid_count=$(printf '%s\n' "$vid" | grep -c .)
+		if [ "$vid_count" -gt 1 ]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - More than one volume named $aux_name in target workspace $target_ws_name: $(printf '%s' "$vid" | tr '\n' ' '). Aborting before attaching; the boot volume was already attached." 1
+		fi
+		vid=$(printf '%s\n' "$vid" | head -n1)
 		if [[ -z "$vid" || "$vid" == "null" ]]
 		then
 			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not resolve auxiliary volume name $aux_name to a volumeID in target workspace $target_ws_name." 1
@@ -3367,13 +3487,8 @@ do_grs_failover() {
 	then
 		ACTIONS="\"volumeIDs\":[${json_ids}]"
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Attaching remaining auxiliary volumes to TARGET_VSI $target_vsi..." "1"
-		resp_att=$(vol_att_multi 2>>"$log_file")
-		echo "$resp_att" >>"$log_file"
-		if echo "$resp_att" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-		then
-			errmsg=$(echo "$resp_att" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error attaching auxiliary volumes to $target_vsi: $errmsg" 1
-		fi
+		resp_att=$(vol_att_multi_status 2>>"$log_file")
+		grs_check_write "$resp_att" "attaching auxiliary volumes to $target_vsi" "the boot volume was already attached"
 	else
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No additional auxiliary volumes to attach (only boot)." "1"
 	fi
@@ -3500,8 +3615,16 @@ do_grs_cancel_failover() {
 		# List VGs here and look for the same consistencyGroupName
 		local vg_tmp
 		vg_tmp=$(vg_ls 2>>"$log_file")
-		local found_id
-		found_id=$(echo "$vg_tmp" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file" | head -n1)
+		local found_id found_count
+		found_id=$(echo "$vg_tmp" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file")
+		# (1.20.0) head -n1 used to silently pick the first of several matches. Count them:
+		# no write has happened yet in this function, so an ambiguous match aborts here.
+		found_count=$(printf '%s\n' "$found_id" | grep -c .)
+		if [ "$found_count" -gt 1 ]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - More than one Volume Group with consistencyGroupName $cgname in workspace $ws: $(printf '%s' "$found_id" | tr '\n' ' '). Aborting cancel failover; nothing was changed." 1
+		fi
+		found_id=$(printf '%s\n' "$found_id" | head -n1)
 
 		if [[ -n "$found_id" && "$found_id" != "null" ]]
 		then
@@ -3539,6 +3662,53 @@ do_grs_cancel_failover() {
 	CRN="$target_ws_crn"
 	CLOUD_INSTANCE_ID="$target_cloud_instance_id"
 
+	##############################################
+	# 2.5) Safety: refuse while TARGET runs on the group's own volumes
+	##############################################
+	# (1.20.0) Before any write in this flow: "start.source=master" below overwrites
+	# whatever the group's volumes hold. If TARGET_VSI is not SHUTOFF and is attached to
+	# one of the target VG's own member volumes, it is running on the data that step is
+	# about to clobber.
+	VOLUME_GROUP_ID="$target_vg_id"
+	local tg_vg_json_safety
+	tg_vg_json_safety=$(vg_get 2>>"$log_file")
+	if ! echo "$tg_vg_json_safety" | jq -e '.volumeIDs | type == "array"' >/dev/null 2>&1
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not read the member volumes of target VG $target_vg_id while checking TARGET_VSI safety. Aborting; nothing was changed." 1
+	fi
+	local tg_vg_volids
+	tg_vg_volids=$(echo "$tg_vg_json_safety" | jq -r '.volumeIDs[]' 2>>"$log_file")
+
+	local tgt_vsi_status
+	tgt_vsi_status=$(ins_get 2>>"$log_file" | jq -r '.status // "UNKNOWN"' 2>>"$log_file")
+
+	if [[ "$tgt_vsi_status" != "SHUTOFF" ]]
+	then
+		local tgt_vol_json_safety
+		tgt_vol_json_safety=$(ins_vol_ls 2>>"$log_file")
+		if ! echo "$tgt_vol_json_safety" | jq -e '.volumes | type == "array"' >/dev/null 2>&1
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - TARGET_VSI $target_vsi is not SHUTOFF (status=$tgt_vsi_status) and its attached volumes could not be read. Stop it first; nothing was changed." 1
+		fi
+		local tgt_attached_ids overlap vid_check
+		tgt_attached_ids=$(echo "$tgt_vol_json_safety" | jq -r '.volumes[]? | (.volumeID // .id)' 2>>"$log_file")
+		overlap=""
+		for vid_check in $tgt_attached_ids
+		do
+			if printf '%s\n' "$tg_vg_volids" | grep -qx "$vid_check"
+			then
+				overlap="$overlap $vid_check"
+			fi
+		done
+		if [[ -n "$overlap" ]]
+		then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - stop TARGET_VSI $target_vsi first (status=$tgt_vsi_status): the master start overwrites the volumes it is running on (member of target VG $target_vg_id:$overlap)." 1
+		fi
+	fi
+
+	##############################################
+	# 3) DETACH handling (optional / safety)
+	##############################################
 	# PVM_ID already set by vsi_id_bluexscrt for TARGET_VSI
 	local tgt_attached_names
 	tgt_attached_names=$(ins_vol_ls 2>>"$log_file" | jq -r '.volumes[]? | .name' 2>>"$log_file")
@@ -3551,19 +3721,12 @@ do_grs_cancel_failover() {
 		else
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Detaching all volumes (including boot) from TARGET_VSI $target_vsi before cancel failover..." "1"
 			ACTIONS='"detachAllVolumes": true, "detachPrimaryBootVolume": true'
-			resp_det=$(ins_vol_bdet 2>>"$log_file")
-			echo "$resp_det" >>"$log_file"
-			if ! echo "$resp_det" | jq . >/dev/null 2>&1
-			then
-				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - ins_vol_bdet did not return valid JSON when detaching volumes. Raw output logged." 1
-			fi
-			if echo "$resp_det" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-			then
-				errmsg=$(echo "$resp_det" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-				abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error detaching volumes from $target_vsi: $errmsg" 1
-			fi
+			resp_det=$(ins_vol_bdet_status 2>>"$log_file")
+			grs_check_write "$resp_det" "detaching volumes from TARGET_VSI $target_vsi"
 
 			# Wait until no volumes are attached
+			# (1.20.0) Bounded: 60 checks at 30s = 30 minutes.
+			local detach_wait=0
 			while true
 			do
 				local attached_now
@@ -3572,6 +3735,11 @@ do_grs_cancel_failover() {
 				then
 					echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - All volumes detached from TARGET_VSI $target_vsi." "1"
 					break
+				fi
+				detach_wait=$((detach_wait + 1))
+				if [ "$detach_wait" -ge 60 ]
+				then
+					abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - TARGET_VSI $target_vsi still has attached volumes ($attached_now) after 30 minutes. Aborting cancel failover before starting SOURCE VG as master." 1
 				fi
 				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - TARGET_VSI $target_vsi still has attached volumes. Waiting 30 seconds..." "1"
 				sleep 30
@@ -3604,17 +3772,8 @@ do_grs_cancel_failover() {
 	else
 		ACTIONS='"stop":{"access":true}'
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Cancel Failover step: VG action stop.access=true on SOURCE VG $source_vg_id..." "1"
-		resp_stop=$(vg_act 2>>"$log_file")
-		echo "$resp_stop" >>"$log_file"
-		if ! echo "$resp_stop" | jq . >/dev/null 2>&1
-		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (stop access). Raw output logged." 1
-		fi
-		if echo "$resp_stop" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-		then
-			errmsg=$(echo "$resp_stop" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error stopping SOURCE VG (stop access): $errmsg" 1
-		fi
+		resp_stop=$(vg_act_status 2>>"$log_file")
+		grs_check_write "$resp_stop" "stopping SOURCE VG $source_vg_id (stop access)" "the target may already have been detached"
 	fi
 
 	# Wait until SOURCE VG becomes idling (or stable) before start master
@@ -3645,17 +3804,8 @@ do_grs_cancel_failover() {
 	# Step B: start with source=master (per IBM docs)
 	ACTIONS='"start":{"source":"master"}'
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Cancel Failover step: VG action start.source=master on SOURCE VG $source_vg_id..." "1"
-	resp_start=$(vg_act 2>>"$log_file")
-	echo "$resp_start" >>"$log_file"
-	if ! echo "$resp_start" | jq . >/dev/null 2>&1
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON (start master). Raw output logged." 1
-	fi
-	if echo "$resp_start" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-	then
-		errmsg=$(echo "$resp_start" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Error starting SOURCE VG as master: $errmsg" 1
-	fi
+	resp_start=$(vg_act_status 2>>"$log_file")
+	grs_check_write "$resp_start" "starting SOURCE VG $source_vg_id as master" "the source VG stop was already sent"
 
 	# Wait until replication is active again (consistent_copying expected)
 	i=0
@@ -3877,8 +4027,16 @@ do_grs_failback() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in target workspace $target_ws_name." 1
 	fi
 
-	local target_vg_id
-	target_vg_id=$(echo "$t_vg_json" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file" | head -n1)
+	local target_vg_id target_vg_count
+	target_vg_id=$(echo "$t_vg_json" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file")
+	# (1.20.0) head -n1 used to silently pick the first of several matches. Count them:
+	# no write has happened yet in this function, so an ambiguous match aborts here.
+	target_vg_count=$(printf '%s\n' "$target_vg_id" | grep -c .)
+	if [ "$target_vg_count" -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - More than one target Volume Group with consistencyGroupName $cgname in workspace $target_ws_name: $(printf '%s' "$target_vg_id" | tr '\n' ' '). Aborting failback; nothing was changed." 1
+	fi
+	target_vg_id=$(printf '%s\n' "$target_vg_id" | head -n1)
 	if [[ -z "$target_vg_id" || "$target_vg_id" == "null" ]]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group with consistencyGroupName $cgname not found in target workspace $target_ws_name. Aborting failback." 1
@@ -3903,17 +4061,8 @@ do_grs_failback() {
 	else
 		ACTIONS='"start":{"source":"aux"}'
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 4.1: Synchronizing primary volumes from AUX to MASTER (target VG action start.source=aux)..." "1"
-		resp_act=$(vg_act 2>>"$log_file")
-		echo "$resp_act" >>"$log_file"
-		if ! echo "$resp_act" | jq . >/dev/null 2>&1
-		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.1. Raw output logged." 1
-		fi
-		if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-		then
-			errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.1 failed: $errmsg" 1
-		fi
+		resp_act=$(vg_act_status 2>>"$log_file")
+		grs_check_write "$resp_act" "Step 4.1: starting aux->master sync on target VG $target_vg_id"
 
 		# Monitor TARGET until aux->master steady state is reached
 		vg_wait_sync_aux_to_master "TARGET" 60 "GRS failback aux->master sync"
@@ -3937,17 +4086,8 @@ do_grs_failback() {
 	else
 		ACTIONS='"stop":{"access":true}'
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 4.2: Stopping SOURCE VG to disable replication (VG action stop.access=true)..." "1"
-		resp_act=$(vg_act 2>>"$log_file")
-		echo "$resp_act" >>"$log_file"
-		if ! echo "$resp_act" | jq . >/dev/null 2>&1
-		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.2. Raw output logged." 1
-		fi
-		if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-		then
-			errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.2 failed: $errmsg" 1
-		fi
+		resp_act=$(vg_act_status 2>>"$log_file")
+		grs_check_write "$resp_act" "Step 4.2: stopping SOURCE VG $source_vg_id" "the target aux->master sync was already started"
 	fi
 
 	# Wait for replicationStatus=disabled on SOURCE VG
@@ -3985,17 +4125,8 @@ do_grs_failback() {
 	##############################################
 	ACTIONS='"start":{"source":"master"}'
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 4.3: Re-enabling replication on SOURCE VG (VG action start.source=master)..." "1"
-	resp_act=$(vg_act 2>>"$log_file")
-	echo "$resp_act" >>"$log_file"
-	if ! echo "$resp_act" | jq . >/dev/null 2>&1
-	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 4.3. Raw output logged." 1
-	fi
-	if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-	then
-		errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 4.3 failed: $errmsg" 1
-	fi
+	resp_act=$(vg_act_status 2>>"$log_file")
+	grs_check_write "$resp_act" "Step 4.3: re-enabling replication on SOURCE VG $source_vg_id as master" "the SOURCE VG stop was already sent"
 
 	# Wait for replicationStatus=enabled and state=consistent_copying on SOURCE VG
 	i=0
@@ -4183,8 +4314,16 @@ do_grs_reverse_replica() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Could not list volume groups in target workspace $target_ws_name." 1
 	fi
 
-	local target_vg_id
-	target_vg_id=$(echo "$t_vg_json" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file" | head -n1)
+	local target_vg_id target_vg_count
+	target_vg_id=$(echo "$t_vg_json" | jq -r --arg cg "$cgname" '.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id' 2>>"$log_file")
+	# (1.20.0) head -n1 used to silently pick the first of several matches. Count them:
+	# no write has happened yet in this function, so an ambiguous match aborts here.
+	target_vg_count=$(printf '%s\n' "$target_vg_id" | grep -c .)
+	if [ "$target_vg_count" -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - More than one target Volume Group with consistencyGroupName $cgname in workspace $target_ws_name: $(printf '%s' "$target_vg_id" | tr '\n' ' '). Aborting reverse replica; nothing was changed." 1
+	fi
+	target_vg_id=$(printf '%s\n' "$target_vg_id" | head -n1)
 	if [[ -z "$target_vg_id" || "$target_vg_id" == "null" ]]
 	then
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group for consistencyGroupName $cgname not found in target workspace $target_ws_name. Aborting reverse replica." 1
@@ -4209,17 +4348,8 @@ do_grs_reverse_replica() {
 	else
 		ACTIONS='"start":{"source":"aux"}'
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Step 3: Starting aux->master sync on TARGET VG (VG action start.source=aux)..." "1"
-		resp_act=$(vg_act 2>>"$log_file")
-		echo "$resp_act" >>"$log_file"
-		if ! echo "$resp_act" | jq . >/dev/null 2>&1
-		then
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - vg_act did not return valid JSON in Step 3. Raw output logged." 1
-		fi
-		if echo "$resp_act" | jq -e '.code? != null or .error? != null' >/dev/null 2>&1
-		then
-			errmsg=$(echo "$resp_act" | jq -r '.message // .error // .description // "Unknown error"' 2>/dev/null)
-			abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Step 3 failed: $errmsg" 1
-		fi
+		resp_act=$(vg_act_status 2>>"$log_file")
+		grs_check_write "$resp_act" "Step 3: starting aux->master sync on TARGET VG $target_vg_id"
 
 		# Monitor TARGET until aux->master steady state is reached
 		vg_wait_sync_aux_to_master "TARGET" 60 "GRS reverse replica aux->master sync"

@@ -10,6 +10,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.20.0] - 2026-09-15 (`bluexport_api.sh`)
+
+### Fixed
+
+- **Four GRS waits had no bound.** `chk_vol_mirror`, `chk_on_status`, `chk_vol_rep`'s final
+  recheck, and the `-grscancelfailover` DETACH wait (no attached volumes left on
+  TARGET_VSI) looped `while true` forever. They now abort (exit 1), naming what did not
+  finish, after: `chk_vol_rep` 30 minutes, `chk_on_status` 60 minutes, the DETACH wait 30
+  minutes, and `chk_vol_mirror` 24 hours (it copies whole disks) - overridable in minutes
+  with `BLUEXPORT_GRS_MIRROR_MAX_MIN`.
+- **GRS write calls did not check the HTTP status.** `vg_cr`, `vg_act`, `vg_del`, `vg_upd`,
+  `on_cr`, the replication-enable `vol_act`, `ins_vol_bdet`, `vol_att_multi` and `vol_bdel`
+  were piped straight to the log, or checked only by grepping the body for `.code`/`.error`
+  - a field a rejected (non-2xx) response does not have to carry, so a refused request
+  could look identical to a success and the flow kept going onto volumes or groups the API
+  never touched. New `*_status` wrappers (same `-w '\n%{http_code}'` shape as
+  `vol_act_status`) are used at the GRS create/delete/failover/cancel-failover/
+  failback/reverse-replica call sites; a new `grs_check_write` helper aborts (exit 1) on
+  any non-2xx status with the API's `.description`/`.message`/`.error`/`.errors[0].message`,
+  naming the step and what earlier steps in that call already reached the API. Other
+  callers of these functions (attach/detach volumes, volume clone) are unchanged.
+- **`head -n1` on an ambiguous match.** The target Volume Group lookup by
+  `consistencyGroupName` (`-grsfailover`, `-grscancelfailover`, `-grsfailback`,
+  `-grsreversereplica`) and the boot/auxiliary volume name-to-volumeID resolution in
+  `-grsfailover`'s ATTACH step silently took the first of several matches. They now count
+  matches and abort (exit 1) listing them when there is more than one - before any write
+  in the function when the lookup happens before writes, otherwise before the next write.
+- **`-grscancelfailover` could start the master onto volumes TARGET_VSI was running on.**
+  Before any write, it now reads TARGET_VSI's status and attached volumes; if TARGET_VSI is
+  not SHUTOFF and is attached to a volume that is a member of the target Volume Group, it
+  refuses with "stop TARGET_VSI first: the master start overwrites the volumes it is
+  running on". The existing end-of-run warning (NO_DETACH, still-attached volumes) is
+  unchanged.
+
+### IBM i / PASE
+
+- POSIX constructs only: `local`, `$(( ))`, `case`, `[ ]`/`[[ ]]`, `grep -c`/`-x`/`-w`,
+  `printf`, `jq -r`/`-e`. No `readarray`, `/proc`, `PIPESTATUS`, `grep -P` or other
+  GNU-only flags introduced.
+
 ## [1.19.3] - 2026-09-15 (`bluexport_api.sh`)
 
 ### Fixed
