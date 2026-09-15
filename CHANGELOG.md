@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.19.2] - 2026-09-15 (`bluexport_api.sh`)
+
+### Fixed
+
+- **`-deletegrs` could delete volumes that were not part of the replication group.** The
+  auxiliary volumes to delete were every volume in the target workspace whose name
+  contained SOURCE_VOLUME_NAMES, so another LPAR's disk or a clone with that text in its
+  name was removed from the volume group, and bulk-deleted. The source side likewise
+  disabled replication on every source-workspace volume whose name started with the
+  value. Both sides now act only on the volume groups' own members (`volumeIDs` from the
+  volume group details).
+- **The last safety check before the delete could never refuse.** It read each auxiliary
+  volume through the target VSI right after all volumes had been detached from it, the
+  read failed, and `// "false"` let the volume pass. It now reads the volume at workspace
+  level and deletes only when every volume reads `replicationEnabled=false` and is
+  attached to no LPAR; an unreadable volume stops the delete (exit 1).
+- **The target volume group was picked by name prefix.** It is now matched by
+  `consistencyGroupName`, like the other GRS flags, and more than one match stops the run
+  before anything is changed.
+- The three waits in `-deletegrs` (source VG empty, source replication disabled, target
+  detach) are bounded at 30 minutes and exit 1 on timeout.
+
+### IBM i / PASE
+
+- `jq -e`, `case`, `[ ]` and arithmetic expansion only; no new external commands.
+
 ## [1.19.1] - 2026-09-15 (`bluexport_api.sh`)
 
 ### Fixed

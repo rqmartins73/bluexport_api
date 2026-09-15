@@ -354,7 +354,7 @@ No job ID is stored locally - every call queries PowerVS directly for the last j
 
 - `SRC_VSI` / `TGT_VSI`: logical PowerVS instance names as defined in your secrets JSON
 - `VG_NAME`: name for the Volume Group to create on the source workspace
-- `SOURCE_VOL_PREFIX`: common name/prefix to identify source VSI volumes (e.g. `IBMiGRS`)
+- `SOURCE_VOL_PREFIX`: common name/prefix to identify source VSI volumes (e.g. `IBMiGRS`) for `-creategrs`; `-deletegrs` accepts it for compatibility but, since 1.19.2, acts only on the volume groups' own members
 - `-grsfailover ATTACH`: automatically attaches auxiliary volumes to the target VSI after failover
 - `-grscancelfailover`: resyncs from master to auxiliary and reactivates master→auxiliary replication
 

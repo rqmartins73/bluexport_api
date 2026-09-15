@@ -164,7 +164,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.19.1
+Version=1.19.2
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -744,6 +744,12 @@ vol_ls() {
 
 vol_get() {
 	curl -sX GET "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/pvm-instances/$PVM_ID/volumes/$VOL_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
+}
+
+# (1.19.2) Workspace-level volume read. vol_get only answers for a volume attached to
+# PVM_ID, so it cannot read a volume that was just detached.
+vol_ws_get() {
+	curl -sX GET "$base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/volumes/$VOL_ID" -H "$header_auth" -H "CRN: $CRN" -H "$header_json"
 }
 
 vol_act() {
@@ -2895,12 +2901,28 @@ delete_grs() {
 		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not retrieve consistencyGroupName for VG $vg_name in source workspace." 1
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG $vg_name has ID $VOLUME_GROUP_ID and consistencyGroupName $cgname." "1"
+	# (1.19.2) Refuse before changing anything when the target side has more than one VG
+	# with this consistencyGroupName.
+	local src_vg_id="$VOLUME_GROUP_ID" pre_tg_count
+	base_url="$target_base_url"; CRN="$target_ws_crn"; CLOUD_INSTANCE_ID="$target_CLOUD_INSTANCE_ID"
+	pre_tg_count=$(vg_ls 2>>"$log_file" | jq -r --arg cg "$cgname" '[.volumeGroups[]? | select(.consistencyGroupName == $cg)] | length' 2>>"$log_file")
+	base_url="$source_base_url"; CRN="$source_ws_crn"; CLOUD_INSTANCE_ID="$source_CLOUD_INSTANCE_ID"; VOLUME_GROUP_ID="$src_vg_id"
+	case "$pre_tg_count" in
+		0|1) ;;
+		*) abort "$(date +%Y-%m-%d_%H:%M:%S) - Target workspace has ${pre_tg_count:-an unreadable number of} Volume Groups with consistencyGroupName $cgname. Aborting GRS delete; nothing was changed." 1 ;;
+	esac
 	# 1.1 Remover volumes do VG (source)
-	src_vol_ids=$(vol_ls 2>>"$log_file" | jq -r --arg prefix "$vol_com_name" '
-		.volumes[]? | select(.name | startswith($prefix)) | .volumeID
-	')
+	# (1.19.2) The volumes are the VG's own members (volumeIDs from the VG details), not
+	# every volume in the workspace whose name starts with VOLUMES_COMMON_NAME, which also
+	# caught volumes of other LPARs and other volume groups.
+	local src_vg_details
+	src_vg_details=$(vg_get 2>>"$log_file")
+	if ! echo "$src_vg_details" | jq -e '.volumeIDs | type == "array"' >/dev/null 2>&1; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not read the member volumes of VG $vg_name in source workspace. Aborting GRS delete; nothing was changed." 1
+	fi
+	src_vol_ids=$(echo "$src_vg_details" | jq -r '.volumeIDs[]' 2>>"$log_file")
 	if [[ -z "$src_vol_ids" ]]; then
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No source volumes found with prefix $vol_com_name to remove from VG $vg_name. Continuing..." "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG $vg_name has no member volumes to remove. Continuing..." "1"
 	else
 		local json_ids=""
 		for vid in $src_vol_ids; do
@@ -2911,6 +2933,8 @@ delete_grs() {
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Removing source volumes from VG $vg_name: [${json_ids}]..." "1"
 		vg_upd 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 		# 1.2 Esperar o VG ficar em estado empty
+		# (1.19.2) Bounded: 60 checks at 30s.
+		local vg_empty_wait=0
 		while true
 		do
 			local vg_state
@@ -2918,6 +2942,10 @@ delete_grs() {
 			if [[ "$vg_state" == "empty" ]]; then
 				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source Volume Group $vg_name is in state 'empty'." "1"
 				break
+			fi
+			vg_empty_wait=$((vg_empty_wait + 1))
+			if [ "$vg_empty_wait" -ge 60 ]; then
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Source VG $vg_name did not become empty after 30 minutes (state '$vg_state'). Aborting before deleting it." 1
 			fi
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Source VG $vg_name still in state '$vg_state'. Waiting 30 seconds..." "1"
 			sleep 30
@@ -2928,7 +2956,7 @@ delete_grs() {
 	vg_del 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 	# 1.4 Desativar replication nos volumes de origem (sem os apagar)
 	if [[ -n "$src_vol_ids" ]]; then
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Disabling replication on source volumes with prefix $vol_com_name..." "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Disabling replication on the source VG's member volumes..." "1"
 		for vid in $src_vol_ids
 		do
 			VOL_ID="$vid"
@@ -2936,21 +2964,32 @@ delete_grs() {
 			vol_act 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 		done
 		# Esperar até todos ficarem replicationEnabled=false
+		# (1.19.2) Checks exactly those volumes, and a volume that cannot be read counts as
+		# not yet disabled. Bounded: 180 checks at 10s.
+		local rep_wait=0 still_on
 		while true
 		do
-			if vol_ls 2>>"$log_file" | jq -r --arg prefix "$vol_com_name" '
-				.volumes[]? | select(.name | startswith($prefix)) | .replicationEnabled
-			' | grep -q true
-			then
-				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Some source volumes still have replicationEnabled=true. Waiting 10 seconds..." "1"
-				sleep 10
-			else
-				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - All source volumes with prefix $vol_com_name now have replicationEnabled=false." "1"
+			still_on=""
+			for vid in $src_vol_ids
+			do
+				VOL_ID="$vid"
+				if [[ "$(vol_ws_get 2>>"$log_file" | jq -r '.replicationEnabled' 2>/dev/null)" != "false" ]]; then
+					still_on="$still_on $vid"
+				fi
+			done
+			if [[ -z "$still_on" ]]; then
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - All source VG member volumes now have replicationEnabled=false." "1"
 				break
 			fi
+			rep_wait=$((rep_wait + 1))
+			if [ "$rep_wait" -ge 180 ]; then
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Source volumes still not replicationEnabled=false after 30 minutes:$still_on. Aborting before touching the target." 1
+			fi
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Some source volumes still have replicationEnabled=true:$still_on. Waiting 10 seconds..." "1"
+			sleep 10
 		done
 	else
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No source volumes to disable replication for (prefix $vol_com_name)." "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No source volumes to disable replication for." "1"
 	fi
 	####################################
 	# 2. TARGET WORKSPACE / TARGET VG  #
@@ -2960,24 +2999,34 @@ delete_grs() {
 	CLOUD_INSTANCE_ID="$target_CLOUD_INSTANCE_ID"
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Working on TARGET workspace for VSI $target_vsi..." "1"
 	vg_json=$(vg_ls 2>>"$log_file")
+	# (1.19.2) The target VG is matched by consistencyGroupName, as every other GRS flow
+	# does, and must be exactly one; a name prefix could match several volume groups.
+	local tg_vg_count
 	VOLUME_GROUP_ID=$(echo "$vg_json" | jq -r --arg cg "$cgname" '
-		.volumeGroups[]? | select(.name | startswith($cg)) | .id
+		.volumeGroups[]? | select(.consistencyGroupName == $cg) | .id
 	' 2>>"$log_file")
+	tg_vg_count=$(printf '%s\n' "$VOLUME_GROUP_ID" | grep -c .)
+	if [ "$tg_vg_count" -gt 1 ]; then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - More than one target Volume Group has consistencyGroupName $cgname: $(echo $VOLUME_GROUP_ID). Aborting; nothing was changed on target." 1
+	fi
+	tg_vol_ids=""
 	if [[ -z "$VOLUME_GROUP_ID" || "$VOLUME_GROUP_ID" == "null" ]]; then
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target Volume Group for consistencyGroupName $cgname not found. Skipping VG delete on target." "1"
 	else
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG found with ID $VOLUME_GROUP_ID (name starts with $cgname)." "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG found with ID $VOLUME_GROUP_ID (consistencyGroupName $cgname)." "1"
 		# 2.1 Remover auxiliary volumes do VG no target
-		# Usamos o mesmo prefixo vol_com_name, tal como no source,
-		# porque os volumes auxiliares mantêm o padrão (ex.: IBMiGRS)
-		tg_vol_ids=$(vol_ls 2>>"$log_file" | jq -r --arg prefix "$vol_com_name" '
-			.volumes[]? 
-			| select(.name | contains($prefix)) 
-			| .volumeID
-			')
+		# (1.19.2) The auxiliary volumes are the target VG's own members. Selecting every
+		# target-workspace volume whose name contains VOLUMES_COMMON_NAME also caught volumes
+		# of other LPARs, clones and other volume groups, which were then deleted in 3.2.
+		local tg_vg_details
+		tg_vg_details=$(vg_get 2>>"$log_file")
+		if ! echo "$tg_vg_details" | jq -e '.volumeIDs | type == "array"' >/dev/null 2>&1; then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not read the member volumes of target VG $VOLUME_GROUP_ID. Aborting; nothing was changed on target." 1
+		fi
+		tg_vol_ids=$(echo "$tg_vg_details" | jq -r '.volumeIDs[]' 2>>"$log_file")
 		if [[ -z "$tg_vol_ids" ]]
 		then
-			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No target volumes found with pattern $vol_com_name to remove from VG. Continuing..." "1"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VG has no member volumes to remove. Continuing..." "1"
 		else
 			local tg_json_ids=""
 			for vid in $tg_vol_ids
@@ -3000,6 +3049,8 @@ delete_grs() {
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Detaching all volumes (including boot) from target VSI $target_vsi..." "1"
 	ins_vol_bdet 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 	# Esperar até não haver volumes anexados
+	# (1.19.2) Bounded: 60 checks at 30s.
+	local detach_wait=0
 	while true
 	do
 		local attached
@@ -3008,23 +3059,32 @@ delete_grs() {
 			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No volumes attached to target VSI $target_vsi." "1"
 			break
 		fi
+		detach_wait=$((detach_wait + 1))
+		if [ "$detach_wait" -ge 60 ]; then
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Target VSI $target_vsi still has attached volumes after 30 minutes. Aborting before deleting any volume." 1
+		fi
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Target VSI $target_vsi still has attached volumes. Waiting 30 seconds..." "1"
 		sleep 30
 	done
 	# SAFETY CHECK – ensure aux volumes are NOT replicationEnabled
+	# (1.19.2) Read at workspace level: vol_get asked the target VSI for volumes that had
+	# just been detached from it, so the read failed and "// false" let every volume pass.
+	# Now a volume passes only when it reads replicationEnabled=false and is attached to no
+	# LPAR; unreadable counts as unsafe.
+	local vol_json
 	unsafe_aux=""
 	for vid in $tg_vol_ids
 	do
 		VOL_ID="$vid"
-		rep_enabled=$(vol_get 2>>"$log_file" | jq -r '.replicationEnabled // "false"')
-		if [[ "$rep_enabled" == "true" ]]
+		vol_json=$(vol_ws_get 2>>"$log_file")
+		if ! echo "$vol_json" | jq -e '.replicationEnabled == false and ((.pvmInstanceIDs // []) | length == 0)' >/dev/null 2>&1
 		then
 			unsafe_aux="$unsafe_aux $vid"
 		fi
 	done
 	if [[ -n "$unsafe_aux" ]]
 	then
-		abort "$(date +%Y-%m-%d_%H:%M:%S) - Some target (aux) volumes still have replicationEnabled=true: $unsafe_aux. Aborting GRS delete to avoid impacting primary volumes." 1
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Some target (aux) volumes are unreadable, still have replicationEnabled=true, or are attached to an LPAR: $unsafe_aux. Aborting GRS delete to avoid impacting primary volumes." 1
 	fi
 	# 3.2 Apagar auxiliary volumes no target (os mesmos IDs apanhados antes)
 	if [[ -n "$tg_vol_ids" ]]; then
@@ -3037,7 +3097,7 @@ delete_grs() {
 		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Deleting auxiliary volumes on target: [${tg_del_ids}]..." "1"
 		vol_bdel 2>>"$log_file" | tee -a "$log_file" #>/dev/null
 	else
-		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No auxiliary volumes to delete on target with name $tgvol_com_name." "1"
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No auxiliary volumes to delete on target." "1"
 	fi
 	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === GRS delete completed between $source_vsi and $target_vsi (VG: $vg_name). Primary VSI remains with its volumes; auxiliary side cleaned up. ===" "1"
 }
@@ -5770,9 +5830,13 @@ usage_deletegrs() {
 	echoscreen "  VG_NAME:"
 	echoscreen "    Name of the volume group (replication group) to delete."
 	echoscreen "  SOURCE_VOLUME_NAMES:"
-	echoscreen "    Common name/prefix matched against SOURCE_VSI's volume names -"
-	echoscreen "    same value used when the group was created with -creategrs (also"
-	echoscreen "    used to match the corresponding volumes on the target side)."
+	echoscreen "    Same value used with -creategrs. Kept for compatibility: since"
+	echoscreen "    1.19.2 the volumes touched are the volume groups' own members, on"
+	echoscreen "    both sides, never every volume whose name matches this value."
+	echoscreen "  NOTE:"
+	echoscreen "    All volumes, boot included, are detached from TARGET_VSI. Auxiliary"
+	echoscreen "    volumes are deleted only when each reads replicationEnabled=false"
+	echoscreen "    and is attached to no LPAR."
 }
 
 usage_grsfailover() {
