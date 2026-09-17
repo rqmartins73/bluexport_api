@@ -10,6 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.22.0] - 2026-09-17 (`bluexport_api.sh`)
+
+### Fixed
+
+- **`-vclonedel` could refuse to delete a volume clone request with no way forward.** Live
+  against a real account, deleting a clone request still in status `available` (i.e. cloned
+  but not yet cancelled) answered `400 Bad Request`, and the operator only ever saw
+  `Delete of volume clone request NAME was refused: Bad Request` - the API's own explanation
+  (which names the current status and the three terminal ones it needs) lives in `.description`,
+  and the shared `delete_check` picked `.error` (just the HTTP reason phrase) ahead of it.
+  `-vclonedel` now reads the request's status before ever calling delete:
+  - `completed`/`failed`/`cancelled` (terminal): deletes immediately, as before.
+  - `available`/`running`/`preparing` (cancellable - the same status `do_volume_clone_start`
+    already waits for): asks explicitly, separately from the existing delete confirmation,
+    whether to cancel first; only cancels on a typed "yes", never silently.
+  - anything else (`creating`/`executing`/`cancelling`/unrecognized): aborts, naming the
+    status, since there is nothing safe to cancel out of yet.
+  If the delete call still comes back with that same status-conflict shape anyway (e.g. a race
+  between the check and the delete), the real `.description` is surfaced directly instead of
+  `delete_check`'s generic `.error` message - `delete_check` itself is unchanged, since it is
+  shared with `-imgdel` and `-jobcancel` and changing its field precedence would have changed
+  their messages too.
+
+### Added
+
+- **The missing cancel step.** `vol_cl_ca` (the wrapper for
+  `POST .../volumes-clone/{id}/cancel`) existed since 1.18.8 but had no caller anywhere in the
+  script - there was no way to cancel a clone request from the CLI at all. `-vclonedel` now
+  calls it (with `force: true`) when the operator confirms cancelling, then polls the request's
+  status every 5 seconds until it reaches a terminal one before deleting.
+  - **Bounded.** The poll uses the same `BLUEXPORT_JOB_MAX_SECS` cap (default 24h)
+    `vclone_time_left` already reads elsewhere; exhausting it aborts with "cancelled but not
+    yet confirmed terminal - check status and delete manually" instead of polling forever.
+
 ## [1.21.0] - 2026-09-17 (`bluexport_api.sh`)
 
 ### Added

@@ -177,7 +177,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.21.0
+Version=1.22.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -6266,6 +6266,12 @@ usage_vclonedel() {
 	echoscreen "  MODE:"
 	echoscreen "    Optional (defaults to 0). Pass 0 to delete only the clone request,"
 	echoscreen "    or delete_volumes to also delete the cloned volumes themselves."
+	echoscreen "  NOTE:"
+	echoscreen "    IBM Cloud only deletes a clone request once it is completed, failed"
+	echoscreen "    or cancelled. If it is still available/running/preparing, you will"
+	echoscreen "    be asked (separately from the delete confirmation above) whether to"
+	echoscreen "    cancel it first; anything still creating/executing/cancelling must"
+	echoscreen "    be waited out and retried."
 }
 
 usage_vchtier() {
@@ -7650,6 +7656,71 @@ case $1 in
 		then
 			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not retrieve volumesCloneID for $vclone_name in workspace $full_ws_name." 1
 		fi
+		# (1.22.0) IBM Cloud refuses to delete a volumes-clone request unless its own
+		# status is already completed/failed/cancelled - a 400 with no cancel offered.
+		# Read the status ourselves first, every time (not only under delete_volumes,
+		# which used to be the only path that ever called vol_cl_get), and branch:
+		#   - terminal (completed/failed/cancelled): fall through, delete as before.
+		#   - cancellable (available/running/preparing - the same "available" status
+		#     do_volume_clone_start already waits for): ask, cancel only on an explicit
+		#     yes, then wait (bounded) for a terminal status before deleting.
+		#   - anything else (creating/executing/cancelling/unrecognized): nothing safe
+		#     to cancel out of yet; abort naming the status.
+		echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Checking status of Volume Clone Request $vclone_name before deleting..." "1"
+		vcl_status_json=$(vol_cl_get 2>>"$log_file")
+		if [[ -z "$vcl_status_json" ]]
+		then
+			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not read the status of Volume Clone Request $vclone_name before deleting." 1
+		fi
+		vclone_status=$(echo "$vcl_status_json" | jq -r '(.status // .state // .status.state // empty) | ascii_downcase' 2>/dev/null)
+		case "$vclone_status" in
+			completed|failed|cancelled)
+				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone Request $vclone_name is in status '$vclone_status' (terminal) - proceeding." "1"
+				;;
+			available|running|preparing)
+				confirm_or_abort "Volume Clone Request '$vclone_name' is in status '$vclone_status' - IBM Cloud will refuse to delete it until it is completed, failed or cancelled. Cancel it now, wait for it to finish cancelling, and then delete it" "$vclone_name"
+				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Cancelling Volume Clone Request $vclone_name (status '$vclone_status')..." "1"
+				FORCE=true
+				vcl_cancel_raw=$(vol_cl_ca 2>>"$log_file")
+				printf '%s\n' "$vcl_cancel_raw" >> "$log_file"
+				if printf '%s' "$vcl_cancel_raw" | jq -e '(.code? != null) or (.error? != null)' >/dev/null 2>&1
+				then
+					vcl_cancel_err=$(printf '%s' "$vcl_cancel_raw" | jq -r '.description // .message // .error // "Unknown error"' 2>/dev/null)
+					abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Could not cancel Volume Clone Request $vclone_name: $vcl_cancel_err" 1
+				fi
+				echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Cancel requested for Volume Clone Request $vclone_name. Waiting for it to reach a terminal status..." "1"
+				# Bounded: BLUEXPORT_JOB_MAX_SECS, the same cap vclone_time_left reads
+				# elsewhere (default 24h). An unbounded poll here would be the same
+				# defect being fixed, just moved one call later.
+				vcl_cancel_started=$(date +%s)
+				while :
+				do
+					sleep 5
+					if [ $(( $(date +%s) - vcl_cancel_started )) -ge "${BLUEXPORT_JOB_MAX_SECS:-86400}" ]
+					then
+						abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Volume Clone Request $vclone_name was cancelled but not yet confirmed terminal after ${BLUEXPORT_JOB_MAX_SECS:-86400} seconds. Check its status and delete it manually (limit BLUEXPORT_JOB_MAX_SECS)." 1
+					fi
+					vcl_status_json=$(vol_cl_get 2>>"$log_file")
+					if [[ -z "$vcl_status_json" ]]
+					then
+						abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error reading status of Volume Clone Request $vclone_name while waiting for it to cancel." 1
+					fi
+					vclone_status=$(echo "$vcl_status_json" | jq -r '(.status // .state // .status.state // empty) | ascii_downcase' 2>/dev/null)
+					case "$vclone_status" in
+						completed|failed|cancelled)
+							echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone Request $vclone_name reached status '$vclone_status'. Proceeding with delete." "1"
+							break
+							;;
+						*)
+							echoscreen "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone Request $vclone_name is still '$vclone_status' after cancel. Waiting..." "1"
+							;;
+					esac
+				done
+				;;
+			*)
+				abort "`date +%Y-%m-%d_%H:%M:%S` - Volume Clone Request $vclone_name is in status '$vclone_status', which is neither terminal nor safely cancellable yet. Wait for it to reach completed, failed or cancelled, then retry -vclonedel." 1
+				;;
+		esac
 		# Se o utilizador pediu delete_volumes, apagar primeiro os volumes clone
 		if [[ "$delete_mode" == "delete_volumes" ]]
 		then
@@ -7712,6 +7783,23 @@ EOF
 		del_raw=$(vol_cl_del 2>>"$log_file")
 		ret=$?
 		printf '%s\n' "$del_raw" >> "$log_file"
+		# (1.22.0) The status pre-check above should have already ruled this out, but a
+		# status-conflict 400 can still arrive here (e.g. the request slipped back out of
+		# a terminal status between the check and this call). delete_check's own field
+		# precedence picks .error ("Bad Request", the HTTP reason phrase, no information)
+		# over .description (which names the current status and the terminal ones IBM
+		# Cloud actually wants) for every caller it is shared with (img_del, do_job_cancel
+		# included) - so this shape is special-cased right here instead of changing that
+		# shared precedence.
+		if [ $ret -eq 0 ]
+		then
+			del_body_precheck="${del_raw%$'\n'*}"
+			del_conflict_desc=$(printf '%s' "$del_body_precheck" | jq -r 'select(.description? != null and (.description | test("currently in status .* is required to be in status"))) | .description' 2>/dev/null)
+			if [ -n "$del_conflict_desc" ]
+			then
+				abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Volume Clone Request $vclone_name could not be deleted: $del_conflict_desc" 1
+			fi
+		fi
 		if [ $ret -ne 0 ] || ! delete_check "$del_raw" "volume clone request $vclone_name"
 		then
 			abort "`date +%Y-%m-%d_%H:%M:%S` - FAILED - Error deleting Volume Clone $vclone_name. Check messages above this line..." 1
