@@ -2,7 +2,8 @@
 #
 # IBM Cloud PowerVS automation framework — API-driven (no IBM Cloud CLI required).
 # Manages: VSI lifecycle, Capture & Export, Snapshots, Images, Volume Clones,
-#          Volume Tier, Cloud Object Storage (COS), and GRS (Global Replication Services).
+#          Volume Tier, Cloud Object Storage (COS), GRS (Global Replication Services),
+#          and Jobs (account-wide list/detail/cancel).
 #
 # === General ===
 # Changing secret file:         bluexport_api.sh -chscrt bluexscrt_file_name   (use full path, e.g. /home/user/bluexscrt_new.json)
@@ -78,6 +79,18 @@
 #   Looks up the last import/export job PowerVS has on record (via the API - no
 #   local job-ID storage, works even from a different machine than the one that
 #   submitted it) and monitors it to completion, exiting non-zero on failure.
+#
+# === Jobs (account-wide) === (1.21.0)
+# List every job in every workspace:  bluexport_api.sh -jobslsall
+# List every job in one workspace:    bluexport_api.sh -jobsls WORKSPACE
+# Show one job's full detail:         bluexport_api.sh -jobget JOB_ID
+# Cancel/delete a job:                bluexport_api.sh -jobcancel JOB_ID
+#
+#   JOB_ID (for -jobget/-jobcancel) is searched across every configured workspace,
+#   the same lookup -imgdel/-je already use for a bare name.
+#   -jobcancel refuses a job whose own status is already terminal (completed/failed -
+#   nothing left to cancel) and asks for confirmation (type the Job ID back, via
+#   confirm_or_abort) before sending the request.
 #
 # === Cloud Object Storage (COS) ===
 # List buckets for all COS instances (from bluexscrt):  bluexport_api.sh -bucketslsall
@@ -164,7 +177,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.20.1
+Version=1.21.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -496,7 +509,7 @@ help() {
 	echoscreen ""
 	echoscreen "IBM Cloud PowerVS automation framework — API-driven (no IBM Cloud CLI required)."
 	echoscreen "Manages: VSI lifecycle, Capture & Export, Snapshots, Images, Volume Clones,"
-	echoscreen "         Volume Tier, Cloud Object Storage (COS), and GRS."
+	echoscreen "         Volume Tier, Cloud Object Storage (COS), GRS, and Jobs."
 	echoscreen "Version: $Version"
 	echoscreen ""
 	echoscreen "=== General ==="
@@ -572,6 +585,18 @@ help() {
 	echoscreen "  record, without resubmitting anything - useful after a lost SSH"
 	echoscreen "  session or a job submitted from a different machine. No job ID is"
 	echoscreen "  stored locally; every call asks PowerVS directly."
+	echoscreen ""
+	echoscreen "=== Jobs (account-wide) ==="
+	echoscreen "List every job in every workspace: bluexport_api.sh -jobslsall"
+	echoscreen "List every job in one workspace:   bluexport_api.sh -jobsls WORKSPACE"
+	echoscreen "Show one job's full detail:        bluexport_api.sh -jobget JOB_ID"
+	echoscreen "Cancel/delete a job:               bluexport_api.sh -jobcancel JOB_ID"
+	echoscreen ""
+	echoscreen "  JOB_ID (for -jobget/-jobcancel) is searched across every configured"
+	echoscreen "  workspace, the same lookup -imgdel/-je use for a bare name."
+	echoscreen "  -jobcancel refuses a job whose own status is already completed or failed"
+	echoscreen "  (nothing left to cancel) and asks for typed confirmation before sending"
+	echoscreen "  the request, the same as -vclone/-vclonedel/-vchtier/-insvchtier."
 	echoscreen ""
 	echoscreen "=== Cloud Object Storage (COS) ==="
 	echoscreen "List buckets for all COS instances: bluexport_api.sh -bucketslsall"
@@ -963,6 +988,20 @@ job_get() {
 	# (curl -D) so a caller can read Retry-After on a 429 without a second call.
 	local hdr_file="${1:-/dev/null}"
 	curl -sS --connect-timeout 30 --max-time 60 -D "$hdr_file" -w '\n%{http_code}' -X GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/jobs/$JOB_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json" 2>>"$log_file"
+}
+
+# (1.21.0) Same request as job_ls(), with the HTTP status appended as the last line - the
+# same idiom job_get() already uses - so -jobslsall/-jobsls can tell an empty workspace
+# ("no jobs") apart from a failed request (expired IAM token, wrong CRN, deleted workspace).
+job_ls_status() {
+	curl -sS --connect-timeout 30 --max-time 60 -w '\n%{http_code}' -X GET $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/jobs -H "$header_auth" -H "CRN: $CRN" -H "$header_json" 2>>"$log_file"
+}
+
+# (1.21.0) Cancels/deletes a job. HTTP status appended as the last line, same idiom as
+# img_del()/vol_cl_del(); read by delete_check() in do_job_cancel(). Uses $JOB_ID, the same
+# global job_get() reads, set by job_find_ws() before this is called.
+job_del() {
+	curl -sX DELETE $base_url/pcloud/v1/cloud-instances/$CLOUD_INSTANCE_ID/jobs/$JOB_ID -H "$header_auth" -H "CRN: $CRN" -H "$header_json" -w '\n%{http_code}'
 }
 
 ## Images
@@ -1741,6 +1780,273 @@ wait_for_job() {
 	done
 }
 ####  END:FUNCTION - Generic Job Wait ####
+
+####  START:FUNCTION - Locate a job's workspace (job_find_ws) ####
+# (1.21.0) job_find_ws JOB_ID
+#   A bare JOB_ID (as given to -jobget/-jobcancel) is scoped to the workspace/cloud instance
+#   that owns it, which the caller does not name, so every configured workspace is tried with
+#   job_get() (1.19.0's trailing-HTTP-status idiom, reused unchanged) until one answers 200 -
+#   the same "search every workspace" idiom -imgdel/-je already use for a bare name.
+#   Deliberately NOT called via command substitution: job_get()'s own comment explains why a
+#   status can't come back through a global from inside $(...) - the same is true here, and
+#   abort() itself needs to actually exit the script (not a subshell) on a hard failure, so
+#   this function is called directly and reports through the globals below instead of stdout.
+# Sets on a match: CRN/CLOUD_INSTANCE_ID/base_url/full_ws_name (the matched workspace, same
+#   globals job_get() and the workspace-resolving flags already use), JOB_ID, JOB_JSON (the
+#   job body) and JOB_FOUND_WS/JOB_FOUND_WS_NAME; returns 0. Returns 1 (nothing found) if no
+#   configured workspace has this job. A workspace that answers something other than 200/404
+#   (auth failure, network error) aborts immediately naming that workspace, instead of being
+#   silently skipped and mis-reported as "job not found".
+job_find_ws() {
+	local job_id="$1" ws
+	JOB_ID="$job_id"
+	JOB_FOUND_WS=""
+	JOB_FOUND_WS_NAME=""
+	JOB_JSON=""
+	read -r -a allws_array <<< "$allws"
+	for ws in "${allws_array[@]}"
+	do
+		CRN=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$bluexscrt")
+		full_ws_name=$(jq -r --arg ws "$ws" '.workspaces[$ws].name // $ws' "$bluexscrt")
+		if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping." "1"
+			continue
+		fi
+		region_api=$(echo "$CRN" | sed -n 's/.*power-iaas:\([^:]*\):.*/\1/p' | tr '-' '_')
+		if [[ -z "$region_api" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Could not parse region from CRN $CRN for workspace $full_ws_name, skipping." "1"
+			continue
+		fi
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+		local job_raw job_http_code
+		job_raw=$(job_get 2>>"$log_file")
+		job_http_code="${job_raw##*$'\n'}"
+		JOB_JSON="${job_raw%$'\n'*}"
+		case "$job_http_code" in
+			200)
+				JOB_FOUND_WS="$ws"
+				JOB_FOUND_WS_NAME="$full_ws_name"
+				return 0
+				;;
+			404)
+				continue
+				;;
+			*)
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Failed to query Job $job_id in Workspace $full_ws_name, HTTP status ${job_http_code:-?}." 1
+				;;
+		esac
+	done
+	return 1
+}
+####  END:FUNCTION - Locate a job's workspace (job_find_ws) ####
+
+####  START:FUNCTION - List every job in one workspace (do_jobs_ls) ####
+# (1.21.0) Shared by -jobsls WORKSPACE and, per workspace, by -jobslsall. Prints one table:
+# JOB_ID, OPERATION, TARGET, STATUS, PROGRESS, CREATED - the API's own status.state string,
+# never re-worded (same rule job_monitor()/wait_for_job() already follow).
+do_jobs_ls() {
+	local workspace_arg="$1" ws_key
+	if [[ -z "$workspace_arg" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - WORKSPACE is missing. Syntax: bluexport_api.sh -jobsls WORKSPACE" 1
+	fi
+	ws_key=$(jq -r --arg ws "$workspace_arg" '
+		.workspaces
+		| to_entries[]?
+		| select((.key | ascii_downcase) == ($ws | ascii_downcase) or (.value.name | ascii_downcase) == ($ws | ascii_downcase))
+		| .key
+	' "$bluexscrt" 2>>"$log_file" | head -n1)
+	if [[ -z "$ws_key" || "$ws_key" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Workspace $workspace_arg not found in $bluexscrt. Use the workspace short name or full workspace name from your JSON." 1
+	fi
+	CRN=$(jq -r --arg ws "$ws_key" '.workspaces[$ws].crn' "$bluexscrt")
+	CLOUD_INSTANCE_ID=$(jq -r --arg ws "$ws_key" '.workspaces[$ws].id' "$bluexscrt")
+	full_ws_name=$(jq -r --arg ws "$ws_key" '.workspaces[$ws].name // $ws' "$bluexscrt")
+	if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Workspace $ws_key ($full_ws_name) missing CRN or ID in $bluexscrt. Aborting..." 1
+	fi
+	region_api=$(echo "$CRN" | sed -n 's/.*power-iaas:\([^:]*\):.*/\1/p' | tr '-' '_')
+	if [[ -z "$region_api" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not resolve PowerVS API endpoint for workspace $full_ws_name." 1
+	fi
+	base_url_var="base_${region_api}"
+	base_url="${!base_url_var}"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing Jobs in Workspace $full_ws_name !" "1"
+	local jobs_raw jobs_http jobs_body
+	jobs_raw=$(job_ls_status 2>>"$log_file")
+	jobs_http="${jobs_raw##*$'\n'}"
+	jobs_body="${jobs_raw%$'\n'*}"
+	case "$jobs_http" in
+		2[0-9][0-9]) ;;
+		*)
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Failed to list Jobs in Workspace $full_ws_name, HTTP status ${jobs_http:-?}." 1
+			;;
+	esac
+	if ! printf '%s' "$jobs_body" | jq -e '(.jobs // []) | length > 0' >/dev/null 2>&1
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - === No Jobs Found in Workspace $full_ws_name"
+	fi
+	printf "%-38s %-16s %-20s %-11s %-8s %-25s\n" "JOB_ID" "OPERATION" "TARGET" "STATUS" "PROGRESS" "CREATED" | tee -a "$log_file"
+	printf -- "-----------------------------------------------------------------------------------------------------------------\n" | tee -a "$log_file"
+	printf '%s' "$jobs_body" | jq -r '
+		.jobs[]? |
+		[
+			(.id // "N/A"),
+			(.operation.action // .operation.id // "N/A"),
+			(.operation.target // "N/A"),
+			(.status.state // "N/A"),
+			(.status.progress // "N/A"),
+			(.createTimestamp // "N/A")
+		] | @tsv
+	' 2>>"$log_file" | while IFS=$'\t' read -r j_id j_op j_target j_status j_progress j_created
+	do
+		printf "%-38s %-16s %-20s %-11s %-8s %-25s\n" "$j_id" "$j_op" "$j_target" "$j_status" "$j_progress" "$j_created" | tee -a "$log_file"
+	done
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing Jobs in Workspace $full_ws_name"
+}
+####  END:FUNCTION - List every job in one workspace (do_jobs_ls) ####
+
+####  START:FUNCTION - List every job in every workspace (do_jobs_lsall) ####
+# (1.21.0) -jobslsall: one merged table across every configured workspace, with a leading
+# WORKSPACE column - unlike -imglsall/-snaplsall/-vclonelsall, which print a separate section
+# per workspace, the brief for this flag asks for a single table. A workspace missing CRN/ID
+# in the secrets file is skipped (a config problem, not an API call, so nothing to check the
+# status of); once a call IS made, a non-2xx response aborts naming that workspace.
+do_jobs_lsall() {
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting listing all Jobs in all Workspaces !" "1"
+	read -r -a allws_array <<< "$allws"
+	printf "%-20s %-38s %-16s %-20s %-11s %-8s %-25s\n" "WORKSPACE" "JOB_ID" "OPERATION" "TARGET" "STATUS" "PROGRESS" "CREATED" | tee -a "$log_file"
+	printf -- "-------------------------------------------------------------------------------------------------------------------------------\n" | tee -a "$log_file"
+	local any_rows=0
+	local ws
+	for ws in "${allws_array[@]}"
+	do
+		CRN=$(jq -r --arg ws "$ws" '.workspaces[$ws].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg ws "$ws" '.workspaces[$ws].id' "$bluexscrt")
+		full_ws_name=$(jq -r --arg ws "$ws" '.workspaces[$ws].name // $ws' "$bluexscrt")
+		if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Workspace $ws ($full_ws_name) missing CRN or ID in $bluexscrt, skipping..." "1"
+			continue
+		fi
+		region_api=$(echo "$CRN" | sed -n 's/.*power-iaas:\([^:]*\):.*/\1/p' | tr '-' '_')
+		if [[ -z "$region_api" ]]
+		then
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Could not parse region from CRN $CRN for workspace $full_ws_name, skipping." "1"
+			continue
+		fi
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+		local jobs_raw jobs_http jobs_body
+		jobs_raw=$(job_ls_status 2>>"$log_file")
+		jobs_http="${jobs_raw##*$'\n'}"
+		jobs_body="${jobs_raw%$'\n'*}"
+		case "$jobs_http" in
+			2[0-9][0-9]) ;;
+			*)
+				abort "$(date +%Y-%m-%d_%H:%M:%S) - Failed to list Jobs in Workspace $full_ws_name, HTTP status ${jobs_http:-?}." 1
+				;;
+		esac
+		if ! printf '%s' "$jobs_body" | jq -e '(.jobs // []) | length > 0' >/dev/null 2>&1
+		then
+			continue
+		fi
+		any_rows=1
+		printf '%s' "$jobs_body" | jq -r '
+			.jobs[]? |
+			[
+				(.id // "N/A"),
+				(.operation.action // .operation.id // "N/A"),
+				(.operation.target // "N/A"),
+				(.status.state // "N/A"),
+				(.status.progress // "N/A"),
+				(.createTimestamp // "N/A")
+			] | @tsv
+		' 2>>"$log_file" | while IFS=$'\t' read -r j_id j_op j_target j_status j_progress j_created
+		do
+			printf "%-20s %-38s %-16s %-20s %-11s %-8s %-25s\n" "$full_ws_name" "$j_id" "$j_op" "$j_target" "$j_status" "$j_progress" "$j_created" | tee -a "$log_file"
+		done
+	done
+	if [ "$any_rows" -eq 0 ]
+	then
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - No Jobs Found in any configured Workspace." "1"
+	fi
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished listing all Jobs in all Workspaces"
+}
+####  END:FUNCTION - List every job in every workspace (do_jobs_lsall) ####
+
+####  START:FUNCTION - Show one job's full detail (do_job_get) ####
+do_job_get() {
+	local job_id="$1"
+	if [[ -z "$job_id" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - JOB_ID is missing. Syntax: bluexport_api.sh -jobget JOB_ID" 1
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Looking up Job $job_id in all Workspaces ===" "1"
+	if ! job_find_ws "$job_id"
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Job $job_id not found in any configured Workspace." 1
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Job $job_id found in Workspace $JOB_FOUND_WS_NAME:" "1"
+	printf '%s\n' "$JOB_JSON" | jq -r '
+		"Job ID: \(.id // "N/A")\n" +
+		"Operation: \(.operation.action // .operation.id // "N/A")\n" +
+		"Target: \(.operation.target // "N/A")\n" +
+		"Status: \(.status.state // "N/A")\n" +
+		"Progress: \(.status.progress // "N/A")\n" +
+		"Message: \(.status.message // "N/A")\n" +
+		"Created: \(.createTimestamp // "N/A")"
+	' 2>>"$log_file" | tee -a "$log_file"
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Job $job_id detail lookup in Workspace $JOB_FOUND_WS_NAME ==="
+}
+####  END:FUNCTION - Show one job's full detail (do_job_get) ####
+
+####  START:FUNCTION - Cancel/delete a job (do_job_cancel) ####
+# (1.21.0) Refuses unless the job's own status, read fresh via job_find_ws()/job_get(), is
+# still one an API-side cancel is meaningful for: "completed" and "failed" are terminal - the
+# job already finished and there is nothing left to cancel, so this refuses locally rather
+# than sending a DELETE the API would answer with a 4xx anyway. Any other state (queued,
+# running, or anything not yet recognized as terminal) reaches confirm_or_abort(), 1.19.0's
+# typed-confirmation helper (-vclone/-vclonedel/-vchtier/-insvchtier's), then job_del(); its
+# HTTP status is read by delete_check() exactly as do_img_delete() does for -imgdel.
+do_job_cancel() {
+	local job_id="$1" job_status job_status_lc del_output
+	if [[ -z "$job_id" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - JOB_ID is missing. Syntax: bluexport_api.sh -jobcancel JOB_ID" 1
+	fi
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Looking up Job $job_id in all Workspaces before cancelling ===" "1"
+	if ! job_find_ws "$job_id"
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Job $job_id not found in any configured Workspace. Nothing cancelled." 1
+	fi
+	job_status=$(printf '%s' "$JOB_JSON" | jq -r '.status.state // empty' 2>/dev/null)
+	if [[ -z "$job_status" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not read Job $job_id status in Workspace $JOB_FOUND_WS_NAME. Nothing cancelled." 1
+	fi
+	job_status_lc="${job_status,,}"
+	if [[ "$job_status_lc" == "completed" || "$job_status_lc" == "failed" ]]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Job $job_id in Workspace $JOB_FOUND_WS_NAME is already $job_status - nothing to cancel." 1
+	fi
+	confirm_or_abort "Cancel/delete Job $job_id (status $job_status) in Workspace $JOB_FOUND_WS_NAME. This cannot be undone." "$job_id"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Cancelling Job $job_id in Workspace $JOB_FOUND_WS_NAME..." "1"
+	del_output=$(job_del 2>>"$log_file")
+	if ! delete_check "$del_output" "Job $job_id"
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - FAILED - Job $job_id in Workspace $JOB_FOUND_WS_NAME was NOT cancelled." 1
+	fi
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Job $job_id in Workspace $JOB_FOUND_WS_NAME cancelled successfully. ==="
+}
+####  END:FUNCTION - Cancel/delete a job (do_job_cancel) ####
 
 ####  START:FUNCTION - Get iASP name  ####
 get_iASP_name() {
@@ -5873,6 +6179,29 @@ usage_je() {
 	echoscreen "    export job to re-attach monitoring to."
 }
 
+# (1.21.0)
+usage_jobsls() {
+	echoscreen "  WORKSPACE:"
+	echoscreen "    PowerVS workspace (short or full name) whose jobs to list."
+}
+
+# (1.21.0)
+usage_jobget() {
+	echoscreen "  JOB_ID:"
+	echoscreen "    Job ID to show full detail for (searched across every configured"
+	echoscreen "    workspace, same lookup as -imgdel/-je)."
+}
+
+# (1.21.0)
+usage_jobcancel() {
+	echoscreen "  JOB_ID:"
+	echoscreen "    Job ID to cancel/delete (searched across every configured workspace)."
+	echoscreen "    Refused unless the job's own status still allows it - an already-finished"
+	echoscreen "    job (completed/failed) has nothing to cancel. Asks for confirmation (type"
+	echoscreen "    the Job ID back) before sending the request, the same as"
+	echoscreen "    -vclone/-vclonedel/-vchtier/-insvchtier."
+}
+
 usage_snapcr() {
 	echoscreen "  VSI_NAME:"
 	echoscreen "    Name of the VSI to snapshot."
@@ -6121,6 +6450,9 @@ case $1 in
 			-imgexport) usage_imgexport ;;
 			-ji) usage_ji ;;
 			-je) usage_je ;;
+			-jobsls) usage_jobsls ;;
+			-jobget) usage_jobget ;;
+			-jobcancel) usage_jobcancel ;;
 			-snapcr) usage_snapcr ;;
 			-snapupd) usage_snapupd ;;
 			-snapdel) usage_snapdel ;;
@@ -7051,6 +7383,46 @@ case $1 in
 		abort "`date +%Y-%m-%d_%H:%M:%S` - Too many or too few arguments!! Syntax: bluexport_api.sh -je IMAGE_NAME" 1
 	fi
 	img_export_monitor "$2"
+    ;;
+
+  # (1.21.0) Jobs: account-wide job listing/detail/cancel, across every configured workspace.
+  -jobslsall)
+	if [ $# -gt 1 ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1" 1
+	fi
+	test=0
+	do_jobs_lsall
+    ;;
+
+  -jobsls)
+	if [ $# -ne 2 ]
+	then
+		usage_jobsls
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -jobsls WORKSPACE" 1
+	fi
+	test=0
+	do_jobs_ls "$2"
+    ;;
+
+  -jobget)
+	if [ $# -ne 2 ]
+	then
+		usage_jobget
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -jobget JOB_ID" 1
+	fi
+	test=0
+	do_job_get "$2"
+    ;;
+
+  -jobcancel)
+	if [ $# -ne 2 ]
+	then
+		usage_jobcancel
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many or too few arguments!! Syntax: bluexport_api.sh -jobcancel JOB_ID" 1
+	fi
+	test=0
+	do_job_cancel "$2"
     ;;
 
   -vclonelsall)

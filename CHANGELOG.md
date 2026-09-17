@@ -10,6 +10,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.21.0] - 2026-09-17 (`bluexport_api.sh`)
+
+### Added
+
+- **Four Jobs flags: `-jobslsall`, `-jobsls WORKSPACE`, `-jobget JOB_ID`, `-jobcancel JOB_ID`.**
+  Account-wide job listing/detail/cancel, on top of the same unified PowerVS jobs queue
+  `-j`/`-ji`/`-je` already poll:
+  - `-jobslsall` lists every job in every configured workspace as one merged table with a
+    `WORKSPACE` column - unlike `-imglsall`/`-snaplsall`/`-vclonelsall`, which print a
+    separate section per workspace, this one is a single table, per the brief for this flag.
+  - `-jobsls WORKSPACE` prints the same table for one workspace, resolved by short or full
+    name (the same lookup `-ji` already uses).
+  - `-jobget JOB_ID` prints one job's full detail, resolved by searching every configured
+    workspace for the ID (the same "search every workspace" idiom `-imgdel`/`-je` already
+    use for a bare name, via the new `job_find_ws()`).
+  - `-jobcancel JOB_ID` cancels/deletes a job, found the same way, but refuses locally when
+    the job's own status is already `completed` or `failed` - nothing left to cancel - and
+    asks for typed confirmation (`confirm_or_abort`, 1.19.0) before sending the DELETE.
+  - New API-layer functions: `job_ls_status()` (same request as the existing, until-now-unused
+    `job_ls()`, with the HTTP status appended - `job_get()`'s idiom) and `job_del()` (DELETE,
+    same idiom, checked by the existing `delete_check()`). No new HTTP plumbing otherwise:
+    `job_get()`, `confirm_or_abort()` and `delete_check()` are reused unchanged.
+  - Every call reads its HTTP status; a non-2xx aborts (exit 1) naming the workspace or job
+    and the step that failed. Status strings are the API's own, never re-worded.
+
+### IBM i / PASE
+
+- The four new flags use only constructs already elsewhere in this script (arrays, `[[ ]]`,
+  `local`, `${var,,}`, `read -r -a ... <<<`) - no `readarray`/`mapfile`, no `/proc`, no
+  `PIPESTATUS`, no `grep -P`.
+
 ## [1.20.1] - 2026-09-15 (`bluexport_api.sh`)
 
 ### Fixed

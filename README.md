@@ -145,6 +145,13 @@ Shows the built‑in help. Pass a flag after it (`-h -addlpar`) to show detailed
 - Both import and export monitor their PowerVS job to completion and exit non-zero on failure
 - Re-attach monitoring to an already-running import/export job without resubmitting (no local job-ID storage; works from a different machine)
 
+### **Jobs (account-wide)**
+- List every job in every configured workspace, one table, with a workspace column
+- List every job in one workspace
+- Show one job's full detail
+- Cancel/delete a job - refused unless the job's own status still allows it (an
+  already-finished job has nothing to cancel), with typed confirmation before sending
+
 ### **Cloud Object Storage (COS)**
 - List all buckets across all COS instances defined in the secrets file
 - Interactively list objects from a selected COS bucket
@@ -306,6 +313,20 @@ Parameters:
 - `IMAGE_NAME` (for `-je`): name of the image whose last export job should be monitored, resolved by name and searched across every configured workspace (same lookup as `-imgexport`/`-imgdel`)
 
 No job ID is stored locally - every call queries PowerVS directly for the last job on record. Like `-imgimport`/`-imgexport`, both exit non-zero on failure.
+
+### Jobs (account-wide)
+```
+./bluexport_api.sh -jobslsall
+./bluexport_api.sh -jobsls  WORKSPACE
+./bluexport_api.sh -jobget  JOB_ID
+./bluexport_api.sh -jobcancel JOB_ID
+```
+
+- `-jobslsall`: lists every job in every configured workspace, one merged table with a `WORKSPACE` column, newest API order
+- `-jobsls WORKSPACE`: the same table for a single workspace (short name or configured display name)
+- `-jobget JOB_ID`: full detail for one job, searched across every configured workspace (same lookup as `-imgdel`/`-je`)
+- `-jobcancel JOB_ID`: cancels/deletes a job, searched the same way; refused when the job's own status is already `completed` or `failed` (nothing left to cancel), and asks for typed confirmation (type the Job ID back) before sending the request, the same as `-vclone`/`-vclonedel`/`-vchtier`/`-insvchtier`
+- Every column shows the API's own values verbatim (status, operation, etc.) - nothing is re-worded
 
 ### Cloud Object Storage (COS)
 ```
