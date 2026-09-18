@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.23.1] - 2026-09-18 (`bluexport_api.sh`)
+
+### Fixed
+
+- Help text (`help()` and the `usage_*()` functions) reflowed so every
+  printed line fits inside 80 columns, matching the 5250 terminal width
+  the help is actually read on under PASE. No flag, argument or wording
+  was changed - only where the existing text wraps to a new line.
+- Replaced the em dash and the right-arrow (`->` was already used
+  elsewhere in this help text) characters in `help()` with plain ASCII,
+  since non-ASCII characters can render as unreadable substitution
+  glyphs on an EBCDIC-based 5250 session.
+
 ## [1.23.0] - 2026-09-18 (`bluexport_api.sh`)
 
 ### Added
