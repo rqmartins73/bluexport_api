@@ -108,6 +108,16 @@
 #   0=delete clone request only (keep volumes). delete_volumes=delete clone request AND cloned volumes.
 # List volume clones (all WS):  bluexport_api.sh -vclonelsall
 #
+# === Reports ===
+# Inventory report (all workspaces):    bluexport_api.sh -invreport \
+#   [FORMAT] [PATH] [OLD_DAYS]
+#   FORMAT:   md|csv|html|all (default md, case-insensitive).
+#   PATH:     output base path, no extension (default a timestamped
+#             name in the current directory).
+#   OLD_DAYS: snapshot/image "old" threshold in days (default 90).
+#   Read-only; never aborts on one bad workspace/group/bucket - it
+#   names it and moves on. See -h -invreport for the full breakdown.
+#
 # === Volume Tier ===
 # Change volume tier (by name):         bluexport_api.sh -vchtier VSI_NAME VOLUMES_NAME TIER_TO_CHANGE_TO
 # Change volume tier (all VSI volumes): bluexport_api.sh -insvchtier VSI_NAME TIER_TO_CHANGE_TO
@@ -177,7 +187,7 @@ export PATH
 
        #####  START:CODE  #####
 
-Version=1.22.0
+Version=1.23.0
 
 conf_file="$HOME/bluexport_api_conf.json"
 
@@ -666,6 +676,12 @@ help() {
 	echoscreen "Detach ALL volumes from a VSI: bluexport_api.sh -detachvolumes VSI_NAME"
 	echoscreen "      Detach all volumes currently attached to the VSI. VSI must be SHUTOFF."
 	echoscreen ""
+	echoscreen "=== Reports ==="
+	echoscreen "Inventory report (all workspaces): bluexport_api.sh -invreport"
+	echoscreen "  [FORMAT] [PATH] [OLD_DAYS]"
+	echoscreen "  FORMAT: md|csv|html|all (default md). Read-only; never"
+	echoscreen "  aborts on one bad workspace/group/bucket - see -h -invreport"
+	echoscreen ""
 	echoscreen "=== Examples ==="
 	echoscreen "Capture all volumes:        bluexport_api.sh -a vsiprd vsiprd_img image-catalog daily"
 	echoscreen "Capture excluding ASP2_:    bluexport_api.sh -x ASP2_ vsiprd vsiprd_img both monthly"
@@ -1054,7 +1070,21 @@ snap_res() {
 
 ## COS
 list_object() {
-	curl -sX GET https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET?list-type=2 -H "$header_auth" 
+	curl -sX GET https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET?list-type=2 -H "$header_auth"
+}
+
+# (1.23.0) Same GET as list_object(), with an optional S3 continuation token
+# (CONTINUATION_TOKEN, set by the caller) appended - used by -invreport's
+# bounded COS object-count pagination loop (see invreport_bucket_objects).
+# A separate function, not a change to list_object(): that one has another
+# caller (-bucketlsobjs) that always wants exactly one, unparameterised page.
+list_object_page() {
+	local qs="list-type=2"
+	if [ -n "$CONTINUATION_TOKEN" ]
+	then
+		qs="$qs&continuation-token=$(printf '%s' "$CONTINUATION_TOKEN" | jq -sRr @uri)"
+	fi
+	curl -sX GET "https://s3.$REGION.cloud-object-storage.appdomain.cloud/$BUCKET?$qs" -H "$header_auth"
 }
 
 object_delete() {
@@ -6067,6 +6097,1118 @@ img_export_monitor() {
 }
 ####  END:FUNCTION - Monitor Existing Image Export Job ####
 
+#### START:FUNCTIONS - Inventory report (-invreport) ####
+# One read-only pass across every configured workspace (and COS instance),
+# reusing the same GET helpers and workspace-loop skeleton as
+# -snaplsall/-vsidetails/-vclonelsall/-imglsall/-bucketslsall. Never calls a
+# write endpoint. A workspace, volume group or bucket this cannot read is
+# named in the report's own "Could not be read" section and skipped - it
+# never aborts the whole report, and a failure is never rendered as an
+# empty/zero result (see invreport_get/invreport_unreadable below).
+#
+# Section order, headers and the exact "None found."/"Could not be read"
+# wording match the equivalent report this project's own desktop
+# application produces, so a CLI-generated report and an
+# application-generated one for the same account read the same way side
+# by side.
+
+# invreport_get FN KEY
+# Calls the zero-arg API helper FN (ins_ls/vol_ls/vg_ls/vg_sd/snap_ls/
+# img_ls/vol_cl_ls - each already reads the CRN/CLOUD_INSTANCE_ID/base_url
+# the caller set beforehand) and tells a real failure (curl error, a
+# non-JSON body, or a JSON error body with no KEY) apart from a genuinely
+# empty list - an ambiguity most *lsall flags in this script leave
+# unresolved (a failed call and an empty workspace both print "No X
+# Found"). On success: prints the raw JSON body, returns 0. On failure:
+# prints one short reason (no trailing newline), returns 1.
+invreport_get() {
+	local fn="$1" key="$2" json rc msg
+	json=$("$fn" 2>>"$log_file")
+	rc=$?
+	if [ $rc -ne 0 ]
+	then
+		printf 'request failed (curl rc=%s)' "$rc"
+		return 1
+	fi
+	if [ -z "$json" ]
+	then
+		printf 'empty response from the API'
+		return 1
+	fi
+	if ! printf '%s' "$json" | jq -e . >/dev/null 2>&1
+	then
+		printf 'response was not valid JSON'
+		return 1
+	fi
+	if printf '%s' "$json" | jq -e --arg k "$key" 'has($k)' >/dev/null 2>&1
+	then
+		printf '%s' "$json"
+		return 0
+	fi
+	msg=$(printf '%s' "$json" | jq -r '.message // .error // .errors[0].message // empty' 2>>"$log_file")
+	printf 'API error%s' "${msg:+: $msg}"
+	return 1
+}
+
+# invreport_unreadable CONTEXT REASON
+# Records one line in the report's "Could not be read" section (never a
+# silent gap) and echoes it to screen/log immediately, so an operator
+# watching a long run sees a failure the moment it happens.
+invreport_unreadable() {
+	local line
+	line="$1: $2"
+	line=$(printf '%s' "$line" | tr '\t\n\r' '   ')
+	printf '%s\n' "$line" >> "$invreport_unreadable_tsv"
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Could not read $line" "1"
+}
+
+# invreport_is_old ISO_DATE DAYS NOW_EPOCH
+# Prints 1 if ISO_DATE is older than DAYS days, 0 otherwise - including
+# when the date is empty/null or cannot be parsed, matching the report's
+# own rule that a missing date is never counted as "old".
+invreport_is_old() {
+	local iso="$1" days="$2" now_epoch="$3" then_epoch
+	if [ -z "$iso" ] || [ "$iso" = "null" ]
+	then
+		printf '0'
+		return
+	fi
+	then_epoch=$(date -d "$iso" +%s 2>/dev/null)
+	if [ -z "$then_epoch" ]
+	then
+		printf '0'
+		return
+	fi
+	if [ $(( (now_epoch - then_epoch) / 86400 )) -gt "$days" ]
+	then
+		printf '1'
+	else
+		printf '0'
+	fi
+}
+
+# invreport_fmt_num N - trims a "%.2f" formatting down to at most 2
+# decimals, no trailing zeros (the same "0.##" shape the application's own
+# report uses for GB/core totals).
+invreport_fmt_num() {
+	awk -v n="$1" 'BEGIN{printf "%.2f", n+0}' | sed -e 's/\.00$//' -e 's/\(\.[0-9]\)0$/\1/'
+}
+
+# invreport_md_escape / invreport_html_escape / invreport_csv_field
+# Match the equivalent report's own escaping rules exactly (pipe/CR/LF for
+# Markdown, the four HTML metacharacters, RFC 4180 minimal quoting for
+# CSV) so free-text values (an LPAR/bucket name is operator-chosen and
+# could contain any of them) never break the rendered table.
+invreport_md_escape() {
+	printf '%s' "$1" | tr '\r\n' '  ' | sed 's/|/\\|/g'
+}
+
+invreport_html_escape() {
+	printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
+
+invreport_csv_field() {
+	local v="$1"
+	if [[ "$v" == *,* || "$v" == *'"'* || "$v" == *$'\n'* || "$v" == *$'\r'* ]]
+	then
+		v=$(printf '%s' "$v" | sed 's/"/""/g')
+		printf '"%s"' "$v"
+	else
+		printf '%s' "$v"
+	fi
+}
+
+# invreport_bucket_objects - bounded pagination over list_object_page()'s S3
+# XML, following <NextContinuationToken> while <IsTruncated>true</
+# IsTruncated>. Reads $BUCKET (set by the caller). Capped at
+# INVREPORT_MAX_COS_PAGES pages (default 100000, override via env) as a
+# backstop against a server that never stops reporting truncated - every
+# polling/paginating loop in this script must be bounded, and this one is
+# new, so it does not get to copy the unbounded pattern some older loops
+# in this file still have. On a page failure, a missing continuation token
+# on a truncated page, or hitting the page cap, the whole count/size is
+# discarded (never reported as a partial-but-silent undercount) and a
+# reason is returned instead - the same all-or-nothing posture the rest of
+# this report's failure handling uses.
+# Prints "COUNT<TAB>SIZE<TAB>REASON" - COUNT/SIZE are empty when REASON is
+# set.
+invreport_bucket_objects() {
+	local max_pages="${INVREPORT_MAX_COS_PAGES:-100000}"
+	local page=0 count=0 size=0 truncated="true" reason=""
+	CONTINUATION_TOKEN=""
+	while [[ "$truncated" == "true" ]]
+	do
+		page=$((page + 1))
+		if [ "$page" -gt "$max_pages" ]
+		then
+			reason="did not finish after $max_pages page(s) (INVREPORT_MAX_COS_PAGES) - S3 kept reporting more to follow"
+			count=""
+			size=""
+			break
+		fi
+		local xml rc
+		xml=$(list_object_page 2>>"$log_file")
+		rc=$?
+		if [ $rc -ne 0 ] || [ -z "$xml" ]
+		then
+			reason="request failed listing objects (page $page, curl rc=$rc)"
+			count=""
+			size=""
+			break
+		fi
+		local data="$xml"
+		while [[ "$data" == *"<Contents>"*"</Contents>"* ]]
+		do
+			local chunk sz
+			chunk="${data#*<Contents>}"
+			chunk="${chunk%%</Contents>*}"
+			data="${data#*</Contents>}"
+			sz=""
+			if [[ "$chunk" == *"<Size>"*"</Size>"* ]]
+			then
+				sz="${chunk#*<Size>}"
+				sz="${sz%%</Size>*}"
+			fi
+			[[ "$sz" =~ ^[0-9]+$ ]] || sz=0
+			count=$((count + 1))
+			size=$((size + sz))
+		done
+		truncated="false"
+		if [[ "$xml" == *"<IsTruncated>"*"</IsTruncated>"* ]]
+		then
+			truncated="${xml#*<IsTruncated>}"
+			truncated="${truncated%%</IsTruncated>*}"
+		fi
+		local token=""
+		if [[ "$xml" == *"<NextContinuationToken>"*"</NextContinuationToken>"* ]]
+		then
+			token="${xml#*<NextContinuationToken>}"
+			token="${token%%</NextContinuationToken>*}"
+		fi
+		if [[ "$truncated" == "true" && -z "$token" ]]
+		then
+			reason="S3 reported more objects (IsTruncated=true) but no continuation token - refusing to report a partial listing as complete"
+			count=""
+			size=""
+			break
+		fi
+		CONTINUATION_TOKEN="$token"
+		# Redirected to /dev/null: this function's stdout is captured via
+		# command substitution by the caller (invreport_bucket_objects's
+		# own COUNT/SIZE/REASON line), so a progress line printed here
+		# would otherwise leak into that captured value. Still logged
+		# (flag "1"), just not echoed to the terminal from inside here.
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) -     page $page: $count object(s) so far in bucket '$BUCKET'" "1" >/dev/null
+	done
+	printf '%s\037%s\037%s\n' "$count" "$size" "$reason"
+}
+
+# invreport_totals_lines WD - prints the Totals section's lines, one per
+# line, no leading bullet/markup - the md/html writers wrap each in their
+# own list syntax.
+invreport_totals_lines() {
+	local wd="$1"
+	local workspaces lpars memknown coresknown mem cores vol volattach snap snapold img imgold days
+	workspaces=$(awk -F'\037' '$1=="WorkspaceCount"{print $2}' "$wd/totals.tsv")
+	lpars=$(awk -F'\037' '$1=="LparCount"{print $2}' "$wd/totals.tsv")
+	memknown=$(awk -F'\037' '$1=="LparsWithMemoryKnown"{print $2}' "$wd/totals.tsv")
+	coresknown=$(awk -F'\037' '$1=="LparsWithCoresKnown"{print $2}' "$wd/totals.tsv")
+	mem=$(awk -F'\037' '$1=="TotalMemoryGb"{print $2}' "$wd/totals.tsv")
+	cores=$(awk -F'\037' '$1=="TotalCores"{print $2}' "$wd/totals.tsv")
+	vol=$(awk -F'\037' '$1=="VolumeCount"{print $2}' "$wd/totals.tsv")
+	volattach=$(awk -F'\037' '$1=="UnattachedVolumeCount"{print $2}' "$wd/totals.tsv")
+	snap=$(awk -F'\037' '$1=="SnapshotCount"{print $2}' "$wd/totals.tsv")
+	snapold=$(awk -F'\037' '$1=="OldSnapshotCount"{print $2}' "$wd/totals.tsv")
+	img=$(awk -F'\037' '$1=="ImageCount"{print $2}' "$wd/totals.tsv")
+	imgold=$(awk -F'\037' '$1=="OldImageCount"{print $2}' "$wd/totals.tsv")
+	days=$(awk -F'\037' '$1=="OldThresholdDays"{print $2}' "$wd/totals.tsv")
+	printf 'Workspaces: %s\n' "$workspaces"
+	printf 'LPARs: %s (memory known for %s, cores known for %s)\n' "$lpars" "$memknown" "$coresknown"
+	printf 'Total memory: %s GB\n' "$mem"
+	printf 'Total cores: %s\n' "$cores"
+	awk -F'\037' '$1 ~ /^StorageGb\./{ sub(/^StorageGb\./,"",$1); printf "Storage on tier %s: %s GB\n", $1, $2 }' "$wd/totals.tsv" | sort
+	printf 'Volumes: %s (%s unattached)\n' "$vol" "$volattach"
+	printf 'Snapshots: %s (%s older than %s day(s))\n' "$snap" "$snapold" "$days"
+	printf 'Images: %s (%s older than %s day(s))\n' "$img" "$imgold" "$days"
+}
+
+# invreport_write_md WD OUTFILE - renders the whole report as one Markdown
+# file, the source of truth CSV/HTML match section-for-section.
+invreport_write_md() {
+	local wd="$1" outfile="$2"
+	{
+		echo "# Inventory report"
+		echo
+		echo "Generated $(date -u +"%Y-%m-%d %H:%M UTC")."
+		echo
+		echo "## Could not be read"
+		echo
+		if [ -s "$wd/unreadable.tsv" ]
+		then
+			while IFS=$'\037' read -r reason
+			do
+				echo "- $(invreport_md_escape "$reason")"
+			done < "$wd/unreadable.tsv"
+		else
+			echo "Every configured workspace, volume group and bucket was read successfully."
+		fi
+		echo
+
+		echo "## Totals"
+		echo
+		while IFS= read -r line
+		do
+			echo "- $line"
+		done < <(invreport_totals_lines "$wd")
+		echo
+
+		echo "## Workspaces"
+		echo
+		if [ ! -s "$wd/workspaces.tsv" ]
+		then
+			echo "None found."
+			echo
+		else
+			echo "| Name | Key | Region | Zone | Id | LPARs |"
+			echo "| --- | --- | --- | --- | --- | --- |"
+			while IFS=$'\037' read -r key name region zone id lparcount
+			do
+				printf '| %s | %s | %s | %s | %s | %s |\n' \
+					"$(invreport_md_escape "$name")" "$(invreport_md_escape "$key")" \
+					"$(invreport_md_escape "$region")" "$(invreport_md_escape "$zone")" \
+					"$(invreport_md_escape "$id")" "$lparcount"
+			done < "$wd/workspaces.tsv"
+			echo
+		fi
+
+		echo "## LPARs"
+		echo
+		if [ ! -s "$wd/lpars.tsv" ]
+		then
+			echo "None found."
+			echo
+		else
+			echo "| Workspace | Name | Id | Status | OS | OS detail | Cores | Type | Memory (GB) | System type | Licences | IP addresses |"
+			echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+			while IFS=$'\037' read -r wskey wsname name id status os osdetail cores vcores proctype memgb systype lic ips
+			do
+				printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+					"$(invreport_md_escape "$wsname")" "$(invreport_md_escape "$name")" "$(invreport_md_escape "$id")" \
+					"$(invreport_md_escape "$status")" "$(invreport_md_escape "$os")" "$(invreport_md_escape "$osdetail")" \
+					"$(invreport_md_escape "${cores:--}")" "$(invreport_md_escape "${proctype:--}")" \
+					"$(invreport_md_escape "${memgb:--}")" "$(invreport_md_escape "${systype:--}")" \
+					"$(invreport_md_escape "${lic:--}")" "$(invreport_md_escape "${ips:--}")"
+			done < "$wd/lpars.tsv"
+			echo
+		fi
+
+		echo "## Volumes"
+		echo
+		if [ ! -s "$wd/volumes.tsv" ]
+		then
+			echo "None found."
+			echo
+		else
+			echo "| Workspace | Name | Id | Tier | Size (GB) | Bootable | Attached to | Replication | Origin |"
+			echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+			while IFS=$'\037' read -r wskey wsname id name tier size boot state repl attached origin
+			do
+				local bootdisp=no repldisp=disabled attacheddisp="not attached"
+				[ "$boot" = "true" ] && bootdisp=yes
+				[ "$repl" = "true" ] && repldisp=enabled
+				[ -n "$attached" ] && attacheddisp="$attached"
+				printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+					"$(invreport_md_escape "$wsname")" "$(invreport_md_escape "$name")" "$(invreport_md_escape "$id")" \
+					"$(invreport_md_escape "${tier:--}")" "$(invreport_md_escape "${size:--}")" "$bootdisp" \
+					"$(invreport_md_escape "$attacheddisp")" "$repldisp" "$(invreport_md_escape "$origin")"
+			done < "$wd/volumes.tsv"
+			echo
+		fi
+
+		echo "## Volume groups"
+		echo
+		if [ ! -s "$wd/volumegroups.tsv" ]
+		then
+			echo "None found."
+			echo
+		else
+			echo "| Workspace | Name | Id | Consistency group | State | Primary role | Remote copies |"
+			echo "| --- | --- | --- | --- | --- | --- | --- |"
+			while IFS=$'\037' read -r wskey wsname id name cg state primary remote reason
+			do
+				local statedisp="${state:--}"
+				[ -z "$state" ] && [ -n "$reason" ] && statedisp="unreadable ($reason)"
+				printf '| %s | %s | %s | %s | %s | %s | %s |\n' \
+					"$(invreport_md_escape "$wsname")" "$(invreport_md_escape "$name")" "$(invreport_md_escape "$id")" \
+					"$(invreport_md_escape "${cg:--}")" "$(invreport_md_escape "$statedisp")" \
+					"$(invreport_md_escape "${primary:--}")" "${remote:-0}"
+			done < "$wd/volumegroups.tsv"
+			echo
+		fi
+
+		echo "## Snapshots"
+		echo
+		if [ ! -s "$wd/snapshots.tsv" ]
+		then
+			echo "None found."
+			echo
+		else
+			echo "| Workspace | Name | LPAR | Status | Created | Volumes |"
+			echo "| --- | --- | --- | --- | --- | --- |"
+			while IFS=$'\037' read -r wskey wsname name lpar status created volcount isold
+			do
+				printf '| %s | %s | %s | %s | %s | %s |\n' \
+					"$(invreport_md_escape "$wsname")" "$(invreport_md_escape "$name")" \
+					"$(invreport_md_escape "${lpar:--}")" "$(invreport_md_escape "$status")" \
+					"$(invreport_md_escape "${created:--}")" "${volcount:-0}"
+			done < "$wd/snapshots.tsv"
+			echo
+		fi
+
+		echo "## Images"
+		echo
+		if [ ! -s "$wd/images.tsv" ]
+		then
+			echo "None found."
+			echo
+		else
+			echo "| Workspace | Name | Status | Operating system | Created |"
+			echo "| --- | --- | --- | --- | --- |"
+			while IFS=$'\037' read -r wskey wsname name status os created isold
+			do
+				printf '| %s | %s | %s | %s | %s |\n' \
+					"$(invreport_md_escape "$wsname")" "$(invreport_md_escape "$name")" \
+					"$(invreport_md_escape "$status")" "$(invreport_md_escape "${os:--}")" \
+					"$(invreport_md_escape "${created:--}")"
+			done < "$wd/images.tsv"
+			echo
+		fi
+
+		echo "## Volume clones"
+		echo
+		if [ ! -s "$wd/volumeclones.tsv" ]
+		then
+			echo "None found."
+			echo
+		else
+			echo "| Workspace | Name | Status | Percent complete | Created |"
+			echo "| --- | --- | --- | --- | --- |"
+			while IFS=$'\037' read -r wskey wsname name status pct created
+			do
+				printf '| %s | %s | %s | %s | %s |\n' \
+					"$(invreport_md_escape "$wsname")" "$(invreport_md_escape "$name")" \
+					"$(invreport_md_escape "$status")" "${pct:-0}" "$(invreport_md_escape "${created:--}")"
+			done < "$wd/volumeclones.tsv"
+			echo
+		fi
+
+		echo "## COS buckets"
+		echo
+		if [ ! -s "$wd/buckets.tsv" ]
+		then
+			echo "None found."
+			echo
+		else
+			echo "| COS instance | Bucket | Created | Objects | Total size (bytes) |"
+			echo "| --- | --- | --- | --- | --- |"
+			while IFS=$'\037' read -r cosinst bucket created count size reason
+			do
+				local countdisp="$count" sizedisp="${size:--}"
+				if [ -n "$reason" ]
+				then
+					countdisp="unreadable ($reason)"
+					sizedisp="-"
+				fi
+				printf '| %s | %s | %s | %s | %s |\n' \
+					"$(invreport_md_escape "$cosinst")" "$(invreport_md_escape "$bucket")" \
+					"$(invreport_md_escape "${created:--}")" "$(invreport_md_escape "$countdisp")" "$sizedisp"
+			done < "$wd/buckets.tsv"
+			echo
+		fi
+	} > "$outfile"
+}
+
+# invreport_write_csv WD OUTDIR - one CSV file per section, RFC 4180
+# minimal quoting (invreport_csv_field), matching the equivalent report's
+# own CSV headers.
+invreport_write_csv() {
+	local wd="$1" outdir="$2"
+	mkdir -p "$outdir" 2>>"$log_file"
+
+	{
+		echo "Metric,Value"
+		while IFS=$'\037' read -r metric value
+		do
+			printf '%s,%s\n' "$(invreport_csv_field "$metric")" "$(invreport_csv_field "$value")"
+		done < "$wd/totals.tsv"
+	} > "$outdir/totals.csv"
+
+	{
+		echo "Name,Key,Region,Zone,Id,LPARs"
+		while IFS=$'\037' read -r key name region zone id lparcount
+		do
+			printf '%s,%s,%s,%s,%s,%s\n' \
+				"$(invreport_csv_field "$name")" "$(invreport_csv_field "$key")" \
+				"$(invreport_csv_field "$region")" "$(invreport_csv_field "$zone")" \
+				"$(invreport_csv_field "$id")" "$lparcount"
+		done < "$wd/workspaces.tsv"
+	} > "$outdir/workspaces.csv"
+
+	{
+		echo "Workspace,Name,Id,Status,OS,OS detail,Cores,VirtualCores,ProcessorType,MemoryGb,SystemType,Licences,IpAddresses"
+		while IFS=$'\037' read -r wskey wsname name id status os osdetail cores vcores proctype memgb systype lic ips
+		do
+			printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+				"$(invreport_csv_field "$wsname")" "$(invreport_csv_field "$name")" "$(invreport_csv_field "$id")" \
+				"$(invreport_csv_field "$status")" "$(invreport_csv_field "$os")" "$(invreport_csv_field "$osdetail")" \
+				"$(invreport_csv_field "$cores")" "$(invreport_csv_field "$vcores")" "$(invreport_csv_field "$proctype")" \
+				"$(invreport_csv_field "$memgb")" "$(invreport_csv_field "$systype")" "$(invreport_csv_field "$lic")" \
+				"$(invreport_csv_field "$ips")"
+		done < "$wd/lpars.tsv"
+	} > "$outdir/lpars.csv"
+
+	{
+		echo "Workspace,Name,Id,Tier,SizeGb,Bootable,AttachedTo,ReplicationEnabled,Origin"
+		while IFS=$'\037' read -r wskey wsname id name tier size boot state repl attached origin
+		do
+			printf '%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+				"$(invreport_csv_field "$wsname")" "$(invreport_csv_field "$name")" "$(invreport_csv_field "$id")" \
+				"$(invreport_csv_field "$tier")" "$(invreport_csv_field "$size")" "$(invreport_csv_field "$boot")" \
+				"$(invreport_csv_field "$attached")" "$(invreport_csv_field "$repl")" "$(invreport_csv_field "$origin")"
+		done < "$wd/volumes.tsv"
+	} > "$outdir/volumes.csv"
+
+	{
+		echo "Workspace,Name,Id,ConsistencyGroup,ReplicationState,PrimaryRole,RemoteCopyCount"
+		while IFS=$'\037' read -r wskey wsname id name cg state primary remote reason
+		do
+			printf '%s,%s,%s,%s,%s,%s,%s\n' \
+				"$(invreport_csv_field "$wsname")" "$(invreport_csv_field "$name")" "$(invreport_csv_field "$id")" \
+				"$(invreport_csv_field "$cg")" "$(invreport_csv_field "$state")" "$(invreport_csv_field "$primary")" \
+				"$(invreport_csv_field "${remote:-0}")"
+		done < "$wd/volumegroups.tsv"
+	} > "$outdir/volume-groups.csv"
+
+	{
+		echo "Workspace,Name,Lpar,Status,CreatedAt,VolumeCount"
+		while IFS=$'\037' read -r wskey wsname name lpar status created volcount isold
+		do
+			printf '%s,%s,%s,%s,%s,%s\n' \
+				"$(invreport_csv_field "$wsname")" "$(invreport_csv_field "$name")" "$(invreport_csv_field "$lpar")" \
+				"$(invreport_csv_field "$status")" "$(invreport_csv_field "$created")" "${volcount:-0}"
+		done < "$wd/snapshots.tsv"
+	} > "$outdir/snapshots.csv"
+
+	{
+		echo "Workspace,Name,Status,OperatingSystem,CreatedAt"
+		while IFS=$'\037' read -r wskey wsname name status os created isold
+		do
+			printf '%s,%s,%s,%s,%s\n' \
+				"$(invreport_csv_field "$wsname")" "$(invreport_csv_field "$name")" \
+				"$(invreport_csv_field "$status")" "$(invreport_csv_field "$os")" "$(invreport_csv_field "$created")"
+		done < "$wd/images.tsv"
+	} > "$outdir/images.csv"
+
+	{
+		echo "Workspace,Name,Status,PercentComplete,CreatedAt"
+		while IFS=$'\037' read -r wskey wsname name status pct created
+		do
+			printf '%s,%s,%s,%s,%s\n' \
+				"$(invreport_csv_field "$wsname")" "$(invreport_csv_field "$name")" \
+				"$(invreport_csv_field "$status")" "${pct:-0}" "$(invreport_csv_field "$created")"
+		done < "$wd/volumeclones.tsv"
+	} > "$outdir/volume-clones.csv"
+
+	{
+		echo "CosInstance,Bucket,CreatedAt,ObjectCount,TotalSizeBytes,UnreadableReason"
+		while IFS=$'\037' read -r cosinst bucket created count size reason
+		do
+			printf '%s,%s,%s,%s,%s,%s\n' \
+				"$(invreport_csv_field "$cosinst")" "$(invreport_csv_field "$bucket")" \
+				"$(invreport_csv_field "$created")" "$(invreport_csv_field "$count")" \
+				"$(invreport_csv_field "$size")" "$(invreport_csv_field "$reason")"
+		done < "$wd/buckets.tsv"
+	} > "$outdir/buckets.csv"
+
+	{
+		echo "Reason"
+		while IFS=$'\037' read -r reason
+		do
+			printf '%s\n' "$(invreport_csv_field "$reason")"
+		done < "$wd/unreadable.tsv"
+	} > "$outdir/unreadable.csv"
+}
+
+# invreport_write_html WD OUTFILE - one self-contained HTML file (inline
+# <style>, no external references), same section order/columns as
+# Markdown, every value HTML-escaped.
+invreport_write_html() {
+	local wd="$1" outfile="$2"
+	{
+		printf '<!DOCTYPE html><html><head><meta charset="utf-8">'
+		printf '<title>Inventory report</title><style>'
+		printf 'body{font-family:Arial,sans-serif;margin:24px;color:#1a1a1a}'
+		printf 'h1{font-size:22px}h2{font-size:16px;margin-top:28px;border-bottom:1px solid #ccc;padding-bottom:4px}'
+		printf 'table{border-collapse:collapse;width:100%%;margin-bottom:8px}'
+		printf 'th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;font-size:13px}'
+		printf 'th{background:#f0f0f0}ul{font-size:13px}'
+		printf '</style></head><body>'
+		printf '<h1>Inventory report</h1>'
+		printf '<p>Generated %s.</p>' "$(date -u +"%Y-%m-%d %H:%M UTC")"
+
+		printf '<h2>Could not be read</h2>'
+		if [ -s "$wd/unreadable.tsv" ]
+		then
+			printf '<ul>'
+			while IFS=$'\037' read -r reason
+			do
+				printf '<li>%s</li>' "$(invreport_html_escape "$reason")"
+			done < "$wd/unreadable.tsv"
+			printf '</ul>'
+		else
+			printf '<p>Every configured workspace, volume group and bucket was read successfully.</p>'
+		fi
+
+		printf '<h2>Totals</h2><ul>'
+		while IFS= read -r line
+		do
+			printf '<li>%s</li>' "$(invreport_html_escape "$line")"
+		done < <(invreport_totals_lines "$wd")
+		printf '</ul>'
+
+		printf '<h2>Workspaces</h2>'
+		if [ ! -s "$wd/workspaces.tsv" ]
+		then
+			printf '<p>None found.</p>'
+		else
+			printf '<table><tr><th>Name</th><th>Key</th><th>Region</th><th>Zone</th><th>Id</th><th>LPARs</th></tr>'
+			while IFS=$'\037' read -r key name region zone id lparcount
+			do
+				printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
+					"$(invreport_html_escape "$name")" "$(invreport_html_escape "$key")" \
+					"$(invreport_html_escape "$region")" "$(invreport_html_escape "$zone")" \
+					"$(invreport_html_escape "$id")" "$lparcount"
+			done < "$wd/workspaces.tsv"
+			printf '</table>'
+		fi
+
+		printf '<h2>LPARs</h2>'
+		if [ ! -s "$wd/lpars.tsv" ]
+		then
+			printf '<p>None found.</p>'
+		else
+			printf '<table><tr><th>Workspace</th><th>Name</th><th>Id</th><th>Status</th><th>OS</th><th>OS detail</th><th>Cores</th><th>Type</th><th>Memory (GB)</th><th>System type</th><th>Licences</th><th>IP addresses</th></tr>'
+			while IFS=$'\037' read -r wskey wsname name id status os osdetail cores vcores proctype memgb systype lic ips
+			do
+				printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
+					"$(invreport_html_escape "$wsname")" "$(invreport_html_escape "$name")" "$(invreport_html_escape "$id")" \
+					"$(invreport_html_escape "$status")" "$(invreport_html_escape "$os")" "$(invreport_html_escape "$osdetail")" \
+					"$(invreport_html_escape "${cores:--}")" "$(invreport_html_escape "${proctype:--}")" \
+					"$(invreport_html_escape "${memgb:--}")" "$(invreport_html_escape "${systype:--}")" \
+					"$(invreport_html_escape "${lic:--}")" "$(invreport_html_escape "${ips:--}")"
+			done < "$wd/lpars.tsv"
+			printf '</table>'
+		fi
+
+		printf '<h2>Volumes</h2>'
+		if [ ! -s "$wd/volumes.tsv" ]
+		then
+			printf '<p>None found.</p>'
+		else
+			printf '<table><tr><th>Workspace</th><th>Name</th><th>Id</th><th>Tier</th><th>Size (GB)</th><th>Bootable</th><th>Attached to</th><th>Replication</th><th>Origin</th></tr>'
+			while IFS=$'\037' read -r wskey wsname id name tier size boot state repl attached origin
+			do
+				local bootdisp=no repldisp=disabled attacheddisp="not attached"
+				[ "$boot" = "true" ] && bootdisp=yes
+				[ "$repl" = "true" ] && repldisp=enabled
+				[ -n "$attached" ] && attacheddisp="$attached"
+				printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
+					"$(invreport_html_escape "$wsname")" "$(invreport_html_escape "$name")" "$(invreport_html_escape "$id")" \
+					"$(invreport_html_escape "${tier:--}")" "$(invreport_html_escape "${size:--}")" "$bootdisp" \
+					"$(invreport_html_escape "$attacheddisp")" "$repldisp" "$(invreport_html_escape "$origin")"
+			done < "$wd/volumes.tsv"
+			printf '</table>'
+		fi
+
+		printf '<h2>Volume groups</h2>'
+		if [ ! -s "$wd/volumegroups.tsv" ]
+		then
+			printf '<p>None found.</p>'
+		else
+			printf '<table><tr><th>Workspace</th><th>Name</th><th>Id</th><th>Consistency group</th><th>State</th><th>Primary role</th><th>Remote copies</th></tr>'
+			while IFS=$'\037' read -r wskey wsname id name cg state primary remote reason
+			do
+				local statedisp="${state:--}"
+				[ -z "$state" ] && [ -n "$reason" ] && statedisp="unreadable ($reason)"
+				printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
+					"$(invreport_html_escape "$wsname")" "$(invreport_html_escape "$name")" "$(invreport_html_escape "$id")" \
+					"$(invreport_html_escape "${cg:--}")" "$(invreport_html_escape "$statedisp")" \
+					"$(invreport_html_escape "${primary:--}")" "${remote:-0}"
+			done < "$wd/volumegroups.tsv"
+			printf '</table>'
+		fi
+
+		printf '<h2>Snapshots</h2>'
+		if [ ! -s "$wd/snapshots.tsv" ]
+		then
+			printf '<p>None found.</p>'
+		else
+			printf '<table><tr><th>Workspace</th><th>Name</th><th>LPAR</th><th>Status</th><th>Created</th><th>Volumes</th></tr>'
+			while IFS=$'\037' read -r wskey wsname name lpar status created volcount isold
+			do
+				printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
+					"$(invreport_html_escape "$wsname")" "$(invreport_html_escape "$name")" \
+					"$(invreport_html_escape "${lpar:--}")" "$(invreport_html_escape "$status")" \
+					"$(invreport_html_escape "${created:--}")" "${volcount:-0}"
+			done < "$wd/snapshots.tsv"
+			printf '</table>'
+		fi
+
+		printf '<h2>Images</h2>'
+		if [ ! -s "$wd/images.tsv" ]
+		then
+			printf '<p>None found.</p>'
+		else
+			printf '<table><tr><th>Workspace</th><th>Name</th><th>Status</th><th>Operating system</th><th>Created</th></tr>'
+			while IFS=$'\037' read -r wskey wsname name status os created isold
+			do
+				printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
+					"$(invreport_html_escape "$wsname")" "$(invreport_html_escape "$name")" \
+					"$(invreport_html_escape "$status")" "$(invreport_html_escape "${os:--}")" \
+					"$(invreport_html_escape "${created:--}")"
+			done < "$wd/images.tsv"
+			printf '</table>'
+		fi
+
+		printf '<h2>Volume clones</h2>'
+		if [ ! -s "$wd/volumeclones.tsv" ]
+		then
+			printf '<p>None found.</p>'
+		else
+			printf '<table><tr><th>Workspace</th><th>Name</th><th>Status</th><th>Percent complete</th><th>Created</th></tr>'
+			while IFS=$'\037' read -r wskey wsname name status pct created
+			do
+				printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
+					"$(invreport_html_escape "$wsname")" "$(invreport_html_escape "$name")" \
+					"$(invreport_html_escape "$status")" "${pct:-0}" "$(invreport_html_escape "${created:--}")"
+			done < "$wd/volumeclones.tsv"
+			printf '</table>'
+		fi
+
+		printf '<h2>COS buckets</h2>'
+		if [ ! -s "$wd/buckets.tsv" ]
+		then
+			printf '<p>None found.</p>'
+		else
+			printf '<table><tr><th>COS instance</th><th>Bucket</th><th>Created</th><th>Objects</th><th>Total size (bytes)</th></tr>'
+			while IFS=$'\037' read -r cosinst bucket created count size reason
+			do
+				local countdisp="$count" sizedisp="${size:--}"
+				if [ -n "$reason" ]
+				then
+					countdisp="unreadable ($reason)"
+					sizedisp="-"
+				fi
+				printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
+					"$(invreport_html_escape "$cosinst")" "$(invreport_html_escape "$bucket")" \
+					"$(invreport_html_escape "${created:--}")" "$(invreport_html_escape "$countdisp")" "$sizedisp"
+			done < "$wd/buckets.tsv"
+			printf '</table>'
+		fi
+
+		printf '</body></html>'
+	} > "$outfile"
+}
+
+# do_invreport FORMAT PATH OLD_DAYS - the -invreport orchestrator. Builds
+# the whole report into a scratch working directory as raw TSV (one file
+# per section), then renders it in the requested format(s). Read-only:
+# every helper it calls is a GET (see the table this flag's own spec
+# cites - ins_ls/vol_ls/vg_ls/vg_sd/snap_ls/img_ls/vol_cl_ls/
+# cos_ls_buckets/list_object_page).
+do_invreport() {
+	local format="$1" outpath="$2" old_days="$3"
+	local wd now_epoch
+	wd="/tmp/bluexport_invreport_$$"
+	mkdir -p "$wd" 2>>"$log_file"
+	if [ ! -d "$wd" ]
+	then
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Could not create working directory $wd for -invreport." 1
+	fi
+	trap 'rm -rf "'"$wd"'"' EXIT
+
+	local workspaces_tsv="$wd/workspaces.tsv"
+	local lpars_tsv="$wd/lpars.tsv"
+	local volumes_tsv="$wd/volumes.tsv"
+	local volumegroups_tsv="$wd/volumegroups.tsv"
+	local snapshots_tsv="$wd/snapshots.tsv"
+	local images_tsv="$wd/images.tsv"
+	local volumeclones_tsv="$wd/volumeclones.tsv"
+	local buckets_tsv="$wd/buckets.tsv"
+	invreport_unreadable_tsv="$wd/unreadable.tsv"
+	: > "$workspaces_tsv"; : > "$lpars_tsv"; : > "$volumes_tsv"
+	: > "$volumegroups_tsv"; : > "$snapshots_tsv"; : > "$images_tsv"
+	: > "$volumeclones_tsv"; : > "$buckets_tsv"; : > "$invreport_unreadable_tsv"
+
+	now_epoch=$(date +%s)
+	echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Starting inventory report (all workspaces) ===" "1"
+
+	read -r -a allws_array <<< "$allws"
+
+	# --- Workspaces (local secrets file only - no API call, matches the
+	# equivalent report's own Workspaces section) ---
+	for ws in "${allws_array[@]}"
+	do
+		local ws_id ws_name zone_raw region_api base_url_var base_url_val region_host lpar_count
+		ws_id=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+		ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name // $k' "$bluexscrt")
+		zone_raw=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region' "$bluexscrt" 2>>"$log_file")
+		region_api=$(printf '%s' "$zone_raw" | tr '-' '_')
+		base_url_var="base_${region_api}"
+		base_url_val="${!base_url_var}"
+		if [ -n "$base_url_val" ]
+		then
+			region_host=$(printf '%s' "$base_url_val" | sed -e 's#^https\{0,1\}://##' -e 's/\..*$//')
+		else
+			region_host="unknown ('$zone_raw' not recognised)"
+		fi
+		lpar_count=$(jq -r --arg k "$ws" '[(.systems // [])[] | select(.workspace == $k)] | length' "$bluexscrt")
+		printf '%s\037%s\037%s\037%s\037%s\037%s\n' "$ws" "$ws_name" "$region_host" "$zone_raw" "$ws_id" "$lpar_count" >> "$workspaces_tsv"
+	done
+
+	# --- Per-workspace live sections (LPARs, Volumes, Volume groups,
+	# Snapshots, Images, Volume clones) - same workspace-loop skeleton as
+	# -snaplsall/-vsidetails/-vclonelsall. One bad workspace never stops
+	# the others: invreport_get/invreport_unreadable name it and this
+	# continues to the next.
+	for ws in "${allws_array[@]}"
+	do
+		local CRN CLOUD_INSTANCE_ID full_ws_name region_api base_url_var
+		CRN=$(jq -r --arg k "$ws" '.workspaces[$k].crn' "$bluexscrt")
+		CLOUD_INSTANCE_ID=$(jq -r --arg k "$ws" '.workspaces[$k].id' "$bluexscrt")
+		full_ws_name=$(jq -r --arg k "$ws" '.workspaces[$k].name // $k' "$bluexscrt")
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Reading workspace $full_ws_name ===" "1"
+		if [[ -z "$CRN" || "$CRN" == "null" || -z "$CLOUD_INSTANCE_ID" || "$CLOUD_INSTANCE_ID" == "null" ]]
+		then
+			invreport_unreadable "Workspace '$full_ws_name'" "missing CRN or ID in $bluexscrt"
+			continue
+		fi
+		region_api=$(jq -r --arg k "$ws" '.workspaces[$k].crn | capture("power-iaas:(?<region>[^:]+)") | .region | gsub("-"; "_")' "$bluexscrt")
+		base_url_var="base_${region_api}"
+		base_url="${!base_url_var}"
+		if [ -z "$base_url" ]
+		then
+			invreport_unreadable "Workspace '$full_ws_name'" "unrecognised region in CRN, no base URL configured"
+			continue
+		fi
+
+		# --- LPARs ---
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) -   ... LPARs" "1"
+		local ins_json ins_rc
+		ins_json=$(invreport_get ins_ls pvmInstances)
+		ins_rc=$?
+		if [ $ins_rc -ne 0 ]
+		then
+			invreport_unreadable "LPARs in workspace '$full_ws_name'" "$ins_json"
+		else
+			while IFS=$'\037' read -r l_name l_id l_status l_ostype l_cores l_vcores l_proctype l_mem l_systype l_lic l_ips
+			do
+				[ -z "$l_name" ] && continue
+				local l_os l_osdetail
+				l_os=$(jq -r --arg ws "$ws" --arg id "$l_id" '(.systems // [])[]? | select(.workspace==$ws and .pvmInstanceID==$id) | (.os // empty)' "$bluexscrt" 2>>"$log_file" | head -n1)
+				l_osdetail=$(jq -r --arg ws "$ws" --arg id "$l_id" '(.systems // [])[]? | select(.workspace==$ws and .pvmInstanceID==$id) | (.osDetail // empty)' "$bluexscrt" 2>>"$log_file" | head -n1)
+				[ -z "$l_os" ] && l_os="unknown"
+				[ -z "$l_osdetail" ] && l_osdetail="$l_ostype"
+				printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
+					"$ws" "$full_ws_name" "$l_name" "$l_id" "$l_status" "$l_os" "$l_osdetail" \
+					"$l_cores" "$l_vcores" "$l_proctype" "$l_mem" "$l_systype" "$l_lic" "$l_ips" >> "$lpars_tsv"
+			done < <(printf '%s' "$ins_json" | jq -r '.pvmInstances // [] | .[] |
+				[
+					.serverName,
+					.pvmInstanceID,
+					.status,
+					(.osType // ""),
+					(.processors | if . == null then "" else tostring end),
+					(.virtualCores.assigned | if . == null then "" else tostring end),
+					(.procType // ""),
+					(.memory | if . == null then "" else tostring end),
+					(.sysType // ""),
+					([ (.softwareLicenses // {}) | to_entries[] | select(.value == true) | .key ] | join("; ")),
+					((.networks // []) | map(.ipAddress // "?") | join("; "))
+				] | @tsv' 2>>"$log_file" | tr '\t' '\037')
+		fi
+
+		# --- Volumes ---
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) -   ... Volumes" "1"
+		local vol_json vol_rc
+		vol_json=$(invreport_get vol_ls volumes)
+		vol_rc=$?
+		if [ $vol_rc -ne 0 ]
+		then
+			invreport_unreadable "Volumes in workspace '$full_ws_name'" "$vol_json"
+		else
+			while IFS=$'\037' read -r v_id v_name v_tier v_size v_boot v_state v_repl v_aux v_pvms
+			do
+				[ -z "$v_id" ] && continue
+				local v_attached="" pid nm names=""
+				if [ -n "$v_pvms" ]
+				then
+					local v_pvm_array
+					IFS=';' read -r -a v_pvm_array <<< "$v_pvms"
+					for pid in "${v_pvm_array[@]}"
+					do
+						[ -z "$pid" ] && continue
+						nm=$(jq -r --arg ws "$ws" --arg id "$pid" '(.systems // [])[]? | select(.workspace==$ws and .pvmInstanceID==$id) | .name' "$bluexscrt" 2>>"$log_file" | head -n1)
+						if [ -n "$nm" ] && [ "$nm" != "null" ]
+						then
+							if [ -n "$names" ]; then names="$names; $nm"; else names="$nm"; fi
+						fi
+					done
+					v_attached="$names"
+				fi
+				local v_origin="Plain"
+				[ "$v_aux" = "true" ] && v_origin="GRS auxiliary"
+				printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
+					"$ws" "$full_ws_name" "$v_id" "$v_name" "$v_tier" "$v_size" "$v_boot" "$v_state" "$v_repl" "$v_attached" "$v_origin" >> "$volumes_tsv"
+			done < <(printf '%s' "$vol_json" | jq -r '.volumes // [] | .[] |
+				[
+					.volumeID, .name, (.diskType // ""),
+					(.size | if . == null then "" else tostring end),
+					((.bootable // false) | tostring), (.state // ""),
+					((.replicationEnabled // false) | tostring), ((.auxiliary // false) | tostring),
+					((.pvmInstanceIDs // []) | join(";"))
+				] | @tsv' 2>>"$log_file" | tr '\t' '\037')
+		fi
+
+		# --- Volume groups (+ replication state) ---
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) -   ... Volume groups" "1"
+		local vg_json vg_rc
+		vg_json=$(invreport_get vg_ls volumeGroups)
+		vg_rc=$?
+		if [ $vg_rc -ne 0 ]
+		then
+			invreport_unreadable "Volume groups in workspace '$full_ws_name'" "$vg_json"
+		else
+			while IFS=$'\037' read -r g_id g_name g_cg
+			do
+				[ -z "$g_id" ] && continue
+				# storage-details (vg_sd) carries state, primaryRole AND
+				# remoteCopyRelationshipNames together - one call, not the
+				# vg_get()+vg_rcr() split some GRS helpers use elsewhere.
+				local VOLUME_GROUP_ID="$g_id" sd_json sd_rc g_state="" g_primary="" g_remote=0 g_reason=""
+				sd_json=$(invreport_get vg_sd state)
+				sd_rc=$?
+				if [ $sd_rc -ne 0 ]
+				then
+					g_reason="$sd_json"
+					invreport_unreadable "Replication state of volume group '$g_name' in workspace '$full_ws_name'" "$g_reason"
+				else
+					g_state=$(printf '%s' "$sd_json" | jq -r '.state // ""' 2>>"$log_file")
+					g_primary=$(printf '%s' "$sd_json" | jq -r '.primaryRole // ""' 2>>"$log_file")
+					g_remote=$(printf '%s' "$sd_json" | jq -r '(.remoteCopyRelationshipNames // []) | length' 2>>"$log_file")
+				fi
+				printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
+					"$ws" "$full_ws_name" "$g_id" "$g_name" "$g_cg" "$g_state" "$g_primary" "$g_remote" "$g_reason" >> "$volumegroups_tsv"
+			done < <(printf '%s' "$vg_json" | jq -r '.volumeGroups // [] | .[] | [.id, .name, (.consistencyGroupName // "")] | @tsv' 2>>"$log_file" | tr '\t' '\037')
+		fi
+
+		# --- Snapshots ---
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) -   ... Snapshots" "1"
+		local snap_json snap_rc
+		snap_json=$(invreport_get snap_ls snapshots)
+		snap_rc=$?
+		if [ $snap_rc -ne 0 ]
+		then
+			invreport_unreadable "Snapshots in workspace '$full_ws_name'" "$snap_json"
+		else
+			while IFS=$'\037' read -r s_name s_pvmid s_status s_created s_volcount
+			do
+				[ -z "$s_name" ] && continue
+				local s_lpar s_isold
+				s_lpar=$(jq -r --arg ws "$ws" --arg id "$s_pvmid" '(.systems // [])[]? | select(.workspace==$ws and .pvmInstanceID==$id) | .name' "$bluexscrt" 2>>"$log_file" | head -n1)
+				s_isold=$(invreport_is_old "$s_created" "$old_days" "$now_epoch")
+				printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
+					"$ws" "$full_ws_name" "$s_name" "$s_lpar" "$s_status" "$s_created" "$s_volcount" "$s_isold" >> "$snapshots_tsv"
+			done < <(printf '%s' "$snap_json" | jq -r '.snapshots // [] | .[] |
+				[.name, (.pvmInstanceID // ""), .status, (.creationDate // ""), ((.volumeSnapshots // []) | length)] | @tsv' 2>>"$log_file" | tr '\t' '\037')
+		fi
+
+		# --- Images ---
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) -   ... Images" "1"
+		local img_json img_rc
+		img_json=$(invreport_get img_ls images)
+		img_rc=$?
+		if [ $img_rc -ne 0 ]
+		then
+			invreport_unreadable "Images in workspace '$full_ws_name'" "$img_json"
+		else
+			while IFS=$'\037' read -r i_name i_status i_os i_created
+			do
+				[ -z "$i_name" ] && continue
+				local i_isold
+				i_isold=$(invreport_is_old "$i_created" "$old_days" "$now_epoch")
+				printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
+					"$ws" "$full_ws_name" "$i_name" "$i_status" "$i_os" "$i_created" "$i_isold" >> "$images_tsv"
+			done < <(printf '%s' "$img_json" | jq -r '.images // [] | .[] |
+				[.name, .state, (.specifications.operatingSystem // ""), (.creationDate // "")] | @tsv' 2>>"$log_file" | tr '\t' '\037')
+		fi
+
+		# --- Volume clones ---
+		echoscreen "$(date +%Y-%m-%d_%H:%M:%S) -   ... Volume clones" "1"
+		local vcl_json vcl_rc
+		vcl_json=$(invreport_get vol_cl_ls volumesClone)
+		vcl_rc=$?
+		if [ $vcl_rc -ne 0 ]
+		then
+			invreport_unreadable "Volume clones in workspace '$full_ws_name'" "$vcl_json"
+		else
+			while IFS=$'\037' read -r c_name c_status c_pct c_created
+			do
+				[ -z "$c_name" ] && continue
+				printf '%s\037%s\037%s\037%s\037%s\037%s\n' \
+					"$ws" "$full_ws_name" "$c_name" "$c_status" "$c_pct" "$c_created" >> "$volumeclones_tsv"
+			done < <(printf '%s' "$vcl_json" | jq -r '.volumesClone // [] | .[] |
+				[.name, .status, ((.percentComplete // 0) | tostring), (.creationDate // "")] | @tsv' 2>>"$log_file" | tr '\t' '\037')
+		fi
+	done
+
+	# --- COS buckets (+ object counts/sizes where credentials allow it) ---
+	local cos_keys
+	cos_keys=$(jq -r '.cos_instances | keys[]?' "$bluexscrt" 2>>"$log_file")
+	if [ -n "$cos_keys" ]
+	then
+		while IFS= read -r cos
+		do
+			[ -z "$cos" ] && continue
+			local SERVICE_INSTANCE_ID
+			SERVICE_INSTANCE_ID=$(jq -r --arg ci "$cos" '.cos_instances[$ci].guid // ""' "$bluexscrt" 2>>"$log_file")
+			if [[ -z "$SERVICE_INSTANCE_ID" || "$SERVICE_INSTANCE_ID" == "null" ]]
+			then
+				invreport_unreadable "COS instance '$cos'" "no GUID in $bluexscrt"
+				continue
+			fi
+			REGION="$region"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - === Reading COS instance $cos ===" "1"
+			local buckets_xml bret
+			buckets_xml=$(cos_ls_buckets 2>>"$log_file")
+			bret=$?
+			if [ $bret -ne 0 ] || [ -z "$buckets_xml" ]
+			then
+				invreport_unreadable "Buckets in COS instance '$cos'" "request failed or empty response (curl rc=$bret)"
+				continue
+			fi
+			local bxml="$buckets_xml"
+			while [[ "$bxml" == *"<Bucket>"*"</Bucket>"* ]]
+			do
+				local bchunk bname bdate
+				bchunk="${bxml#*<Bucket>}"
+				bchunk="${bchunk%%</Bucket>*}"
+				bxml="${bxml#*</Bucket>}"
+				bname=""
+				if [[ "$bchunk" == *"<Name>"*"</Name>"* ]]
+				then
+					bname="${bchunk#*<Name>}"
+					bname="${bname%%</Name>*}"
+				fi
+				[ -z "$bname" ] && continue
+				bdate=""
+				if [[ "$bchunk" == *"<CreationDate>"*"</CreationDate>"* ]]
+				then
+					bdate="${bchunk#*<CreationDate>}"
+					bdate="${bdate%%</CreationDate>*}"
+				fi
+				echoscreen "$(date +%Y-%m-%d_%H:%M:%S) -   ... bucket $bname" "1"
+				BUCKET="$bname"
+				local obj_line obj_count obj_size obj_reason
+				obj_line=$(invreport_bucket_objects)
+				IFS=$'\037' read -r obj_count obj_size obj_reason <<< "$obj_line"
+				if [ -n "$obj_reason" ]
+				then
+					invreport_unreadable "Objects in bucket '$bname' (COS instance '$cos')" "$obj_reason"
+					printf '%s\037%s\037%s\037%s\037%s\037%s\n' "$cos" "$bname" "$bdate" "" "" "$obj_reason" >> "$buckets_tsv"
+				else
+					printf '%s\037%s\037%s\037%s\037%s\037%s\n' "$cos" "$bname" "$bdate" "$obj_count" "$obj_size" "" >> "$buckets_tsv"
+				fi
+			done
+		done <<< "$cos_keys"
+	fi
+
+	# --- Totals (mirrors the equivalent report's own totals: workspace/
+	# LPAR/volume/snapshot/image counts, memory/cores known, storage by
+	# tier, unattached volumes, and old snapshots/images past OLD_DAYS) ---
+	local t_workspaces t_lpars t_lpars_mem t_mem_sum t_lpars_cores t_cores_sum
+	local t_vol_count t_vol_unattached t_snap_count t_snap_old t_img_count t_img_old
+	t_workspaces=$(wc -l < "$workspaces_tsv" | tr -d ' ')
+	t_lpars=$(wc -l < "$lpars_tsv" | tr -d ' ')
+	t_lpars_mem=$(awk -F'\037' '$11!=""{c++} END{print c+0}' "$lpars_tsv")
+	t_mem_sum=$(awk -F'\037' '$11!=""{s+=$11} END{print s+0}' "$lpars_tsv")
+	t_lpars_cores=$(awk -F'\037' '$8!=""{c++} END{print c+0}' "$lpars_tsv")
+	t_cores_sum=$(awk -F'\037' '$8!=""{s+=$8} END{print s+0}' "$lpars_tsv")
+	t_vol_count=$(wc -l < "$volumes_tsv" | tr -d ' ')
+	t_vol_unattached=$(awk -F'\037' '$10==""{c++} END{print c+0}' "$volumes_tsv")
+	t_snap_count=$(wc -l < "$snapshots_tsv" | tr -d ' ')
+	t_snap_old=$(awk -F'\037' '$8==1{c++} END{print c+0}' "$snapshots_tsv")
+	t_img_count=$(wc -l < "$images_tsv" | tr -d ' ')
+	t_img_old=$(awk -F'\037' '$7==1{c++} END{print c+0}' "$images_tsv")
+	awk -F'\037' '{ t=$5; if (t=="") t="unknown"; s[t]+=($6==""?0:$6) } END { for (k in s) printf "%s\037%s\n", k, s[k] }' "$volumes_tsv" | sort > "$wd/storage_by_tier.tsv"
+
+	{
+		printf 'WorkspaceCount\037%s\n' "$t_workspaces"
+		printf 'LparCount\037%s\n' "$t_lpars"
+		printf 'LparsWithMemoryKnown\037%s\n' "$t_lpars_mem"
+		printf 'TotalMemoryGb\037%s\n' "$(invreport_fmt_num "$t_mem_sum")"
+		printf 'LparsWithCoresKnown\037%s\n' "$t_lpars_cores"
+		printf 'TotalCores\037%s\n' "$(invreport_fmt_num "$t_cores_sum")"
+		while IFS=$'\037' read -r tier gb
+		do
+			printf 'StorageGb.%s\037%s\n' "$tier" "$(invreport_fmt_num "$gb")"
+		done < "$wd/storage_by_tier.tsv"
+		printf 'VolumeCount\037%s\n' "$t_vol_count"
+		printf 'UnattachedVolumeCount\037%s\n' "$t_vol_unattached"
+		printf 'SnapshotCount\037%s\n' "$t_snap_count"
+		printf 'OldSnapshotCount\037%s\n' "$t_snap_old"
+		printf 'ImageCount\037%s\n' "$t_img_count"
+		printf 'OldImageCount\037%s\n' "$t_img_old"
+		printf 'OldThresholdDays\037%s\n' "$old_days"
+	} > "$wd/totals.tsv"
+
+	# Make sure PATH's own directory exists before writing md/html - csv
+	# already does this itself (mkdir -p "$outdir" in invreport_write_csv)
+	# since PATH-csv/ is a directory either way, but a caller-supplied
+	# PATH with a missing parent must not silently drop the md/html files.
+	local outdir_parent
+	outdir_parent=$(dirname "$outpath")
+	if [ -n "$outdir_parent" ] && [ "$outdir_parent" != "." ]
+	then
+		mkdir -p "$outdir_parent" 2>>"$log_file"
+	fi
+
+	case "$format" in
+		md)
+			invreport_write_md "$wd" "$outpath.md"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Report written to $outpath.md" "1"
+			;;
+		csv)
+			invreport_write_csv "$wd" "$outpath-csv"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Report written to $outpath-csv/" "1"
+			;;
+		html)
+			invreport_write_html "$wd" "$outpath.html"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Report written to $outpath.html" "1"
+			;;
+		all)
+			invreport_write_md "$wd" "$outpath.md"
+			invreport_write_html "$wd" "$outpath.html"
+			invreport_write_csv "$wd" "$outpath-csv"
+			echoscreen "$(date +%Y-%m-%d_%H:%M:%S) - Report written to $outpath.md, $outpath.html and $outpath-csv/" "1"
+			;;
+	esac
+
+	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished inventory report ==="
+}
+#### END:FUNCTIONS - Inventory report (-invreport) ####
+
+
        ####  END - FUNCTIONS  ####
 
 ####  START: Iniciate Log and Validate Arguments  ####
@@ -6437,6 +7579,25 @@ usage_chscrt() {
 	echoscreen "    interactively (also then prompts for a new log file path)."
 }
 
+usage_invreport() {
+	echoscreen "  FORMAT:"
+	echoscreen "    Optional; md|csv|html|all (case-insensitive). Default: md."
+	echoscreen "    md   - one Markdown file, PATH.md (source of truth)."
+	echoscreen "    csv  - one CSV file per section, under PATH-csv/."
+	echoscreen "    html - one self-contained HTML file, PATH.html."
+	echoscreen "    all  - writes md, html and the csv folder in one run."
+	echoscreen "  PATH:"
+	echoscreen "    Optional; base output path, no extension. Default:"
+	echoscreen "    ./bluexport-inventory-YYYYMMDD-HHMM"
+	echoscreen "  OLD_DAYS:"
+	echoscreen "    Optional; age in days used for the old snapshot/image"
+	echoscreen "    counts in Totals. Default: 90."
+	echoscreen "  Read-only: never writes to the account, only to the"
+	echoscreen "  report file(s). A workspace, volume group or bucket that"
+	echoscreen "  cannot be read is named in the report's own \"Could not"
+	echoscreen "  be read\" section; it never aborts the whole report."
+}
+
 #### END: usage_X() functions ####
 
 case $1 in
@@ -6481,6 +7642,7 @@ case $1 in
 			-detachvolumes) usage_detachvolumes ;;
 			-restorefromarchive) usage_restorefromarchive ;;
 			-chscrt) usage_chscrt ;;
+			-invreport) usage_invreport ;;
 			*)
 				abort "`date +%Y-%m-%d_%H:%M:%S` - Unknown flag for detailed help: $2. Run bluexport_api.sh -h for the full command list." 1
 				;;
@@ -8161,6 +9323,37 @@ EOF
 	done <<< "$cos_keys"
 	abort "$(date +%Y-%m-%d_%H:%M:%S) - === Finished Listing all COS buckets for all COS instances ==="
      ;;
+
+  # (1.23.0) Read-only inventory report across every configured workspace
+  # (and COS instance): workspaces, LPARs, volumes, volume groups,
+  # snapshots, images, volume clones and COS buckets, plus totals. See
+  # usage_invreport / -h -invreport for FORMAT/PATH/OLD_DAYS.
+  -invreport)
+	if [ $# -gt 4 ]
+	then
+		usage_invreport
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - Too many arguments!! Syntax: bluexport_api.sh $1" 1
+	fi
+	test=0
+	invreport_format="${2:-md}"
+	invreport_format="${invreport_format,,}"
+	case "$invreport_format" in
+		md|csv|html|all)
+			;;
+		*)
+			usage_invreport
+			abort "$(date +%Y-%m-%d_%H:%M:%S) - Unknown FORMAT '$2'. Use md|csv|html|all." 1
+			;;
+	esac
+	invreport_path="${3:-./bluexport-inventory-$(date +%Y%m%d-%H%M)}"
+	invreport_old_days="${4:-90}"
+	if ! [[ "$invreport_old_days" =~ ^[0-9]+$ ]]
+	then
+		usage_invreport
+		abort "$(date +%Y-%m-%d_%H:%M:%S) - OLD_DAYS must be a non-negative integer, got '$4'." 1
+	fi
+	do_invreport "$invreport_format" "$invreport_path" "$invreport_old_days"
+    ;;
 
   -bucketlsobjs)
 	# Lista objetos de um bucket COS escolhido interativamente

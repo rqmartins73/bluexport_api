@@ -179,6 +179,11 @@ Shows the built‑in help. Pass a flag after it (`-h -addlpar`) to show detailed
 - Delete GRS structures with safety checks to protect primary volumes
 - Retry‑aware polling to avoid rate limits
 
+### **Reports**
+- `-invreport`: read-only inventory report across every configured workspace and COS instance - workspaces, LPARs, volumes, volume groups (+ replication state), snapshots, images, volume clones, and COS buckets (+ object counts/sizes), plus account-wide totals
+- Three output formats: Markdown (source of truth), CSV (one file per section), and a self-contained HTML file - `all` writes every format in one run
+- Never calls a write endpoint; a workspace, volume group or bucket that cannot be read is named in the report's own "Could not be read" section instead of being silently skipped
+
 ---
 
 ## 🧩 Requirements
@@ -379,6 +384,17 @@ No job ID is stored locally - every call queries PowerVS directly for the last j
 - `SOURCE_VOL_PREFIX`: common name/prefix to identify source VSI volumes (e.g. `IBMiGRS`) for `-creategrs`; `-deletegrs` accepts it for compatibility but, since 1.19.2, acts only on the volume groups' own members
 - `-grsfailover ATTACH`: automatically attaches auxiliary volumes to the target VSI after failover
 - `-grscancelfailover`: resyncs from master to auxiliary and reactivates master→auxiliary replication
+
+### Reports
+```
+./bluexport_api.sh -invreport [FORMAT] [PATH] [OLD_DAYS]
+```
+
+- `FORMAT`: `md` (default, source of truth) | `csv` | `html` | `all` (case-insensitive)
+- `PATH`: base output path, no extension; defaults to `./bluexport-inventory-YYYYMMDD-HHMM`
+- `OLD_DAYS`: age in days for the "old" snapshot/image counts in Totals; defaults to `90`
+- Read-only: every helper it calls is a `GET`. A workspace, volume group or bucket that cannot be read is named in the report's own "Could not be read" section and skipped - the report still completes for everything else
+- COS object counts/sizes follow S3 pagination (`<NextContinuationToken>`), bounded by `INVREPORT_MAX_COS_PAGES` (default 100000); a bucket that cannot be fully counted is shown as `unreadable (<reason>)`, never as `0`
 
 ---
 
