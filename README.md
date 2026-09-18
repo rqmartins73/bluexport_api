@@ -351,6 +351,7 @@ No job ID is stored locally - every call queries PowerVS directly for the last j
 - Parameters 4 and 5 are `replication-enabled` and `rollback-prepare` respectively (`True|False`)
 - Use `ALL` for all volumes, or a comma-separated list of volume names
 - Pass `delete_volumes` to also delete the cloned volumes on removal, or `0` to skip
+- `-vclonedel` checks the clone request's own status before deleting, since IBM Cloud refuses the delete unless the request is already `completed`, `failed` or `cancelled`. If it is still `available`, `running` or `preparing`, a separate confirmation offers to cancel it first, then waits (bounded) for it to reach a terminal status before deleting; a request that is `creating`, `executing` or `cancelling` cannot be cancelled yet and must be waited out and retried
 
 ### Volume Tier Updates
 ```
