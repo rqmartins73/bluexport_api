@@ -10,6 +10,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (future changes go here)
 
+## [1.23.0] - 2026-09-18 (`bluexport_api.sh`)
+
+### Added
+
+- **`-invreport [FORMAT] [PATH] [OLD_DAYS]`: a read-only inventory report
+  across every configured workspace and COS instance.** One pass covers
+  workspaces, LPARs (compute, licences, IP addresses), volumes, volume
+  groups and their replication state, snapshots, images, volume clones,
+  and COS buckets with object counts/sizes - plus a Totals section
+  (memory/cores, storage by tier, unattached volumes, snapshots/images
+  older than `OLD_DAYS`, default 90).
+  - `FORMAT`: `md` (default, the source of truth), `csv` (one file per
+    section under `PATH-csv/`), `html` (one self-contained file), or
+    `all` (writes all three). Case-insensitive.
+  - `PATH` defaults to `./bluexport-inventory-<timestamp>`, no extension.
+  - Every helper this flag calls is a `GET` - it never writes to the
+    account, only to the report file(s).
+  - A workspace, volume group or bucket that cannot be read is named in
+    the report's own "Could not be read" section and skipped; one bad
+    workspace never stops the report and is never rendered as an empty
+    or zero result (a workspace-loop failure here does not `abort` the
+    whole run the way most other `*lsall` flags do - deliberately, since
+    that pattern would turn "this account only has 2 workspaces" and "a
+    workspace failed to read" into the same, indistinguishable output).
+  - The COS object-count pagination this needed did not exist yet
+    (`list_object()` only ever read one page) - added `list_object_page()`
+    and a bounded pagination loop (`INVREPORT_MAX_COS_PAGES`, default
+    100000) that follows `<NextContinuationToken>` while
+    `<IsTruncated>true</IsTruncated>`, using the same bash+sed-free XML
+    parsing `-bucketslsall` already uses for `<Bucket>` elements, applied
+    to `<Contents>` elements. Hitting the cap, or a truncated page with no
+    continuation token, discards the count/size entirely rather than
+    reporting a partial listing as complete.
+  - Internal TSV field separator is `\037` (ASCII unit separator), not a
+    literal tab: bash's `read`/`awk` treat a run of tab characters as one
+    delimiter (the same whitespace-collapsing rule as word-splitting),
+    which silently misaligns a row the moment any field is legitimately
+    empty (no licences, no tier, no attached LPAR, ...). `\037` is not
+    IFS whitespace, so an empty field never gets swallowed.
+
 ## [1.22.0] - 2026-09-17 (`bluexport_api.sh`)
 
 ### Fixed
